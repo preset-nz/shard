@@ -4,6 +4,7 @@
 //! logging, no file access. The only thing crossing in from outside is the
 //! atomic parameter bank, which is read once per block.
 
+use crate::envelope::{EnvParams, Envelope};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
@@ -25,6 +26,12 @@ struct Slots {
     ring_freq: usize,
     ring_mix: usize,
     dry: usize,
+    trim_start: usize,
+    trim_end: usize,
+    env_amount: usize,
+    env_period: usize,
+    env_attack: usize,
+    env_decay: usize,
     gain: usize,
 }
 
@@ -48,6 +55,12 @@ impl Slots {
             ring_freq: at("ring.freq"),
             ring_mix: at("ring.mix"),
             dry: at("mix.dry"),
+            trim_start: at("trim.start"),
+            trim_end: at("trim.end"),
+            env_amount: at("env.amount"),
+            env_period: at("env.period"),
+            env_attack: at("env.attack"),
+            env_decay: at("env.decay"),
             gain: at("amp.gain"),
         }
     }
@@ -73,10 +86,12 @@ pub struct Engine {
     playing: bool,
     granular: Granular,
     ringmod: RingMod,
+    envelope: Envelope,
     slots: Slots,
     smooth: Smoothers,
     sample_rate: f32,
     peak: f32,
+    trimmed_play_position: f32,
 }
 
 impl Engine {
@@ -117,10 +132,12 @@ impl Engine {
             playing: false,
             granular: Granular::new(sample_rate, max_grains),
             ringmod: RingMod::new(sample_rate),
+            envelope: Envelope::new(sample_rate),
             slots,
             smooth,
             sample_rate,
             peak: 0.0,
+            trimmed_play_position: 0.0,
         }
     }
 
@@ -146,9 +163,26 @@ impl Engine {
         self.playing = playing;
     }
 
-    /// Where plain playback has reached, 0 to 1. For drawing the playhead.
+    /// The trimmed window, as indices into the source. Always at least two
+    /// samples wide, and always ordered, however the two controls are set.
+    fn trim_range(&self, bank: &ParamBank) -> (usize, usize) {
+        let n = self.source.len();
+        if n < 2 {
+            return (0, n);
+        }
+        let a = bank.get(self.slots.trim_start).clamp(0.0, 1.0);
+        let b = bank.get(self.slots.trim_end).clamp(0.0, 1.0);
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let lo = ((a * n as f32) as usize).min(n - 2);
+        let hi = ((b * n as f32) as usize).clamp(lo + 2, n);
+        (lo, hi)
+    }
+
+    /// Where plain playback has reached, 0 to 1 across the *whole* source, so
+    /// the drawn playhead lines up with the drawn waveform rather than with
+    /// the trimmed window.
     pub fn play_position(&self) -> f32 {
-        self.player.position(self.source.len())
+        self.trimmed_play_position
     }
 
     pub fn source_len(&self) -> usize {
@@ -196,6 +230,20 @@ impl Engine {
         }
 
         let dry_target = bank.get(self.slots.dry);
+        let env = EnvParams {
+            amount: bank.get(self.slots.env_amount),
+            period: bank.get(self.slots.env_period),
+            attack_ms: bank.get(self.slots.env_attack),
+            decay_ms: bank.get(self.slots.env_decay),
+        };
+
+        // Trim is applied by slicing the source, so nothing downstream knows
+        // it exists. `position` and the player both address the window, not
+        // the file, which is what makes trimming a long sample feel like
+        // loading a short one.
+        let (lo, hi) = self.trim_range(bank);
+        let source = &self.source[lo..hi];
+        let span = self.source.len().max(1) as f32;
 
         let mut p = target;
         for frame in out.chunks_mut(2) {
@@ -209,8 +257,8 @@ impl Engine {
             p.gain = self.smooth.gain.process(target.gain);
 
             let dry_amount = self.smooth.dry.process(dry_target);
-            let dry = self.player.process(&self.source);
-            let (gl, gr) = self.granular.process(&self.source, &p);
+            let dry = self.player.process(source);
+            let (gl, gr) = self.granular.process(source, &p);
 
             // Equal-power crossfade. A linear blend dips by 3 dB in the middle,
             // which reads as the instrument getting quieter as you introduce
@@ -221,6 +269,9 @@ impl Engine {
             let r = dry * a + gr * b;
 
             let (l, r) = self.ringmod.process(l, r, &ring);
+
+            let e = self.envelope.process(&env);
+            let (l, r) = (l * e, r * e);
 
             // A safety clip, not a limiter. Dense clouds sum above unity and
             // a hard clip is preferable to handing the device something that
@@ -235,6 +286,9 @@ impl Engine {
                 *ro = r;
             }
         }
+
+        self.trimmed_play_position =
+            (lo as f32 + self.player.position(source.len()) * source.len() as f32) / span;
     }
 }
 
@@ -462,6 +516,94 @@ mod tests {
             mid > floor,
             "midpoint {mid} dipped below {floor} ({a} .. {b})"
         );
+    }
+
+    #[test]
+    fn trim_reads_only_inside_the_window() {
+        // A ramp makes the window audible: reading the last tenth must give
+        // values near one, and the first tenth values near zero.
+        let n = 48_000;
+        let src: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let level = |lo: f32, hi: f32| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(src.clone());
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            bank.set_by_id("trim.start", lo);
+            bank.set_by_id("trim.end", hi);
+            bank.set_by_id("mix.dry", 1.0);
+            bank.set_by_id("amp.gain", 1.0);
+            let mut out = vec![0.0; 512];
+            let mut sum = 0.0f64;
+            let mut n = 0u32;
+            for b in 0..200 {
+                e.process_block(&mut out, &bank);
+                if b > 20 {
+                    for s in out.iter().step_by(2) {
+                        sum += *s as f64;
+                        n += 1;
+                    }
+                }
+            }
+            sum / n as f64
+        };
+        let early = level(0.0, 0.1);
+        let late = level(0.9, 1.0);
+        assert!(early < 0.2, "early window averaged {early}");
+        assert!(late > 0.8, "late window averaged {late}");
+    }
+
+    #[test]
+    fn trim_survives_being_set_backwards_or_to_nothing() {
+        // The two controls are independent, so a user will cross them. It has
+        // to keep playing rather than panic on an empty slice.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        let mut out = vec![0.0; 512];
+        for (lo, hi) in [
+            (0.9, 0.1),
+            (0.5, 0.5),
+            (1.0, 1.0),
+            (0.0, 0.0),
+            (0.3, 0.3001),
+        ] {
+            bank.set_by_id("trim.start", lo);
+            bank.set_by_id("trim.end", hi);
+            for _ in 0..50 {
+                e.process_block(&mut out, &bank);
+                for s in &out {
+                    assert!(s.is_finite(), "non-finite with trim {lo}..{hi}");
+                    assert!((-1.0..=1.0).contains(s));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_envelope_shapes_the_output() {
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        bank.set_by_id("env.amount", 1.0);
+        bank.set_by_id("env.period", 0.5);
+        bank.set_by_id("env.attack", 5.0);
+        bank.set_by_id("env.decay", 80.0);
+        let mut out = vec![0.0; 512];
+        let mut loud = 0.0f32;
+        let mut quiet = 1.0f32;
+        for b in 0..200 {
+            e.process_block(&mut out, &bank);
+            if b > 20 {
+                let block = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+                loud = loud.max(block);
+                quiet = quiet.min(block);
+            }
+        }
+        assert!(loud > 0.05, "never opened, loudest block {loud}");
+        assert!(quiet < loud * 0.3, "never closed: {quiet} against {loud}");
     }
 
     #[test]

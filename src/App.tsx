@@ -11,6 +11,7 @@ import {
   meters as readMeters,
   type SourceInfo,
   setDrift,
+  setParam,
   setParamDrift,
   setPlaying,
   sourceInfo,
@@ -119,6 +120,9 @@ export default function App() {
       });
       if (typeof picked !== 'string') return;
       setSource(await loadSample(picked));
+      // A trim from the previous sample means nothing against a new one.
+      await setParam('trim.start', 0);
+      await setParam('trim.end', 1);
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -199,11 +203,22 @@ export default function App() {
             position={values['grain.position'] ?? 0}
             jitter={values['grain.jitter'] ?? 0}
             playhead={meter.playing ? meter.playhead : null}
+            trimStart={values['trim.start'] ?? 0}
+            trimEnd={values['trim.end'] ?? 1}
+            onTrim={(which, v) => {
+              void setParam(`trim.${which}`, v);
+            }}
           />
 
           <div className="flex items-center gap-6 text-xs text-muted-foreground">
             <Meter peak={meter.peak} />
-            <span>{meter.grains} grains</span>
+            <span title="Concurrent grains. Roughly density x grain length.">
+              {meter.grains} grains
+            </span>
+            <span title="Density x grain length: how many grains overlap at these settings.">
+              {((values['grain.density'] ?? 0) * (values['grain.size'] ?? 0) * 0.001).toFixed(1)}{' '}
+              expected
+            </span>
           </div>
 
           <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">

@@ -80,8 +80,8 @@ impl Default for GrainParams {
         Self {
             position: 0.25,
             jitter: 0.05,
-            size_ms: 120.0,
-            density: 18.0,
+            size_ms: 180.0,
+            density: 60.0,
             pitch: 0.0,
             pitch_spread: 0.0,
             pan_spread: 0.6,

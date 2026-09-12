@@ -19,9 +19,11 @@ export const SCOPE_KEY = 'shard.params';
 
 /** Which group a parameter belongs to, by id prefix. */
 const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
+  { id: 'trim', label: 'Trim', prefix: 'trim.' },
   { id: 'mix', label: 'Blend', prefix: 'mix.' },
   { id: 'grain', label: 'Granular', prefix: 'grain.' },
   { id: 'ring', label: 'Ring modulation', prefix: 'ring.' },
+  { id: 'env', label: 'Envelope', prefix: 'env.' },
   { id: 'amp', label: 'Output', prefix: 'amp.' },
 ];
 
