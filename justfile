@@ -13,12 +13,17 @@ prep:
 
 [group('setup')]
 install:
+    pnpm install
     cargo fetch
 
-# The playground. No UI yet — this is the engine with a slow drift on the
-# parameters so you can hear it move.
+# The app.
 [group('dev')]
-run file="":
+run:
+    pnpm tauri dev
+
+# The CLI playground: the same engine with no UI, drifting on its own.
+[group('dev')]
+play file="":
     cargo run --release -p shard-play -- {{file}}
 
 # Same engine, parameters held still, so you can hear one setting.
@@ -34,6 +39,8 @@ render out="shard-render.wav" file="":
 
 [group('quality')]
 check:
+    ./node_modules/.bin/tsc --noEmit
+    ./node_modules/.bin/biome check .
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
@@ -47,8 +54,9 @@ licenses:
 
 [group('quality')]
 fmt:
+    ./node_modules/.bin/biome check --write .
     cargo fmt --all
 
 [group('build')]
 build:
-    cargo build --release --workspace
+    pnpm tauri build

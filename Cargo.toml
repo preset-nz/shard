@@ -2,7 +2,7 @@
 # shard-dsp must pass `cargo test` with no audio device and no I/O at all.
 [workspace]
 resolver = "2"
-members = ["crates/shard-dsp", "crates/shard-play"]
+members = ["crates/shard-dsp", "crates/shard-play", "src-tauri"]
 
 [workspace.package]
 version = "0.1.0"
