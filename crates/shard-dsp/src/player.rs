@@ -28,6 +28,11 @@ impl Player {
         self.pos = 0.0;
     }
 
+    /// Samples elapsed into the current pass. The envelope's clock.
+    pub fn elapsed(&self) -> f32 {
+        self.pos
+    }
+
     /// Where the playhead is, 0 to 1. For drawing.
     pub fn position(&self, source_len: usize) -> f32 {
         if source_len < 2 {

@@ -21,7 +21,7 @@ pub mod rng;
 pub mod smooth;
 
 pub use engine::Engine;
-pub use envelope::{EnvParams, Envelope};
+pub use envelope::EnvParams;
 pub use granular::{GrainParams, Granular, Window};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;

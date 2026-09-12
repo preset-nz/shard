@@ -1,98 +1,102 @@
-//! A looping attack-decay envelope.
+//! An amplitude envelope over the sample.
 //!
-//! There is no note input yet, so this retriggers on its own period rather
-//! than on a gate. That turns a constant cloud into something with shape:
-//! swells, pulses, or hard percussive hits depending on how you set it.
+//! Attack, decay, sustain, release, running once per pass through the trimmed
+//! window. The loop point is the trigger and the window length is the
+//! duration, so there is nothing to set for either.
 //!
-//! When the sequencer arrives this becomes the same envelope driven by an
-//! event instead of a timer, which is why the attack and decay live here and
-//! not in whatever is currently doing the triggering.
-
-use crate::smooth::OnePole;
+//! No state. The shape is a pure function of how far into the pass you are,
+//! which makes it trivially testable and means changing the sample, the trim
+//! or the transport cannot leave the envelope out of step with playback.
+//!
+//! When a sequencer arrives this stays as it is and the caller passes note
+//! age instead of loop position. That is the whole reason it takes elapsed
+//! time as an argument rather than counting internally.
 
 #[derive(Debug, Clone, Copy)]
 pub struct EnvParams {
-    /// Depth. At zero the envelope is bypassed entirely and costs nothing.
-    pub amount: f32,
-    /// Seconds between retriggers.
-    pub period: f32,
     pub attack_ms: f32,
     pub decay_ms: f32,
+    /// Level held after the decay, 0 to 1.
+    pub sustain: f32,
+    /// Fades to silence, finishing exactly at the end of the pass.
+    pub release_ms: f32,
 }
 
 impl Default for EnvParams {
+    /// Neutral: no attack, no decay, full sustain, no release. Multiplies by
+    /// exactly one everywhere, so an untouched envelope changes nothing.
     fn default() -> Self {
         Self {
-            amount: 0.0,
-            period: 1.0,
-            attack_ms: 10.0,
-            decay_ms: 400.0,
+            attack_ms: 0.0,
+            decay_ms: 0.0,
+            sustain: 1.0,
+            release_ms: 0.0,
         }
     }
 }
 
-pub struct Envelope {
-    sample_rate: f32,
-    /// Samples since the last retrigger.
-    age: f32,
-    period_samples: f32,
-    /// Smooths the final gain, so changing attack or decay mid-flight does not
-    /// step. The envelope shape itself is not smoothed — a fast attack has to
-    /// stay fast.
-    out: OnePole,
-}
+impl EnvParams {
+    /// True when this envelope cannot change the signal, so the caller can
+    /// skip it entirely rather than multiplying by one.
+    pub fn is_neutral(&self) -> bool {
+        self.attack_ms <= 0.0
+            && self.decay_ms <= 0.0
+            && self.release_ms <= 0.0
+            && self.sustain >= 1.0
+    }
 
-impl Envelope {
-    pub fn new(sample_rate: f32) -> Self {
-        let mut out = OnePole::new();
-        out.set_time(2.0, sample_rate);
-        out.reset(1.0);
-        Self {
-            sample_rate,
-            age: 0.0,
-            period_samples: sample_rate,
-            out,
+    /// The gain at `elapsed` samples into a pass of `length` samples.
+    ///
+    /// Stages are fitted to the pass rather than allowed to overrun it. Set an
+    /// attack longer than the sample and you get a sample-long attack, not
+    /// silence — the alternative is controls that silently do nothing on short
+    /// material, which reads as a fault.
+    pub fn gain_at(&self, elapsed: f32, length: f32, sample_rate: f32) -> f32 {
+        if length < 2.0 {
+            return 1.0;
         }
-    }
-
-    pub fn retrigger(&mut self) {
-        self.age = 0.0;
-    }
-
-    /// A multiplier, 0 to 1. At `amount` zero this is always exactly 1, so the
-    /// envelope is genuinely bypassed rather than nearly so.
-    #[inline]
-    pub fn process(&mut self, p: &EnvParams) -> f32 {
-        let amount = p.amount.clamp(0.0, 1.0);
-        if amount <= 0.0 {
-            self.age = 0.0;
-            self.out.reset(1.0);
+        if self.is_neutral() {
             return 1.0;
         }
 
-        self.period_samples = (p.period.clamp(0.01, 60.0) * self.sample_rate).max(2.0);
-        let attack = (p.attack_ms.clamp(0.0, 20_000.0) * 0.001 * self.sample_rate).max(1.0);
-        let decay = (p.decay_ms.clamp(0.0, 60_000.0) * 0.001 * self.sample_rate).max(1.0);
+        let ms = sample_rate * 0.001;
+        let sustain = self.sustain.clamp(0.0, 1.0);
+        let mut attack = (self.attack_ms.max(0.0) * ms).min(length);
+        let mut decay = (self.decay_ms.max(0.0) * ms).min(length);
+        let mut release = (self.release_ms.max(0.0) * ms).min(length);
 
-        let shape = if self.age < attack {
-            self.age / attack
-        } else {
-            // Exponential decay, floored so a long decay against a short
-            // period does not retrigger from an audible step.
-            let t = (self.age - attack) / decay;
-            (-4.0 * t).exp()
-        };
-
-        self.age += 1.0;
-        if self.age >= self.period_samples {
-            self.age = 0.0;
+        // Attack, decay and release cannot together exceed the pass. Scale
+        // them down in proportion when they do, so the shape is preserved.
+        let total = attack + decay + release;
+        if total > length {
+            let k = length / total;
+            attack *= k;
+            decay *= k;
+            release *= k;
         }
 
-        // Depth: at amount 1 the envelope closes fully, below that it only
-        // dips. That makes it a swell control at low settings and a gate at
-        // high ones, from one knob.
-        let gain = 1.0 - amount * (1.0 - shape.clamp(0.0, 1.0));
-        self.out.process(gain)
+        let t = elapsed.clamp(0.0, length);
+        let release_start = length - release;
+
+        if t >= release_start && release > 0.0 {
+            // Release runs from wherever the envelope had got to, so a release
+            // longer than the sustain stage does not jump up first.
+            let level = if release_start <= attack && attack > 0.0 {
+                release_start / attack
+            } else if release_start <= attack + decay && decay > 0.0 {
+                1.0 - (1.0 - sustain) * ((release_start - attack) / decay)
+            } else {
+                sustain
+            };
+            let x = ((t - release_start) / release).clamp(0.0, 1.0);
+            level * (1.0 - x)
+        } else if t < attack && attack > 0.0 {
+            t / attack
+        } else if t < attack + decay && decay > 0.0 {
+            1.0 - (1.0 - sustain) * ((t - attack) / decay)
+        } else {
+            sustain
+        }
     }
 }
 
@@ -100,115 +104,153 @@ impl Envelope {
 mod tests {
     use super::*;
 
+    const SR: f32 = 48_000.0;
+    /// One second.
+    const LEN: f32 = 48_000.0;
+
     #[test]
-    fn bypassed_at_zero_amount() {
-        let mut e = Envelope::new(48_000.0);
+    fn neutral_by_default() {
         let p = EnvParams::default();
-        for _ in 0..48_000 {
-            assert_eq!(e.process(&p), 1.0, "must be exactly unity when off");
+        assert!(p.is_neutral());
+        for i in 0..1000 {
+            let t = i as f32 / 1000.0 * LEN;
+            assert_eq!(p.gain_at(t, LEN, SR), 1.0, "not unity at {t}");
         }
     }
 
     #[test]
-    fn stays_within_zero_and_one() {
-        let mut e = Envelope::new(48_000.0);
+    fn rises_over_the_attack() {
         let p = EnvParams {
-            amount: 1.0,
-            period: 0.25,
-            attack_ms: 1.0,
-            decay_ms: 100.0,
+            attack_ms: 200.0,
+            ..Default::default()
         };
-        for _ in 0..48_000 * 4 {
-            let g = e.process(&p);
-            assert!((0.0..=1.0).contains(&g), "gain out of range: {g}");
-            assert!(g.is_finite());
-        }
-    }
-
-    #[test]
-    fn opens_and_closes_within_a_period() {
-        let mut e = Envelope::new(48_000.0);
-        let p = EnvParams {
-            amount: 1.0,
-            period: 1.0,
-            attack_ms: 5.0,
-            decay_ms: 150.0,
-        };
-        let mut peak = 0.0f32;
-        let mut trough = 1.0f32;
-        for _ in 0..48_000 {
-            let g = e.process(&p);
-            peak = peak.max(g);
-            trough = trough.min(g);
-        }
-        assert!(peak > 0.9, "never opened, peak {peak}");
-        assert!(trough < 0.2, "never closed, trough {trough}");
-    }
-
-    #[test]
-    fn amount_scales_the_depth() {
-        // Half amount should dip, not close. This is what makes one control
-        // cover both a swell and a gate.
-        let level = |amount: f32| {
-            let mut e = Envelope::new(48_000.0);
-            let p = EnvParams {
-                amount,
-                period: 0.5,
-                attack_ms: 5.0,
-                decay_ms: 100.0,
-            };
-            let mut trough = 1.0f32;
-            for _ in 0..48_000 {
-                trough = trough.min(e.process(&p));
-            }
-            trough
-        };
-        let full = level(1.0);
-        let half = level(0.5);
-        assert!(half > full, "half {half} should dip less than full {full}");
-        assert!(half > 0.3, "half amount should not close, got {half}");
-    }
-
-    #[test]
-    fn retriggers_on_its_period() {
-        let mut e = Envelope::new(48_000.0);
-        let p = EnvParams {
-            amount: 1.0,
-            period: 0.1,
-            attack_ms: 2.0,
-            decay_ms: 30.0,
-        };
-        // Count upward crossings of the halfway mark. Per-sample slope is too
-        // shallow to detect directly: a 2 ms attack rises about 1% per sample
-        // and the output smoother flattens it further.
-        let mut prev = e.process(&p);
-        let mut crossings = 0;
-        for _ in 0..48_000 {
-            let g = e.process(&p);
-            if prev < 0.5 && g >= 0.5 {
-                crossings += 1;
-            }
-            prev = g;
-        }
-        // Ten periods of 100 ms in one second.
+        assert!(p.gain_at(0.0, LEN, SR) < 0.01, "should start at silence");
+        let half = p.gain_at(0.1 * SR, LEN, SR);
+        assert!((half - 0.5).abs() < 0.01, "halfway through attack: {half}");
         assert!(
-            (8..=12).contains(&crossings),
-            "expected ~10 retriggers, got {crossings}"
+            p.gain_at(0.2 * SR, LEN, SR) >= 0.99,
+            "should be open by 200 ms"
         );
     }
 
     #[test]
-    fn a_very_short_period_does_not_blow_up() {
-        let mut e = Envelope::new(48_000.0);
+    fn decays_to_the_sustain_level_and_holds() {
         let p = EnvParams {
-            amount: 1.0,
-            period: 0.01,
-            attack_ms: 500.0,
-            decay_ms: 2_000.0,
+            attack_ms: 10.0,
+            decay_ms: 200.0,
+            sustain: 0.25,
+            release_ms: 0.0,
         };
-        for _ in 0..48_000 {
-            let g = e.process(&p);
-            assert!((0.0..=1.0).contains(&g), "{g}");
+        let peak = p.gain_at(0.010 * SR, LEN, SR);
+        assert!(peak > 0.95, "should reach full after attack: {peak}");
+        let after = p.gain_at(0.4 * SR, LEN, SR);
+        assert!((after - 0.25).abs() < 0.01, "sustain was {after}");
+        // And it stays there.
+        let later = p.gain_at(0.8 * SR, LEN, SR);
+        assert!((later - 0.25).abs() < 0.01, "sustain drifted to {later}");
+    }
+
+    #[test]
+    fn release_finishes_exactly_at_the_end_of_the_pass() {
+        // The contract that makes this an envelope on the sample rather than
+        // an oscillator: the fade lands on the loop point, whatever the
+        // sample's length.
+        for length in [SR * 0.5, SR, SR * 7.0] {
+            let p = EnvParams {
+                attack_ms: 5.0,
+                decay_ms: 0.0,
+                sustain: 1.0,
+                release_ms: 250.0,
+            };
+            let end = p.gain_at(length, length, SR);
+            assert!(end < 0.01, "len {length}: ended at {end}");
+            let before = p.gain_at(length - 0.25 * SR - 1.0, length, SR);
+            assert!(
+                before > 0.95,
+                "len {length}: release started early ({before})"
+            );
         }
+    }
+
+    #[test]
+    fn stays_within_zero_and_one_for_any_settings() {
+        let cases = [
+            (0.0, 0.0, 1.0, 0.0),
+            (2000.0, 4000.0, 0.0, 4000.0),
+            (1.0, 1.0, 0.5, 1.0),
+            (100000.0, 100000.0, 1.0, 100000.0),
+            (0.0, 500.0, 0.0, 0.0),
+        ];
+        for (a, d, s, r) in cases {
+            let p = EnvParams {
+                attack_ms: a,
+                decay_ms: d,
+                sustain: s,
+                release_ms: r,
+            };
+            for length in [2.0, 100.0, SR, SR * 30.0] {
+                for i in 0..=200 {
+                    let t = i as f32 / 200.0 * length;
+                    let g = p.gain_at(t, length, SR);
+                    assert!(g.is_finite(), "{a},{d},{s},{r} at {t}/{length}");
+                    assert!((0.0..=1.0).contains(&g), "{g} for {a},{d},{s},{r}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn stages_are_fitted_to_a_short_sample_not_dropped() {
+        // A one-second attack on a 200 ms sample should still be an attack
+        // across that sample, not silence. Controls that silently do nothing
+        // on short material read as a fault.
+        let p = EnvParams {
+            attack_ms: 1000.0,
+            ..Default::default()
+        };
+        let short = 0.2 * SR;
+        assert!(p.gain_at(0.0, short, SR) < 0.01);
+        let end = p.gain_at(short, short, SR);
+        assert!(end > 0.95, "should be open by the end of the sample: {end}");
+    }
+
+    #[test]
+    fn release_does_not_jump_up_before_falling() {
+        // A release longer than everything else starts mid-decay. It has to
+        // fall from wherever the envelope actually was.
+        let p = EnvParams {
+            attack_ms: 10.0,
+            decay_ms: 900.0,
+            sustain: 0.0,
+            release_ms: 800.0,
+        };
+        let length = SR;
+        let mut prev = p.gain_at(0.02 * SR, length, SR);
+        for i in 2..=100 {
+            let t = i as f32 / 100.0 * length;
+            let g = p.gain_at(t, length, SR);
+            assert!(g <= prev + 0.02, "jumped from {prev} to {g} at {t}");
+            prev = g;
+        }
+    }
+
+    #[test]
+    fn is_neutral_only_when_nothing_is_set() {
+        assert!(EnvParams::default().is_neutral());
+        assert!(!EnvParams {
+            attack_ms: 1.0,
+            ..Default::default()
+        }
+        .is_neutral());
+        assert!(!EnvParams {
+            sustain: 0.9,
+            ..Default::default()
+        }
+        .is_neutral());
+        assert!(!EnvParams {
+            release_ms: 1.0,
+            ..Default::default()
+        }
+        .is_neutral());
     }
 }

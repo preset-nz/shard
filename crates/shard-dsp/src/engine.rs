@@ -4,7 +4,7 @@
 //! logging, no file access. The only thing crossing in from outside is the
 //! atomic parameter bank, which is read once per block.
 
-use crate::envelope::{EnvParams, Envelope};
+use crate::envelope::EnvParams;
 use crate::granular::{GrainParams, Granular, Window};
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
@@ -28,10 +28,10 @@ struct Slots {
     dry: usize,
     trim_start: usize,
     trim_end: usize,
-    env_amount: usize,
-    env_period: usize,
     env_attack: usize,
     env_decay: usize,
+    env_sustain: usize,
+    env_release: usize,
     gain: usize,
 }
 
@@ -57,10 +57,10 @@ impl Slots {
             dry: at("mix.dry"),
             trim_start: at("trim.start"),
             trim_end: at("trim.end"),
-            env_amount: at("env.amount"),
-            env_period: at("env.period"),
             env_attack: at("env.attack"),
             env_decay: at("env.decay"),
+            env_sustain: at("env.sustain"),
+            env_release: at("env.release"),
             gain: at("amp.gain"),
         }
     }
@@ -86,7 +86,6 @@ pub struct Engine {
     playing: bool,
     granular: Granular,
     ringmod: RingMod,
-    envelope: Envelope,
     slots: Slots,
     smooth: Smoothers,
     sample_rate: f32,
@@ -132,7 +131,6 @@ impl Engine {
             playing: false,
             granular: Granular::new(sample_rate, max_grains),
             ringmod: RingMod::new(sample_rate),
-            envelope: Envelope::new(sample_rate),
             slots,
             smooth,
             sample_rate,
@@ -231,10 +229,10 @@ impl Engine {
 
         let dry_target = bank.get(self.slots.dry);
         let env = EnvParams {
-            amount: bank.get(self.slots.env_amount),
-            period: bank.get(self.slots.env_period),
             attack_ms: bank.get(self.slots.env_attack),
             decay_ms: bank.get(self.slots.env_decay),
+            sustain: bank.get(self.slots.env_sustain),
+            release_ms: bank.get(self.slots.env_release),
         };
 
         // Trim is applied by slicing the source, so nothing downstream knows
@@ -244,6 +242,7 @@ impl Engine {
         let (lo, hi) = self.trim_range(bank);
         let source = &self.source[lo..hi];
         let span = self.source.len().max(1) as f32;
+        let window_len = source.len() as f32;
 
         let mut p = target;
         for frame in out.chunks_mut(2) {
@@ -270,7 +269,10 @@ impl Engine {
 
             let (l, r) = self.ringmod.process(l, r, &ring);
 
-            let e = self.envelope.process(&env);
+            // One pass through the trimmed window is one envelope. The
+            // player's position is the clock, so the release always lands on
+            // the loop point whatever the sample's length.
+            let e = env.gain_at(self.player.elapsed(), window_len, self.sample_rate);
             let (l, r) = (l * e, r * e);
 
             // A safety clip, not a limiter. Dense clouds sum above unity and
@@ -581,29 +583,82 @@ mod tests {
         }
     }
 
+    /// `set_by_id` returns false for an unknown id rather than panicking,
+    /// which means a renamed parameter makes a test silently assert nothing.
+    /// Every test write goes through here.
+    fn set(bank: &ParamBank, id: &str, v: f32) {
+        assert!(bank.set_by_id(id, v), "no such parameter: {id}");
+    }
+
     #[test]
-    fn the_envelope_shapes_the_output() {
+    fn the_envelope_shapes_each_pass_through_the_sample() {
+        // One second of source, so one pass is one second. A 400 ms release
+        // must make the last 400 ms of every pass quieter than the middle,
+        // and the fade must land on the loop point rather than drift.
         let mut e = Engine::new(48_000.0, 128);
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
-        bank.set_by_id("env.amount", 1.0);
-        bank.set_by_id("env.period", 0.5);
-        bank.set_by_id("env.attack", 5.0);
-        bank.set_by_id("env.decay", 80.0);
+        set(&bank, "mix.dry", 1.0);
+        set(&bank, "amp.gain", 1.0);
+        set(&bank, "env.attack", 0.0);
+        set(&bank, "env.decay", 0.0);
+        set(&bank, "env.sustain", 1.0);
+        set(&bank, "env.release", 400.0);
+
         let mut out = vec![0.0; 512];
-        let mut loud = 0.0f32;
-        let mut quiet = 1.0f32;
-        for b in 0..200 {
+        let frames_per_block = 256.0;
+        let mut middle = 0.0f32;
+        let mut tail = 1.0f32;
+        // Two full passes.
+        for b in 0..380 {
             e.process_block(&mut out, &bank);
-            if b > 20 {
-                let block = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
-                loud = loud.max(block);
-                quiet = quiet.min(block);
+            let pos = (b as f32 * frames_per_block) % 48_000.0 / 48_000.0;
+            let level = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+            if (0.2..0.5).contains(&pos) {
+                middle = middle.max(level);
+            }
+            if pos > 0.97 {
+                tail = tail.min(level);
             }
         }
-        assert!(loud > 0.05, "never opened, loudest block {loud}");
-        assert!(quiet < loud * 0.3, "never closed: {quiet} against {loud}");
+        assert!(middle > 0.5, "sustain stage was quiet: {middle}");
+        assert!(
+            tail < middle * 0.2,
+            "release did not close: {tail} vs {middle}"
+        );
+    }
+
+    #[test]
+    fn a_neutral_envelope_changes_nothing() {
+        // Defaults are no attack, no decay, full sustain, no release. An
+        // untouched envelope must be exactly transparent, not nearly so.
+        let src = tone(48_000);
+        let render = |release: f32| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(src.clone());
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "mix.dry", 1.0);
+            set(&bank, "amp.gain", 1.0);
+            set(&bank, "env.release", release);
+            let mut out = vec![0.0; 512];
+            let mut all = Vec::new();
+            for _ in 0..100 {
+                e.process_block(&mut out, &bank);
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        let neutral = render(0.0);
+        // 400 ms release on a one-second pass starts at 600 ms, so the first
+        // 200 ms are identical in both. Comparing past that compares the
+        // release against nothing, which is the bug this comment prevents.
+        let shaped = render(400.0);
+        let identical_frames = (0.2 * 48_000.0) as usize;
+        for (a, b) in neutral.iter().zip(shaped.iter()).take(identical_frames * 2) {
+            assert!((a - b).abs() < 1e-6, "{a} vs {b} before the release begins");
+        }
     }
 
     #[test]
