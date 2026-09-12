@@ -3,6 +3,16 @@ import { useEffect, useRef } from 'react';
 import type { GrainInfo } from '@/audio';
 
 /**
+ * How many recent spawns the live overlay shows before a bar is gone.
+ *
+ * Counted in grains rather than in seconds on purpose. At a dense setting that
+ * makes the trail short, so the cloud reads as motion instead of smearing into
+ * a haze; at a sparse one it makes bars persist, which is exactly what you want
+ * when you have turned the density down to watch them arrive one at a time.
+ */
+const LIVE_TRAIL = 120;
+
+/**
  * The source, drawn from precomputed peaks. Raw samples never cross the Tauri
  * boundary, so this is all the UI ever sees of the audio.
  *
@@ -28,7 +38,7 @@ export function Waveform({
   newestSeq,
   selected,
   totalSamples,
-  pickable,
+  inspecting,
   onTrim,
   onPickGrain,
 }: {
@@ -52,14 +62,19 @@ export function Waveform({
   /** Length of the whole source, for turning a grain's length into a width. */
   totalSamples: number;
   /**
-   * Whether a click inspects a grain instead of dragging a trim handle.
+   * Whether the canvas is being used to inspect grains rather than to play.
    *
    * Two jobs on one canvas needs a rule, and the honest one is that they
    * belong to different moments: trimming happens while you listen, inspecting
    * while you are stopped or frozen. Deriving the mode from that keeps both
    * gestures available without a mode button nobody would find.
+   *
+   * It governs the drawing as well as the click, because the two modes want
+   * opposite things from the overlay. Live, it should show a moving window of
+   * what is happening now. Inspecting, it should show the whole scrollback at
+   * an even weight, because anything drawn is something you can click.
    */
-  pickable: boolean;
+  inspecting: boolean;
   onTrim: (which: 'start' | 'end', value: number) => void;
   /** Clicking a drawn grain picks it. Null when the click hit no grain. */
   onPickGrain: (g: GrainInfo | null) => void;
@@ -147,9 +162,13 @@ export function Waveform({
         // scattered field rather than as a thicker line.
         const y = h * 0.12 + g.pan * h * 0.76;
 
-        const age = Math.max(0, Math.min(1, (newestSeq - g.seq) / 120));
+        const age = (newestSeq - g.seq) / LIVE_TRAIL;
+        // Past the trail a bar is gone, not dimmed. A floor here instead of a
+        // zero is what turns a moving overlay into an accumulating smear: the
+        // oldest bars never leave, they just wait to fall off the scrollback.
+        if (!inspecting && age > 1) continue;
         const isPicked = selected !== null && selected.seq === g.seq;
-        ctx.globalAlpha = isPicked ? 1 : 0.12 + (1 - age) * 0.5;
+        ctx.globalAlpha = isPicked ? 1 : inspecting ? 0.4 : (1 - age) * 0.62;
         ctx.fillStyle = isPicked ? '#fff' : accent;
         ctx.fillRect(left, y - 1.5, width, 3);
       }
@@ -206,6 +225,7 @@ export function Waveform({
     newestSeq,
     selected,
     totalSamples,
+    inspecting,
   ]);
 
   // Dragging near an edge moves it. Whichever edge is closer wins, so there
@@ -249,7 +269,7 @@ export function Waveform({
     <canvas
       ref={ref}
       onPointerDown={(e) => {
-        if (pickable) {
+        if (inspecting) {
           pick(e);
           return;
         }
@@ -257,10 +277,10 @@ export function Waveform({
         drag(e);
       }}
       onPointerMove={(e) => {
-        if (!pickable && e.buttons === 1) drag(e);
+        if (!inspecting && e.buttons === 1) drag(e);
       }}
       className={`h-40 w-full rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93] ${
-        pickable ? 'cursor-crosshair' : 'cursor-ew-resize'
+        inspecting ? 'cursor-crosshair' : 'cursor-ew-resize'
       }`}
     />
   );

@@ -27,8 +27,17 @@ import { Meter } from '@/components/Meter';
 import { Waveform } from '@/components/Waveform';
 import { type ParamValues, registerParamScope, SCOPE_KEY } from '@/scope';
 
-/** How many spawns the inspector keeps. A few seconds at a busy density. */
-const GRAIN_SCROLLBACK = 400;
+/**
+ * How many spawns the inspector keeps.
+ *
+ * This is what the table lists and what the frozen overlay draws, so it is a
+ * legibility budget rather than a memory one: 400 bars at a busy density
+ * overlap into a solid block you cannot pick anything out of. Two hundred is
+ * about three seconds at the default density. Tune freely — it and
+ * `LIVE_TRAIL` in the waveform are the two numbers that decide how much of the
+ * cloud you see at once.
+ */
+const GRAIN_SCROLLBACK = 200;
 
 export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
@@ -360,7 +369,7 @@ export default function App() {
             totalSamples={source ? Math.round(source.seconds * source.sample_rate) : 0}
             // Stopped or frozen, the waveform is an inspector; playing, it is
             // still the trim control it has always been.
-            pickable={grains.length > 0 && (frozen || !meter.playing)}
+            inspecting={grains.length > 0 && (frozen || !meter.playing)}
             onTrim={(which, v) => {
               void setParam(`trim.${which}`, v);
             }}
