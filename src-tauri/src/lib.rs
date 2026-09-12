@@ -40,6 +40,9 @@ pub struct Audio {
     audition: Arc<Mutex<Option<GrainSpawn>>>,
     /// True while a single grain is being played on its own.
     auditioning: Arc<AtomicBool>,
+    /// Whether the reel is actually running backwards, which outlives the
+    /// button press by the flick time. The UI lights the button from this.
+    reversing: Arc<AtomicBool>,
     playhead: Arc<AtomicU32>,
     /// Set by the UI, read by the audio thread at the top of each block.
     play_request: Arc<AtomicBool>,
@@ -83,6 +86,9 @@ pub struct Meters {
     pub playhead: f32,
     /// True while one grain is being auditioned on its own.
     pub auditioning: bool,
+    /// Whether the tape is running backwards. Not the same as the reverse
+    /// gate: a tap keeps this true for the flick time after you let go.
+    pub reversing: bool,
 }
 
 /// One logged grain, on its way to the UI. Mirrors `shard_dsp::GrainSpawn`,
@@ -172,6 +178,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         playing: state.playing.load(Ordering::Relaxed),
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
+        reversing: state.reversing.load(Ordering::Relaxed),
     }
 }
 
@@ -376,6 +383,7 @@ fn build_audio() -> Result<Audio, String> {
     let swap: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
     let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
     let auditioning = Arc::new(AtomicBool::new(false));
+    let reversing = Arc::new(AtomicBool::new(false));
 
     let audio_bank = Arc::clone(&bank);
     let audio_peak = Arc::clone(&peak);
@@ -386,6 +394,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
     let audio_auditioning = Arc::clone(&auditioning);
+    let audio_reversing = Arc::clone(&reversing);
 
     // The log is created by the engine, which only exists inside the audio
     // thread, so its handle comes back out alongside the sample rate.
@@ -474,6 +483,7 @@ fn build_audio() -> Result<Audio, String> {
                             audio_playhead
                                 .store(engine.play_position().to_bits(), Ordering::Relaxed);
                             audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
+                            audio_reversing.store(engine.reversing(), Ordering::Relaxed);
                         },
                         |err| eprintln!("audio stream error: {err}"),
                         None,
@@ -516,6 +526,7 @@ fn build_audio() -> Result<Audio, String> {
         grain_log,
         audition,
         auditioning,
+        reversing,
         playhead,
         play_request,
         source: Mutex::new(source::startup_drone(sample_rate)),

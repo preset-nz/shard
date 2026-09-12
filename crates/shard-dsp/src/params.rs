@@ -418,6 +418,9 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Ms,
         smooth_ms: 0.0,
     },
+    // Reverse is a *gate*, not a state: the button holds it high, and later a
+    // MIDI note or CC will do the same. What a tap means rather than a hold is
+    // decided by the engine, so both sources get the same gesture.
     ParamDef {
         id: "tape.reverse",
         name: "Reverse",
@@ -427,6 +430,18 @@ pub const PARAMS: &[ParamDef] = &[
         // Stepped, so it draws as a selector and drift leaves it alone.
         taper: Taper::Stepped(2),
         unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "tape.flick",
+        name: "Flick",
+        // The shortest reverse a tap can produce. Hold the gate longer than
+        // this and it behaves as a plain hold, releasing the moment you do.
+        min: 50.0,
+        max: 500.0,
+        default: 150.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
         smooth_ms: 0.0,
     },
     ParamDef {

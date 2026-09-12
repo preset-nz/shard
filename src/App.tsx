@@ -51,6 +51,7 @@ export default function App() {
     playing: false,
     playhead: 0,
     auditioning: false,
+    reversing: false,
   });
   /**
    * The grain scrollback. The Rust side drains — it hands over what has
@@ -196,10 +197,17 @@ export default function App() {
     void setParam('tape.brake', on ? 1 : 0);
   }, []);
 
-  const toggleReverse = useCallback(() => {
-    const next = (values['tape.reverse'] ?? 0) >= 0.5 ? 0 : 1;
-    void setParam('tape.reverse', next);
-  }, [values]);
+  /**
+   * Reverse is a gate, like the brake — the engine decides what a tap means.
+   *
+   * Tap and you get a flick of `tape.flick`, whatever your finger actually
+   * did; hold and the reel stays backwards until you let go. Keeping that rule
+   * in the engine rather than here is what lets a MIDI note or a footswitch
+   * play the same gesture without a path of its own.
+   */
+  const setReverse = useCallback((on: boolean) => {
+    void setParam('tape.reverse', on ? 1 : 0);
+  }, []);
 
   const doAudition = useCallback(async (g: GrainInfo) => {
     setPicked(g);
@@ -307,7 +315,7 @@ export default function App() {
         return;
       }
       if (e.code === 'KeyR') {
-        if (!e.repeat) toggleReverse();
+        if (!e.repeat) setReverse(true);
         e.preventDefault();
         return;
       }
@@ -317,6 +325,7 @@ export default function App() {
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'KeyB') setBrake(false);
+      if (e.code === 'KeyR') setReverse(false);
     };
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
@@ -324,7 +333,7 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, doSave, doLoad, setBrake, toggleReverse]);
+  }, [togglePlay, doSave, doLoad, setBrake, setReverse]);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -363,10 +372,17 @@ export default function App() {
 
         <button
           type="button"
-          title="Run the reel backwards. Shares the brake's slew, so it slows to a stop and climbs back the other way. (R)"
-          onClick={toggleReverse}
+          title="Tap for a flick backwards, hold to stay there. Shares the brake's slew, so it slows to a stop and climbs back the other way. Flick sets how long a tap lasts. (R)"
+          onPointerDown={(e) => {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setReverse(true);
+          }}
+          onPointerUp={() => setReverse(false)}
+          onPointerCancel={() => setReverse(false)}
+          // Lit from the engine's resolved state, not from the button: a tap's
+          // flick outlives the finger, and the light should say so.
           className={`rounded px-3 py-1 text-xs font-medium ${
-            (values['tape.reverse'] ?? 0) >= 0.5
+            meter.reversing
               ? 'bg-primary text-primary-foreground'
               : 'border border-border hover:bg-accent'
           }`}

@@ -48,6 +48,7 @@ struct Slots {
     tape_brake: usize,
     tape_time: usize,
     tape_reverse: usize,
+    tape_flick: usize,
     gain: usize,
 }
 
@@ -89,6 +90,7 @@ impl Slots {
             tape_brake: at("tape.brake"),
             tape_time: at("tape.time"),
             tape_reverse: at("tape.reverse"),
+            tape_flick: at("tape.flick"),
             gain: at("amp.gain"),
         }
     }
@@ -122,6 +124,10 @@ pub struct Engine {
     log: Arc<GrainLog>,
     /// Playing one logged grain on its own, with the transport stopped.
     auditioning: bool,
+    /// Reverse, resolved from the gate. See `resolve_reverse`.
+    reversing: bool,
+    /// Samples since reverse engaged, for the flick's minimum on-time.
+    reverse_age: f32,
     crush: Crush,
     ringmod: RingMod,
     slots: Slots,
@@ -181,6 +187,8 @@ impl Engine {
             granular,
             log,
             auditioning: false,
+            reversing: false,
+            reverse_age: 0.0,
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             slots,
@@ -228,6 +236,36 @@ impl Engine {
         self.auditioning
     }
 
+    /// Whether the tape is running backwards, which is not the same as whether
+    /// the reverse gate is held. For the UI, so the button can stay lit for as
+    /// long as the reel is actually turning the other way.
+    pub fn reversing(&self) -> bool {
+        self.reversing
+    }
+
+    /// Turn the reverse *gate* into a direction, once per block.
+    ///
+    /// A tap and a hold are the same gesture held for different lengths, so
+    /// one rule covers both: reverse engages when the gate rises, and stays
+    /// engaged until the gate is low **and** it has run for at least `flick`.
+    /// Tap and you get a flick of a set length whatever your finger did; hold
+    /// and it stays until you let go.
+    ///
+    /// This lives here rather than in the button so that a MIDI note, a pad or
+    /// a footswitch produces exactly the same gesture with no code of its own.
+    fn resolve_reverse(&mut self, gate: bool, flick_samples: f32, frames: f32) {
+        if gate && !self.reversing {
+            self.reversing = true;
+            self.reverse_age = 0.0;
+        }
+        if self.reversing {
+            self.reverse_age += frames;
+            if !gate && self.reverse_age >= flick_samples {
+                self.reversing = false;
+            }
+        }
+    }
+
     /// One grain, windowed and panned as logged, with no cloud around it and
     /// no overlap compensation. Deliberately bypasses the crusher, the ring
     /// modulator and the amplitude envelope: the question an audition answers
@@ -270,6 +308,11 @@ impl Engine {
         // Either direction cancels an audition: starting drowns it, stopping
         // has just cleared the pool out from under it.
         self.auditioning = false;
+        // A flick left mid-flight when the transport stopped would still be
+        // engaged when it started again, which is a surprise rather than a
+        // gesture.
+        self.reversing = false;
+        self.reverse_age = 0.0;
         self.playing = playing;
     }
 
@@ -381,11 +424,12 @@ impl Engine {
         // they share one slew — so flipping direction slows to a stop and
         // climbs back the other way, exactly as a reel does. An instant flip
         // would be one branch here, and would not sound like tape.
-        let direction = if bank.get(self.slots.tape_reverse) >= 0.5 {
-            -1.0
-        } else {
-            1.0
-        };
+        self.resolve_reverse(
+            bank.get(self.slots.tape_reverse) >= 0.5,
+            bank.get(self.slots.tape_flick).max(0.0) * 0.001 * self.sample_rate,
+            (out.len() / 2) as f32,
+        );
+        let direction = if self.reversing { -1.0 } else { 1.0 };
         let brake = bank.get(self.slots.tape_brake).clamp(0.0, 1.0);
         let speed_target = direction * (1.0 - brake);
         self.smooth
@@ -1256,6 +1300,106 @@ mod tests {
         let a = e.play_position();
         e.process_block(&mut out, &bank);
         assert!(e.play_position() < a, "reverse should run the tape back");
+    }
+
+    #[test]
+    fn a_tap_on_reverse_flicks_and_releases_itself() {
+        // Tap and hold are one gesture at two lengths. A tap must outlast the
+        // finger — that is what makes it a flick rather than a glitch — and it
+        // must end on its own.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "tape.flick", 150.0);
+        let mut out = vec![0.0; 512];
+
+        // A tap: gate high for one block, about 5 ms.
+        set(&bank, "tape.reverse", 1.0);
+        e.process_block(&mut out, &bank);
+        set(&bank, "tape.reverse", 0.0);
+        assert!(e.reversing(), "a tap should engage reverse");
+
+        // Well inside the flick, the finger long gone.
+        for _ in 0..10 {
+            e.process_block(&mut out, &bank);
+        }
+        assert!(
+            e.reversing(),
+            "the flick ended with the tap instead of outlasting it"
+        );
+
+        // Past 150 ms it releases without being told.
+        for _ in 0..40 {
+            e.process_block(&mut out, &bank);
+        }
+        assert!(!e.reversing(), "the flick never released itself");
+    }
+
+    #[test]
+    fn holding_reverse_outlasts_the_flick_and_releases_on_let_go() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "tape.flick", 150.0);
+        let mut out = vec![0.0; 512];
+
+        set(&bank, "tape.reverse", 1.0);
+        // Roughly two seconds, far past the flick.
+        for _ in 0..400 {
+            e.process_block(&mut out, &bank);
+        }
+        assert!(e.reversing(), "a hold should stay engaged");
+
+        set(&bank, "tape.reverse", 0.0);
+        e.process_block(&mut out, &bank);
+        assert!(
+            !e.reversing(),
+            "a hold past the flick should release as soon as the gate does"
+        );
+    }
+
+    #[test]
+    fn the_flick_length_is_the_control() {
+        // The knob has to do something, or it is decoration.
+        let engaged_after = |flick: f32, blocks: usize| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "tape.flick", flick);
+            let mut out = vec![0.0; 512];
+            set(&bank, "tape.reverse", 1.0);
+            e.process_block(&mut out, &bank);
+            set(&bank, "tape.reverse", 0.0);
+            for _ in 0..blocks {
+                e.process_block(&mut out, &bank);
+            }
+            e.reversing()
+        };
+        // ~160 ms after the tap: a short flick is done, a long one is not.
+        assert!(!engaged_after(50.0, 30), "a 50 ms flick should be over");
+        assert!(engaged_after(500.0, 30), "a 500 ms flick should still run");
+    }
+
+    #[test]
+    fn stopping_clears_a_flick_in_flight() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "tape.flick", 500.0);
+        let mut out = vec![0.0; 512];
+        set(&bank, "tape.reverse", 1.0);
+        e.process_block(&mut out, &bank);
+        set(&bank, "tape.reverse", 0.0);
+        assert!(e.reversing());
+        e.set_playing(false);
+        assert!(
+            !e.reversing(),
+            "a flick survived a stop and would fire on play"
+        );
     }
 
     #[test]

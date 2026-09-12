@@ -44,6 +44,14 @@ export function GrainInspector({
   // Newest first: the interesting end of a log is the recent end.
   const rows = [...grains].reverse().slice(0, 40);
 
+  /**
+   * Grain length, in tape time.
+   *
+   * Not wall-clock time, and it cannot be: tape speed is applied per sample
+   * while a grain is alive, so braking mid-grain makes that grain last longer
+   * than it was asked to. There is no real-world duration to show, only the
+   * length the engine asked for — which is what this is.
+   */
   const ms = (samples: number) => ((samples / sampleRate) * 1000).toFixed(0);
   const semitones = (rate: number) => {
     const st = 12 * Math.log2(Math.abs(rate) || 1);
@@ -96,7 +104,12 @@ export function GrainInspector({
               <tr>
                 <th className="px-2 py-1 text-left font-normal">#</th>
                 <th className="px-2 py-1 text-right font-normal">At</th>
-                <th className="px-2 py-1 text-right font-normal">Length</th>
+                <th
+                  className="px-2 py-1 text-right font-normal"
+                  title="The length this grain was asked for, in tape time. Not wall-clock: braking stretches a grain that is already playing, so its real duration is not known when it spawns."
+                >
+                  Length
+                </th>
                 <th className="px-2 py-1 text-right font-normal">Pitch</th>
                 <th className="px-2 py-1 text-right font-normal">Pan</th>
                 <th className="px-2 py-1 text-left font-normal">Shape</th>

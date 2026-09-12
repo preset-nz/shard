@@ -40,6 +40,12 @@ export interface Meters {
   playhead: number;
   /** True while one grain is being played on its own. */
   auditioning: boolean;
+  /**
+   * Whether the tape is running backwards — not whether the button is down.
+   * A tap keeps this true for the flick time after you let go, which is what
+   * the button lights from.
+   */
+  reversing: boolean;
 }
 
 export interface SourceInfo {
