@@ -1,9 +1,10 @@
-//! The engine: source buffer, granular cloud, ring modulator, out.
+//! The engine: source buffer, granular cloud, crusher, ring modulator, out.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
 //! logging, no file access. The only thing crossing in from outside is the
 //! atomic parameter bank, which is read once per block.
 
+use crate::crush::{Crush, CrushParams};
 use crate::envelope::EnvParams;
 use crate::granular::{GrainParams, Granular, Window};
 use crate::params::{index_of, ParamBank};
@@ -25,6 +26,14 @@ struct Slots {
     window: usize,
     ring_freq: usize,
     ring_mix: usize,
+    crush_bits: usize,
+    crush_rate: usize,
+    crush_mix: usize,
+    crush_env_amount: usize,
+    crush_env_attack: usize,
+    crush_env_decay: usize,
+    crush_env_sustain: usize,
+    crush_env_release: usize,
     dry: usize,
     trim_start: usize,
     trim_end: usize,
@@ -55,6 +64,14 @@ impl Slots {
             window: at("grain.window"),
             ring_freq: at("ring.freq"),
             ring_mix: at("ring.mix"),
+            crush_bits: at("crush.bits"),
+            crush_rate: at("crush.rate"),
+            crush_mix: at("crush.mix"),
+            crush_env_amount: at("crush.env.amount"),
+            crush_env_attack: at("crush.env.attack"),
+            crush_env_decay: at("crush.env.decay"),
+            crush_env_sustain: at("crush.env.sustain"),
+            crush_env_release: at("crush.env.release"),
             dry: at("mix.dry"),
             trim_start: at("trim.start"),
             trim_end: at("trim.end"),
@@ -78,6 +95,7 @@ struct Smoothers {
     spread: OnePole,
     pan: OnePole,
     dry: OnePole,
+    crush_mix: OnePole,
     gain: OnePole,
 }
 
@@ -87,6 +105,7 @@ pub struct Engine {
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
     granular: Granular,
+    crush: Crush,
     ringmod: RingMod,
     slots: Slots,
     smooth: Smoothers,
@@ -113,6 +132,7 @@ impl Engine {
             spread: mk(defs[slots.spread].smooth_ms),
             pan: mk(defs[slots.pan].smooth_ms),
             dry: mk(defs[slots.dry].smooth_ms),
+            crush_mix: mk(defs[slots.crush_mix].smooth_ms),
             gain: mk(defs[slots.gain].smooth_ms),
         };
         // Start settled at the defaults, otherwise every parameter glides up
@@ -125,6 +145,7 @@ impl Engine {
         smooth.spread.reset(defs[slots.spread].default);
         smooth.pan.reset(defs[slots.pan].default);
         smooth.dry.reset(defs[slots.dry].default);
+        smooth.crush_mix.reset(defs[slots.crush_mix].default);
         smooth.gain.reset(defs[slots.gain].default);
 
         Self {
@@ -132,6 +153,7 @@ impl Engine {
             player: Player::new(sample_rate),
             playing: false,
             granular: Granular::new(sample_rate, max_grains),
+            crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             slots,
             smooth,
@@ -223,6 +245,10 @@ impl Engine {
             freq: bank.get(self.slots.ring_freq),
             mix: bank.get(self.slots.ring_mix),
         };
+        // Bits and rate are read once per block; the mix is rebuilt per sample
+        // below, because the crush envelope moves it.
+        let crush_bits = bank.get(self.slots.crush_bits);
+        let crush_rate = bank.get(self.slots.crush_rate);
 
         if !self.playing {
             out.fill(0.0);
@@ -242,6 +268,21 @@ impl Engine {
         // it exists. `position` and the player both address the window, not
         // the file, which is what makes trimming a long sample feel like
         // loading a short one.
+        let crush_mix_target = bank.get(self.slots.crush_mix);
+        // The crush envelope reads the same clock as the amplitude one, so the
+        // two stay in step, but it means something different. The amplitude
+        // envelope multiplies the *signal*, where one is transparent; this one
+        // multiplies the *mix knob*, where one is "as set" and zero is clean.
+        // An attack is therefore "starts clean, then crushes", and a release
+        // is the same gesture backwards.
+        let crush_env = EnvParams {
+            amount: bank.get(self.slots.crush_env_amount),
+            attack_ms: bank.get(self.slots.crush_env_attack),
+            decay_ms: bank.get(self.slots.crush_env_decay),
+            sustain: bank.get(self.slots.crush_env_sustain),
+            release_ms: bank.get(self.slots.crush_env_release),
+        };
+
         let (lo, hi) = self.trim_range(bank);
         let source = &self.source[lo..hi];
         let span = self.source.len().max(1) as f32;
@@ -270,12 +311,24 @@ impl Engine {
             let l = dry * a + gl * b;
             let r = dry * a + gr * b;
 
+            // Crushed before the ring modulator, so the modulator has the
+            // extra partials the crusher just generated to fold against.
+            // Order stops being fixed the day the modifier stack lands.
+            let elapsed = self.player.elapsed();
+            let crush = CrushParams {
+                bits: crush_bits,
+                rate: crush_rate,
+                mix: self.smooth.crush_mix.process(crush_mix_target)
+                    * crush_env.gain_at(elapsed, window_len, self.sample_rate),
+            };
+            let (l, r) = self.crush.process(l, r, &crush);
+
             let (l, r) = self.ringmod.process(l, r, &ring);
 
             // One pass through the trimmed window is one envelope. The
             // player's position is the clock, so the release always lands on
             // the loop point whatever the sample's length.
-            let e = env.gain_at(self.player.elapsed(), window_len, self.sample_rate);
+            let e = env.gain_at(elapsed, window_len, self.sample_rate);
             let (l, r) = (l * e, r * e);
 
             // A safety clip, not a limiter. Dense clouds sum above unity and
@@ -662,6 +715,99 @@ mod tests {
         for (a, b) in neutral.iter().zip(shaped.iter()).take(identical_frames * 2) {
             assert!((a - b).abs() < 1e-6, "{a} vs {b} before the release begins");
         }
+    }
+
+    /// Render a fixed stretch of plain playback with the crusher set however
+    /// the caller likes. Dry, so the granular cloud is out of the way and any
+    /// difference is the crusher's doing.
+    fn render_crushed(settings: &[(&str, f32)]) -> Vec<f32> {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "mix.dry", 1.0);
+        set(&bank, "amp.gain", 1.0);
+        for (id, v) in settings {
+            set(&bank, id, *v);
+        }
+        let mut out = vec![0.0; 512];
+        let mut all = Vec::new();
+        for _ in 0..180 {
+            e.process_block(&mut out, &bank);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    #[test]
+    fn a_shut_crush_mix_is_bit_exact_bypass() {
+        // The null test the roadmap asks of every effect. With the mix shut,
+        // bits and rate at their most destructive must make no difference at
+        // all — not a small one. A near-miss would mean the crusher had put a
+        // delay or a gain into the path everything else runs through.
+        let neutral = render_crushed(&[]);
+        let destructive = render_crushed(&[("crush.bits", 1.0), ("crush.rate", 200.0)]);
+        assert_eq!(neutral.len(), destructive.len());
+        for (i, (a, b)) in neutral.iter().zip(destructive.iter()).enumerate() {
+            assert_eq!(a, b, "frame {i} differs with the crush mix shut");
+        }
+    }
+
+    #[test]
+    fn the_crush_envelope_starts_clean_and_then_crushes() {
+        // The contract this feature exists for. An attack on the crush
+        // envelope must leave the beginning of the pass untouched and have the
+        // effect fully in by the end of it.
+        let clean = render_crushed(&[]);
+        let swelling = render_crushed(&[
+            ("crush.bits", 1.0),
+            ("crush.rate", 400.0),
+            ("crush.mix", 1.0),
+            ("crush.env.amount", 1.0),
+            // 900 ms of attack across a one-second pass.
+            ("crush.env.attack", 900.0),
+        ]);
+
+        // The first 50 ms: the envelope has barely opened, so this is still
+        // the material. Not bit-exact, because the mix smoother is already
+        // moving, but audibly the same sound.
+        let head = (0.05 * 48_000.0) as usize * 2;
+        let early = clean
+            .iter()
+            .zip(swelling.iter())
+            .take(head)
+            .fold(0.0f32, |w, (a, b)| w.max((a - b).abs()));
+        assert!(early < 0.1, "the pass did not start clean: {early}");
+
+        // The last 50 ms before the loop: fully crushed, so it must be a long
+        // way from the material.
+        let tail = (0.95 * 48_000.0) as usize * 2;
+        let late = clean
+            .iter()
+            .zip(swelling.iter())
+            .skip(tail)
+            .take(head)
+            .fold(0.0f32, |w, (a, b)| w.max((a - b).abs()));
+        assert!(late > 0.3, "the crush never arrived: {late}");
+    }
+
+    #[test]
+    fn the_crush_envelope_runs_independently_of_the_amplitude_one() {
+        // Two envelopes, one clock, opposite gestures: the amplitude envelope
+        // fades the pass out while the crush envelope fades the effect in.
+        // Neither may cancel the other.
+        let out = render_crushed(&[
+            ("crush.bits", 2.0),
+            ("crush.mix", 1.0),
+            ("crush.env.attack", 900.0),
+            ("env.release", 400.0),
+        ]);
+        assert!(out.iter().all(|s| s.is_finite()));
+
+        // The amplitude release still closes the pass.
+        let tail = (0.99 * 48_000.0) as usize * 2;
+        let level = out.iter().skip(tail).fold(0.0f32, |a, s| a.max(s.abs()));
+        assert!(level < 0.1, "the amplitude release did not close: {level}");
     }
 
     #[test]

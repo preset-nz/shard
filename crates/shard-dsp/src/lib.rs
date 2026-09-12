@@ -11,6 +11,7 @@
 //! - Buffers are sized once, at construction.
 //! - Parameters arrive through an atomic bank and are read once per block.
 
+pub mod crush;
 pub mod engine;
 pub mod envelope;
 pub mod granular;
@@ -20,6 +21,7 @@ pub mod ringmod;
 pub mod rng;
 pub mod smooth;
 
+pub use crush::{Crush, CrushParams};
 pub use engine::Engine;
 pub use envelope::EnvParams;
 pub use granular::{GrainParams, Granular, Window};

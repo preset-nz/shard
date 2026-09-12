@@ -100,8 +100,13 @@ impl ParamDef {
     }
 }
 
-/// Batch one's set. Deliberately small. Do not grow this past what the
-/// granular voice and the ring modulator actually read.
+/// The set the engine actually reads. Deliberately small: a row exists here
+/// because a node reads it, never because a control might be nice to have.
+///
+/// Two envelopes live in this table and they are not interchangeable. `env.*`
+/// shapes amplitude, where neutral means transparent. `crush.env.*` shapes the
+/// crush mix, where neutral means "leave the knob alone". Same maths, opposite
+/// reading of the same number — see `Engine::process_block`.
 pub const PARAMS: &[ParamDef] = &[
     ParamDef {
         id: "trim.start",
@@ -288,6 +293,95 @@ pub const PARAMS: &[ParamDef] = &[
     ParamDef {
         id: "env.release",
         name: "Release",
+        min: 0.0,
+        max: 4000.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Ms,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "crush.bits",
+        name: "Bits",
+        min: 1.0,
+        max: 16.0,
+        default: 16.0,
+        // Bits are already the logarithm of the level count, so a linear
+        // control here is the perceptually even one.
+        taper: Taper::Linear,
+        unit: Unit::None,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "crush.rate",
+        name: "Crush rate",
+        min: 200.0,
+        max: 48_000.0,
+        default: 48_000.0,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+    // Defaults to zero, like the ring modulator: loading a patch and pressing
+    // play gives you the material, not an effect you did not ask for.
+    ParamDef {
+        id: "crush.mix",
+        name: "Crush mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    // The crush envelope. Multiplies `crush.mix` rather than the signal, so
+    // an attack is "starts clean, then crushes" and a release is the reverse.
+    // Its neutral shape is a flat one, which leaves the knob untouched.
+    ParamDef {
+        id: "crush.env.amount",
+        name: "Crush env amount",
+        min: 0.0,
+        max: 1.0,
+        // Full depth, like the amplitude envelope. Harmless as a default
+        // because a neutral ADSR is flat whatever the depth is set to.
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "crush.env.attack",
+        name: "Crush attack",
+        min: 0.0,
+        max: 4000.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Ms,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "crush.env.decay",
+        name: "Crush decay",
+        min: 0.0,
+        max: 4000.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Ms,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "crush.env.sustain",
+        name: "Crush sustain",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "crush.env.release",
+        name: "Crush release",
         min: 0.0,
         max: 4000.0,
         default: 0.0,

@@ -23,6 +23,9 @@ const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
   { id: 'mix', label: 'Blend', prefix: 'mix.' },
   { id: 'grain', label: 'Granular', prefix: 'grain.' },
   { id: 'ring', label: 'Ring modulation', prefix: 'ring.' },
+  // `crush.env.*` lands here rather than in Envelope, which is the point: it
+  // belongs to the crusher, not to the amplitude shape.
+  { id: 'crush', label: 'Crush', prefix: 'crush.' },
   { id: 'env', label: 'Envelope', prefix: 'env.' },
   { id: 'amp', label: 'Output', prefix: 'amp.' },
 ];
