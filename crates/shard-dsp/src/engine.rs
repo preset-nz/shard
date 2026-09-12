@@ -28,6 +28,7 @@ struct Slots {
     dry: usize,
     trim_start: usize,
     trim_end: usize,
+    env_amount: usize,
     env_attack: usize,
     env_decay: usize,
     env_sustain: usize,
@@ -57,6 +58,7 @@ impl Slots {
             dry: at("mix.dry"),
             trim_start: at("trim.start"),
             trim_end: at("trim.end"),
+            env_amount: at("env.amount"),
             env_attack: at("env.attack"),
             env_decay: at("env.decay"),
             env_sustain: at("env.sustain"),
@@ -229,6 +231,7 @@ impl Engine {
 
         let dry_target = bank.get(self.slots.dry);
         let env = EnvParams {
+            amount: bank.get(self.slots.env_amount),
             attack_ms: bank.get(self.slots.env_attack),
             decay_ms: bank.get(self.slots.env_decay),
             sustain: bank.get(self.slots.env_sustain),

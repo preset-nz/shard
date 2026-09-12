@@ -14,6 +14,10 @@
 
 #[derive(Debug, Clone, Copy)]
 pub struct EnvParams {
+    /// Depth. At one you get the shape as drawn; at zero the envelope is flat.
+    /// Between, it dips rather than closes, which is what makes the same
+    /// settings usable as a gentle swell and as a hard gate.
+    pub amount: f32,
     pub attack_ms: f32,
     pub decay_ms: f32,
     /// Level held after the decay, 0 to 1.
@@ -27,6 +31,7 @@ impl Default for EnvParams {
     /// exactly one everywhere, so an untouched envelope changes nothing.
     fn default() -> Self {
         Self {
+            amount: 1.0,
             attack_ms: 0.0,
             decay_ms: 0.0,
             sustain: 1.0,
@@ -39,10 +44,11 @@ impl EnvParams {
     /// True when this envelope cannot change the signal, so the caller can
     /// skip it entirely rather than multiplying by one.
     pub fn is_neutral(&self) -> bool {
-        self.attack_ms <= 0.0
-            && self.decay_ms <= 0.0
-            && self.release_ms <= 0.0
-            && self.sustain >= 1.0
+        self.amount <= 0.0
+            || (self.attack_ms <= 0.0
+                && self.decay_ms <= 0.0
+                && self.release_ms <= 0.0
+                && self.sustain >= 1.0)
     }
 
     /// The gain at `elapsed` samples into a pass of `length` samples.
@@ -78,7 +84,7 @@ impl EnvParams {
         let t = elapsed.clamp(0.0, length);
         let release_start = length - release;
 
-        if t >= release_start && release > 0.0 {
+        let shape = if t >= release_start && release > 0.0 {
             // Release runs from wherever the envelope had got to, so a release
             // longer than the sustain stage does not jump up first.
             let level = if release_start <= attack && attack > 0.0 {
@@ -96,7 +102,24 @@ impl EnvParams {
             1.0 - (1.0 - sustain) * ((t - attack) / decay)
         } else {
             sustain
-        }
+        };
+
+        // Depth. Blends the shape toward flat rather than scaling it, so
+        // lowering amount lifts the quiet parts instead of dropping the loud
+        // ones. A half-depth envelope is a dip, not a quieter gate.
+        let amount = self.amount.clamp(0.0, 1.0);
+        1.0 - amount * (1.0 - shape.clamp(0.0, 1.0))
+    }
+
+    /// The shape sampled across one pass, for drawing. `points` evenly spaced
+    /// values from the start of the window to its end.
+    pub fn curve(&self, points: usize, length: f32, sample_rate: f32) -> Vec<f32> {
+        (0..points.max(2))
+            .map(|i| {
+                let t = i as f32 / (points.max(2) - 1) as f32 * length;
+                self.gain_at(t, length, sample_rate)
+            })
+            .collect()
     }
 }
 
@@ -121,6 +144,7 @@ mod tests {
     #[test]
     fn rises_over_the_attack() {
         let p = EnvParams {
+            amount: 1.0,
             attack_ms: 200.0,
             ..Default::default()
         };
@@ -136,6 +160,7 @@ mod tests {
     #[test]
     fn decays_to_the_sustain_level_and_holds() {
         let p = EnvParams {
+            amount: 1.0,
             attack_ms: 10.0,
             decay_ms: 200.0,
             sustain: 0.25,
@@ -157,6 +182,7 @@ mod tests {
         // sample's length.
         for length in [SR * 0.5, SR, SR * 7.0] {
             let p = EnvParams {
+                amount: 1.0,
                 attack_ms: 5.0,
                 decay_ms: 0.0,
                 sustain: 1.0,
@@ -183,6 +209,7 @@ mod tests {
         ];
         for (a, d, s, r) in cases {
             let p = EnvParams {
+                amount: 1.0,
                 attack_ms: a,
                 decay_ms: d,
                 sustain: s,
@@ -205,6 +232,7 @@ mod tests {
         // across that sample, not silence. Controls that silently do nothing
         // on short material read as a fault.
         let p = EnvParams {
+            amount: 1.0,
             attack_ms: 1000.0,
             ..Default::default()
         };
@@ -219,6 +247,7 @@ mod tests {
         // A release longer than everything else starts mid-decay. It has to
         // fall from wherever the envelope actually was.
         let p = EnvParams {
+            amount: 1.0,
             attack_ms: 10.0,
             decay_ms: 900.0,
             sustain: 0.0,
@@ -235,9 +264,76 @@ mod tests {
     }
 
     #[test]
+    fn amount_blends_toward_flat() {
+        // Half depth should dip, not close, and should lift the trough rather
+        // than lower the peak.
+        let shaped = |amount: f32| {
+            let p = EnvParams {
+                amount,
+                attack_ms: 5.0,
+                decay_ms: 0.0,
+                sustain: 1.0,
+                release_ms: 500.0,
+            };
+            let mut peak = 0.0f32;
+            let mut trough = 1.0f32;
+            for i in 0..=500 {
+                let g = p.gain_at(i as f32 / 500.0 * LEN, LEN, SR);
+                peak = peak.max(g);
+                trough = trough.min(g);
+            }
+            (peak, trough)
+        };
+        let (full_peak, full_trough) = shaped(1.0);
+        let (half_peak, half_trough) = shaped(0.5);
+        assert!(full_trough < 0.05, "full depth should close: {full_trough}");
+        assert!(
+            half_trough > 0.4,
+            "half depth should only dip: {half_trough}"
+        );
+        assert!(
+            (half_peak - full_peak).abs() < 0.01,
+            "depth must not lower the peak: {half_peak} vs {full_peak}"
+        );
+    }
+
+    #[test]
+    fn zero_amount_is_exactly_flat() {
+        let p = EnvParams {
+            amount: 0.0,
+            attack_ms: 500.0,
+            decay_ms: 500.0,
+            sustain: 0.0,
+            release_ms: 500.0,
+        };
+        assert!(p.is_neutral());
+        for i in 0..=200 {
+            assert_eq!(p.gain_at(i as f32 / 200.0 * LEN, LEN, SR), 1.0);
+        }
+    }
+
+    #[test]
+    fn curve_is_drawable() {
+        let p = EnvParams {
+            amount: 1.0,
+            attack_ms: 100.0,
+            decay_ms: 0.0,
+            sustain: 1.0,
+            release_ms: 200.0,
+        };
+        let c = p.curve(128, LEN, SR);
+        assert_eq!(c.len(), 128);
+        assert!(c.iter().all(|v| (0.0..=1.0).contains(v)));
+        assert!(c[0] < 0.05, "starts closed: {}", c[0]);
+        assert!(c[64] > 0.95, "open in the middle: {}", c[64]);
+        assert!(c[127] < 0.05, "ends closed: {}", c[127]);
+    }
+
+    #[test]
     fn is_neutral_only_when_nothing_is_set() {
         assert!(EnvParams::default().is_neutral());
         assert!(!EnvParams {
+            amount: 1.0,
             attack_ms: 1.0,
             ..Default::default()
         }

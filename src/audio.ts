@@ -103,6 +103,9 @@ export function format(p: ParamInfo, v: number): string {
   return v.toFixed(2);
 }
 
+/** The envelope sampled across the trimmed window, for drawing. */
+export const envelopeCurve = () => invoke<number[]>('envelope_curve');
+
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
 

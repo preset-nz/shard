@@ -16,6 +16,7 @@ export function Waveform({
   playhead,
   trimStart,
   trimEnd,
+  envelope,
   onTrim,
 }: {
   peaks: number[];
@@ -27,6 +28,8 @@ export function Waveform({
   playhead: number | null;
   trimStart: number;
   trimEnd: number;
+  /** The envelope across the trimmed window, or null when it is flat. */
+  envelope: number[] | null;
   onTrim: (which: 'start' | 'end', value: number) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
@@ -109,6 +112,26 @@ export function Waveform({
       ctx.stroke();
     }
 
+    // The envelope across the trimmed window. Drawn as a line over the
+    // waveform rather than as a shape around it, so it reads as something
+    // applied to the sample rather than as part of it.
+    if (envelope && envelope.length > 1) {
+      ctx.strokeStyle = accent;
+      ctx.globalAlpha = 0.85;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      envelope.forEach((v, i) => {
+        const x = (lo + (i / (envelope.length - 1)) * span) * w;
+        const y = h - v * h * 0.94 - h * 0.03;
+        if (i === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+    }
+
     // The grain read position, on top.
     ctx.strokeStyle = accent;
     ctx.lineWidth = 1.5;
@@ -116,7 +139,7 @@ export function Waveform({
     ctx.moveTo(grainX * w, 0);
     ctx.lineTo(grainX * w, h);
     ctx.stroke();
-  }, [peaks, position, jitter, playhead, trimStart, trimEnd]);
+  }, [peaks, position, jitter, playhead, trimStart, trimEnd, envelope]);
 
   // Dragging near an edge moves it. Whichever edge is closer wins, so there
   // is no mode to be in and nothing to click first.

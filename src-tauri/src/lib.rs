@@ -143,6 +143,22 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
     }
 }
 
+/// The envelope as currently set, sampled across the trimmed window, for
+/// drawing. Asked for when the envelope controls change rather than polled,
+/// since it only moves when something is dragged.
+#[tauri::command]
+fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
+    let (lo, hi) = state.trim_indices();
+    let env = shard_dsp::EnvParams {
+        amount: state.bank.get_by_id("env.amount").unwrap_or(1.0),
+        attack_ms: state.bank.get_by_id("env.attack").unwrap_or(0.0),
+        decay_ms: state.bank.get_by_id("env.decay").unwrap_or(0.0),
+        sustain: state.bank.get_by_id("env.sustain").unwrap_or(1.0),
+        release_ms: state.bank.get_by_id("env.release").unwrap_or(0.0),
+    };
+    env.curve(256, (hi - lo) as f32, state.sample_rate)
+}
+
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
@@ -199,6 +215,31 @@ fn load_sample(state: tauri::State<'_, Audio>, path: String) -> Result<SourceInf
 /// state. Instead a dedicated thread builds it, plays it, and then parks
 /// forever holding it — dropping the stream would stop the device. Only the
 /// atomics and queues cross back, and those are all `Send`.
+impl Audio {
+    /// The trimmed window in sample indices, mirroring the engine's own
+    /// clamping so a drawn curve matches the one being heard.
+    fn trim_indices(&self) -> (usize, usize) {
+        let n = self.source.lock().expect("source poisoned").samples.len();
+        if n < 2 {
+            return (0, n);
+        }
+        let a = self
+            .bank
+            .get_by_id("trim.start")
+            .unwrap_or(0.0)
+            .clamp(0.0, 1.0);
+        let b = self
+            .bank
+            .get_by_id("trim.end")
+            .unwrap_or(1.0)
+            .clamp(0.0, 1.0);
+        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let lo = ((a * n as f32) as usize).min(n - 2);
+        let hi = ((b * n as f32) as usize).clamp(lo + 2, n);
+        (lo, hi)
+    }
+}
+
 fn build_audio() -> Result<Audio, String> {
     let bank = Arc::new(ParamBank::new());
     let peak = Arc::new(AtomicU32::new(0));
@@ -363,6 +404,7 @@ pub fn run() {
             set_drift,
             set_param_drift,
             set_playing,
+            envelope_curve,
             source_info,
             load_sample,
         ])

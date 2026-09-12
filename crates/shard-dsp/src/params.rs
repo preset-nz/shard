@@ -246,6 +246,16 @@ pub const PARAMS: &[ParamDef] = &[
         smooth_ms: 20.0,
     },
     ParamDef {
+        id: "env.amount",
+        name: "Env amount",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
         id: "env.attack",
         name: "Attack",
         min: 0.0,

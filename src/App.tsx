@@ -2,6 +2,7 @@ import { PropertyPanel } from '@preset.nz/facets';
 import { open } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  envelopeCurve,
   format,
   getParams,
   loadSample,
@@ -39,6 +40,7 @@ export default function App() {
   const [error, setError] = useState<string | null>(null);
   const defsRef = useRef<ParamInfo[] | null>(null);
   const [schemaVersion, setSchemaVersion] = useState(0);
+  const [envelope, setEnvelope] = useState<number[] | null>(null);
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -111,6 +113,31 @@ export default function App() {
       clearInterval(id);
     };
   }, [defs]);
+
+  // Refetch the curve only when an envelope or trim control actually moves.
+  // Polling it thirty times a second would be free but pointless; this way
+  // the drawn curve is the one Rust computes, not a copy of the maths.
+  const envKey = [
+    values['env.amount'],
+    values['env.attack'],
+    values['env.decay'],
+    values['env.sustain'],
+    values['env.release'],
+    values['trim.start'],
+    values['trim.end'],
+  ].join(',');
+  useEffect(() => {
+    if (!defs) return;
+    let alive = true;
+    void envelopeCurve().then((c) => {
+      if (!alive) return;
+      // A flat curve is not worth drawing over the waveform.
+      setEnvelope(c.every((v) => v >= 0.999) ? null : c);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [defs, envKey]);
 
   const pickFile = useCallback(async () => {
     try {
@@ -205,6 +232,7 @@ export default function App() {
             playhead={meter.playing ? meter.playhead : null}
             trimStart={values['trim.start'] ?? 0}
             trimEnd={values['trim.end'] ?? 1}
+            envelope={envelope}
             onTrim={(which, v) => {
               void setParam(`trim.${which}`, v);
             }}
