@@ -4,9 +4,12 @@
 //! logging, no file access. The only thing crossing in from outside is the
 //! atomic parameter bank, which is read once per block.
 
+use std::sync::Arc;
+
 use crate::crush::{Crush, CrushParams};
 use crate::envelope::EnvParams;
 use crate::granular::{GrainParams, Granular, Window};
+use crate::inspect::{GrainLog, GrainSpawn};
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::ringmod::{RingMod, RingModParams};
@@ -105,6 +108,11 @@ pub struct Engine {
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
     granular: Granular,
+    /// Every spawn the cloud makes, for the inspector. Shared out by
+    /// `grain_log`; the audio thread only ever pushes to it.
+    log: Arc<GrainLog>,
+    /// Playing one logged grain on its own, with the transport stopped.
+    auditioning: bool,
     crush: Crush,
     ringmod: RingMod,
     slots: Slots,
@@ -148,11 +156,17 @@ impl Engine {
         smooth.crush_mix.reset(defs[slots.crush_mix].default);
         smooth.gain.reset(defs[slots.gain].default);
 
+        let log = Arc::new(GrainLog::new());
+        let mut granular = Granular::new(sample_rate, max_grains);
+        granular.set_log(Arc::clone(&log));
+
         Self {
             source: Vec::new(),
             player: Player::new(sample_rate),
             playing: false,
-            granular: Granular::new(sample_rate, max_grains),
+            granular,
+            log,
+            auditioning: false,
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             slots,
@@ -169,7 +183,64 @@ impl Engine {
     pub fn set_source(&mut self, samples: Vec<f32>) {
         self.source = samples;
         self.granular.clear();
+        self.auditioning = false;
         self.player.rewind();
+    }
+
+    /// The spawn log, for whatever wants to draw it. Cloning the handle is the
+    /// only way out of the audio thread; nothing here hands out a `&mut`.
+    pub fn grain_log(&self) -> Arc<GrainLog> {
+        Arc::clone(&self.log)
+    }
+
+    /// Play one logged grain on its own.
+    ///
+    /// Only while stopped, which is the point — a grain auditioned into a live
+    /// cloud is a grain you cannot hear. It reads the **whole** source rather
+    /// than the trimmed window, because the logged position is absolute and
+    /// the grain should sound as it did when it happened.
+    ///
+    /// Returns false if the transport is running or the pool is full.
+    pub fn audition(&mut self, spawn: &GrainSpawn) -> bool {
+        if self.playing {
+            return false;
+        }
+        self.granular.clear();
+        self.auditioning = self.granular.trigger(spawn, self.source.len());
+        self.auditioning
+    }
+
+    pub fn auditioning(&self) -> bool {
+        self.auditioning
+    }
+
+    /// One grain, windowed and panned as logged, with no cloud around it and
+    /// no overlap compensation. Deliberately bypasses the crusher, the ring
+    /// modulator and the amplitude envelope: the question an audition answers
+    /// is what the *grain* sounded like, not what the patch did to it.
+    fn render_audition(&mut self, out: &mut [f32], bank: &ParamBank) {
+        let gain = bank.get(self.slots.gain);
+        // Split the borrows by field so the grain pool can be advanced while
+        // the source is read.
+        let granular = &mut self.granular;
+        let source = &self.source;
+        let mut peak = self.peak;
+
+        for frame in out.chunks_mut(2) {
+            let (l, r) = granular.render_solo(source);
+            let l = (l * gain).clamp(-1.0, 1.0);
+            let r = (r * gain).clamp(-1.0, 1.0);
+            peak = peak.max(l.abs()).max(r.abs());
+            if let [lo, ro] = frame {
+                *lo = l;
+                *ro = r;
+            }
+        }
+
+        self.peak = peak;
+        if granular.active_grains() == 0 {
+            self.auditioning = false;
+        }
     }
 
     pub fn playing(&self) -> bool {
@@ -182,6 +253,9 @@ impl Engine {
         if !playing {
             self.granular.clear();
         }
+        // Either direction cancels an audition: starting drowns it, stopping
+        // has just cleared the pool out from under it.
+        self.auditioning = false;
         self.playing = playing;
     }
 
@@ -251,7 +325,11 @@ impl Engine {
         let crush_rate = bank.get(self.slots.crush_rate);
 
         if !self.playing {
-            out.fill(0.0);
+            if self.auditioning {
+                self.render_audition(out, bank);
+            } else {
+                out.fill(0.0);
+            }
             return;
         }
 
@@ -284,6 +362,10 @@ impl Engine {
         };
 
         let (lo, hi) = self.trim_range(bank);
+        // The cloud only sees the slice, so it has to be told where the slice
+        // is before it logs a spawn — otherwise every drawn mark would sit at
+        // the wrong place the moment the trim moved off zero.
+        self.granular.set_source_window(lo, self.source.len());
         let source = &self.source[lo..hi];
         let span = self.source.len().max(1) as f32;
         let window_len = source.len() as f32;
@@ -808,6 +890,180 @@ mod tests {
         let tail = (0.99 * 48_000.0) as usize * 2;
         let level = out.iter().skip(tail).fold(0.0f32, |a, s| a.max(s.abs()));
         assert!(level < 0.1, "the amplitude release did not close: {level}");
+    }
+
+    #[test]
+    fn logged_grains_land_inside_the_trim_window() {
+        // The trap this offset exists for. The cloud only ever sees the
+        // trimmed slice, so a logged position is relative to the window unless
+        // the offset is added back. Get it wrong and the marks look perfect at
+        // the default trim of zero and are wrong everywhere else — which is a
+        // bug that ships.
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "trim.start", 0.5);
+        set(&bank, "trim.end", 0.6);
+        set(&bank, "grain.position", 0.5);
+        set(&bank, "grain.jitter", 0.0);
+        set(&bank, "mix.dry", 0.0);
+
+        let log = e.grain_log();
+        let mut out = vec![0.0; 512];
+        for _ in 0..400 {
+            e.process_block(&mut out, &bank);
+        }
+
+        let mut spawns = Vec::new();
+        log.drain(&mut spawns);
+        assert!(!spawns.is_empty(), "nothing was logged");
+        for g in &spawns {
+            assert!(
+                (0.5..=0.6).contains(&g.position),
+                "logged position {} is outside the 0.5..0.6 trim window",
+                g.position
+            );
+        }
+    }
+
+    #[test]
+    fn the_log_records_what_the_controls_asked_for() {
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "grain.size", 100.0);
+        set(&bank, "grain.reverse", 0.0);
+        set(&bank, "grain.pan", 0.0);
+        set(&bank, "grain.pitch", 0.0);
+        set(&bank, "grain.spread", 0.0);
+
+        let log = e.grain_log();
+        let mut out = vec![0.0; 512];
+        for _ in 0..400 {
+            e.process_block(&mut out, &bank);
+        }
+        let mut spawns = Vec::new();
+        log.drain(&mut spawns);
+        assert!(!spawns.is_empty());
+
+        // The last few, once the size smoother has settled on 100 ms.
+        for g in spawns.iter().rev().take(5) {
+            assert!(
+                (g.len - 4_800.0).abs() < 200.0,
+                "100 ms should log as ~4800 samples, got {}",
+                g.len
+            );
+            assert!(
+                g.rate > 0.0,
+                "no reverse was asked for, got rate {}",
+                g.rate
+            );
+            assert!(
+                (g.pan - 0.5).abs() < 1e-3,
+                "no pan spread should log as centred, got {}",
+                g.pan
+            );
+        }
+    }
+
+    #[test]
+    fn a_logged_grain_can_be_played_back_on_its_own_while_stopped() {
+        // The inspector's whole promise: stop, pick a grain, hear it. A grain
+        // is six numbers, so this is reconstruction, not a recording.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "mix.dry", 0.0);
+
+        let log = e.grain_log();
+        let mut out = vec![0.0; 512];
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+        }
+        let mut spawns = Vec::new();
+        log.drain(&mut spawns);
+        let pick = *spawns.last().expect("nothing logged");
+
+        e.set_playing(false);
+        // Stopped and not auditioning is still silence.
+        e.process_block(&mut out, &bank);
+        assert!(out.iter().all(|s| *s == 0.0), "silence expected before");
+
+        assert!(e.audition(&pick), "the audition was refused");
+        let mut peak = 0.0f32;
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+            peak = peak.max(out.iter().fold(0.0f32, |a, s| a.max(s.abs())));
+        }
+        assert!(peak > 0.01, "the auditioned grain was inaudible: {peak}");
+    }
+
+    #[test]
+    fn an_audition_ends_by_itself_and_leaves_silence() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let bank = ParamBank::new();
+        let g = GrainSpawn {
+            position: 0.25,
+            rate: 1.0,
+            // 100 ms, so a second of rendering outlasts it many times over.
+            len: 4_800.0,
+            pan: 0.5,
+            window: 0,
+            seq: 1,
+        };
+        assert!(e.audition(&g));
+        assert!(e.auditioning());
+
+        let mut out = vec![0.0; 512];
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+        }
+        assert!(!e.auditioning(), "the audition never finished");
+        e.process_block(&mut out, &bank);
+        assert!(
+            out.iter().all(|s| *s == 0.0),
+            "left ringing after finishing"
+        );
+    }
+
+    #[test]
+    fn an_audition_is_refused_while_the_transport_runs() {
+        // Not a limitation to work around: a single grain dropped into a live
+        // cloud is inaudible, so accepting the call would be a lie.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let g = GrainSpawn {
+            position: 0.25,
+            rate: 1.0,
+            len: 4_800.0,
+            pan: 0.5,
+            window: 0,
+            seq: 1,
+        };
+        assert!(!e.audition(&g));
+        assert!(!e.auditioning());
+    }
+
+    #[test]
+    fn starting_playback_cancels_an_audition() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let g = GrainSpawn {
+            position: 0.25,
+            rate: 1.0,
+            len: 48_000.0,
+            pan: 0.5,
+            window: 0,
+            seq: 1,
+        };
+        assert!(e.audition(&g));
+        e.set_playing(true);
+        assert!(!e.auditioning());
     }
 
     #[test]

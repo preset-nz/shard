@@ -2,9 +2,12 @@ import { PropertyPanel } from '@preset.nz/facets';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  auditionGrain,
   envelopeCurve,
   format,
+  type GrainInfo,
   getParams,
+  grainLog,
   loadPatch,
   loadSample,
   type Meters,
@@ -19,9 +22,13 @@ import {
   setPlaying,
   sourceInfo,
 } from '@/audio';
+import { GrainInspector } from '@/components/GrainInspector';
 import { Meter } from '@/components/Meter';
 import { Waveform } from '@/components/Waveform';
 import { type ParamValues, registerParamScope, SCOPE_KEY } from '@/scope';
+
+/** How many spawns the inspector keeps. A few seconds at a busy density. */
+const GRAIN_SCROLLBACK = 400;
 
 export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
@@ -34,7 +41,21 @@ export default function App() {
     drifting: [],
     playing: false,
     playhead: 0,
+    auditioning: false,
   });
+  /**
+   * The grain scrollback. The Rust side drains — it hands over what has
+   * happened since the last poll and forgets it — so the history lives here.
+   * Capped, because at the ceiling of 200 grains a second an uncapped list
+   * would be a memory leak with a nice view.
+   */
+  const [grains, setGrains] = useState<GrainInfo[]>([]);
+  const [frozen, setFrozen] = useState(false);
+  const [picked, setPicked] = useState<GrainInfo | null>(null);
+  // Read inside the poll without making it a dependency, which would tear the
+  // interval down and rebuild it on every freeze.
+  const frozenRef = useRef(false);
+  frozenRef.current = frozen;
   // Re-registering the scope is how the drift flags reach the field
   // definitions, since facets reads them from the schema rather than from the
   // values. Keyed on the flag pattern so it only happens when one flips.
@@ -87,9 +108,15 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v] = await Promise.all([readMeters(), getParams()]);
+        const [m, v, fresh] = await Promise.all([readMeters(), getParams(), grainLog()]);
         if (!alive) return;
         setMeter(m);
+        // Drain regardless of the freeze, or resuming would dump a backlog of
+        // everything that happened while it was frozen. Frozen means "stop
+        // adding to what I am looking at", not "stop the engine logging".
+        if (!frozenRef.current && fresh.length > 0) {
+          setGrains((prev) => [...prev, ...fresh].slice(-GRAIN_SCROLLBACK));
+        }
         const d = defsRef.current;
         if (d) {
           const key = m.drifting.map((b) => (b ? '1' : '0')).join('');
@@ -146,6 +173,16 @@ export default function App() {
       alive = false;
     };
   }, [defs, envKey]);
+
+  const doAudition = useCallback(async (g: GrainInfo) => {
+    setPicked(g);
+    try {
+      await auditionGrain(g);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
 
   const doSave = useCallback(async () => {
     try {
@@ -317,8 +354,18 @@ export default function App() {
             trimStart={values['trim.start'] ?? 0}
             trimEnd={values['trim.end'] ?? 1}
             envelope={envelope}
+            grains={grains}
+            newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
+            selected={picked}
+            totalSamples={source ? Math.round(source.seconds * source.sample_rate) : 0}
+            // Stopped or frozen, the waveform is an inspector; playing, it is
+            // still the trim control it has always been.
+            pickable={grains.length > 0 && (frozen || !meter.playing)}
             onTrim={(which, v) => {
               void setParam(`trim.${which}`, v);
+            }}
+            onPickGrain={(g) => {
+              if (g) void doAudition(g);
             }}
           />
 
@@ -338,6 +385,21 @@ export default function App() {
             never quite line up, so the texture keeps moving on its own. Those five controls are
             held while it runs. Everything else is yours either way.
           </p>
+
+          <GrainInspector
+            grains={grains}
+            frozen={frozen}
+            selected={picked}
+            playing={meter.playing}
+            auditioning={meter.auditioning}
+            sampleRate={source?.sample_rate ?? 48000}
+            onFreeze={setFrozen}
+            onClear={() => {
+              setGrains([]);
+              setPicked(null);
+            }}
+            onSelect={(g) => void doAudition(g)}
+          />
         </main>
 
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">

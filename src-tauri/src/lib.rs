@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 use shard_dsp::params::{index_of, Taper, Unit, PARAMS};
-use shard_dsp::{Engine, ParamBank};
+use shard_dsp::{Engine, GrainLog, GrainSpawn, ParamBank};
 
 mod drift;
 mod patch;
@@ -33,6 +33,13 @@ pub struct Audio {
     drift: Arc<drift::DriftState>,
     /// Transport, mirrored out of the audio thread for the UI.
     playing: Arc<AtomicBool>,
+    /// Every grain the cloud has spawned, drained by the UI at poll rate.
+    grain_log: Arc<GrainLog>,
+    /// One grain waiting to be auditioned. Handed across the same way a sample
+    /// swap is: the audio thread takes it at a block boundary, never blocking.
+    audition: Arc<Mutex<Option<GrainSpawn>>>,
+    /// True while a single grain is being played on its own.
+    auditioning: Arc<AtomicBool>,
     playhead: Arc<AtomicU32>,
     /// Set by the UI, read by the audio thread at the top of each block.
     play_request: Arc<AtomicBool>,
@@ -74,12 +81,35 @@ pub struct Meters {
     pub playing: bool,
     /// Where plain playback has reached, 0 to 1.
     pub playhead: f32,
+    /// True while one grain is being auditioned on its own.
+    pub auditioning: bool,
+}
+
+/// One logged grain, on its way to the UI. Mirrors `shard_dsp::GrainSpawn`,
+/// which cannot derive `Serialize` because the DSP crate has no dependencies.
+#[derive(Serialize, Clone, Copy)]
+pub struct GrainInfo {
+    /// 0 to 1 across the whole source, so it can be drawn straight onto the
+    /// waveform without knowing anything about the trim.
+    pub position: f32,
+    /// Samples per output sample. Negative means the grain ran backwards.
+    pub rate: f32,
+    /// Length in samples.
+    pub len: f32,
+    /// 0 hard left, 1 hard right.
+    pub pan: f32,
+    pub window: u32,
+    /// Spawn number. Strictly increasing, and the UI's key.
+    pub seq: u64,
 }
 
 #[derive(Serialize)]
 pub struct SourceInfo {
     pub name: String,
     pub seconds: f32,
+    /// The device rate the sample was resampled to. The UI needs it to turn a
+    /// grain's length in samples into a width on the drawn waveform.
+    pub sample_rate: f32,
     /// Downsampled absolute peaks for drawing. Precomputed here so raw samples
     /// never cross the boundary.
     pub peaks: Vec<f32>,
@@ -141,7 +171,59 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         drifting: state.drift.snapshot(),
         playing: state.playing.load(Ordering::Relaxed),
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
+        auditioning: state.auditioning.load(Ordering::Relaxed),
     }
+}
+
+/// Everything the cloud has spawned since the last call.
+///
+/// Drained rather than snapshotted, because a grain is an event and there is
+/// no meaningful "current set" to snapshot: at the default settings about a
+/// dozen exist at any instant and stopping destroys them. The UI keeps the
+/// scrollback and decides what to show.
+#[tauri::command]
+fn grain_log(state: tauri::State<'_, Audio>) -> Vec<GrainInfo> {
+    let mut spawns = Vec::new();
+    state.grain_log.drain(&mut spawns);
+    spawns
+        .into_iter()
+        .map(|g| GrainInfo {
+            position: g.position,
+            rate: g.rate,
+            len: g.len,
+            pan: g.pan,
+            window: g.window,
+            seq: g.seq,
+        })
+        .collect()
+}
+
+/// Play one logged grain on its own.
+///
+/// Refused while the transport runs, and that is deliberate rather than a
+/// limitation to route around: a single grain dropped into a live cloud cannot
+/// be heard, so accepting it would be a lie.
+#[tauri::command]
+fn audition_grain(
+    state: tauri::State<'_, Audio>,
+    position: f32,
+    rate: f32,
+    len: f32,
+    pan: f32,
+    window: u32,
+) -> Result<(), String> {
+    if state.playing.load(Ordering::Relaxed) {
+        return Err("stop playback first — one grain cannot be heard inside the cloud".into());
+    }
+    *state.audition.lock().expect("audition poisoned") = Some(GrainSpawn {
+        position,
+        rate,
+        len,
+        pan,
+        window,
+        seq: 0,
+    });
+    Ok(())
 }
 
 /// The envelope as currently set, sampled across the trimmed window, for
@@ -230,6 +312,7 @@ fn source_info(state: tauri::State<'_, Audio>) -> SourceInfo {
     SourceInfo {
         name: s.name.clone(),
         seconds: s.samples.len() as f32 / state.sample_rate,
+        sample_rate: state.sample_rate,
         peaks: source::peaks(&s.samples, 900),
     }
 }
@@ -243,6 +326,7 @@ fn load_sample(state: tauri::State<'_, Audio>, path: String) -> Result<SourceInf
     let info = SourceInfo {
         name: loaded.name.clone(),
         seconds: loaded.samples.len() as f32 / state.sample_rate,
+        sample_rate: state.sample_rate,
         peaks: source::peaks(&loaded.samples, 900),
     };
     *state.swap.lock().expect("swap poisoned") = Some(loaded.samples.clone());
@@ -290,6 +374,8 @@ fn build_audio() -> Result<Audio, String> {
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
     let swap: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
+    let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
+    let auditioning = Arc::new(AtomicBool::new(false));
 
     let audio_bank = Arc::clone(&bank);
     let audio_peak = Arc::clone(&peak);
@@ -298,13 +384,17 @@ fn build_audio() -> Result<Audio, String> {
     let audio_playing = Arc::clone(&playing);
     let audio_playhead = Arc::clone(&playhead);
     let audio_request = Arc::clone(&play_request);
+    let audio_audition = Arc::clone(&audition);
+    let audio_auditioning = Arc::clone(&auditioning);
 
-    let (tx, rx) = std::sync::mpsc::channel::<Result<f32, String>>();
+    // The log is created by the engine, which only exists inside the audio
+    // thread, so its handle comes back out alongside the sample rate.
+    let (tx, rx) = std::sync::mpsc::channel::<Result<(f32, Arc<GrainLog>), String>>();
 
     std::thread::Builder::new()
         .name("shard-audio".into())
         .spawn(move || {
-            let built = (|| -> Result<(cpal::Stream, f32), String> {
+            let built = (|| -> Result<(cpal::Stream, f32, Arc<GrainLog>), String> {
                 let host = cpal::default_host();
                 let device = host
                     .default_output_device()
@@ -317,6 +407,7 @@ fn build_audio() -> Result<Audio, String> {
 
                 let mut engine = Engine::new(sample_rate, 256);
                 engine.set_source(source::startup_drone(sample_rate).samples);
+                let log = engine.grain_log();
                 let mut scratch = vec![0.0f32; 8192];
 
                 let stream = device
@@ -339,6 +430,15 @@ fn build_audio() -> Result<Audio, String> {
                             if want != engine.playing() {
                                 engine.set_playing(want);
                                 audio_playing.store(want, Ordering::Relaxed);
+                            }
+
+                            // Same non-blocking hand-off as the sample swap.
+                            // A missed block just means the grain sounds one
+                            // buffer later, which nobody can perceive.
+                            if let Ok(mut pending) = audio_audition.try_lock() {
+                                if let Some(g) = pending.take() {
+                                    engine.audition(&g);
+                                }
                             }
 
                             let frames = out.len() / channels;
@@ -373,6 +473,7 @@ fn build_audio() -> Result<Audio, String> {
                             audio_grains.store(engine.active_grains() as u32, Ordering::Relaxed);
                             audio_playhead
                                 .store(engine.play_position().to_bits(), Ordering::Relaxed);
+                            audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
                         },
                         |err| eprintln!("audio stream error: {err}"),
                         None,
@@ -382,12 +483,12 @@ fn build_audio() -> Result<Audio, String> {
                 stream
                     .play()
                     .map_err(|e| format!("could not start the stream: {e}"))?;
-                Ok((stream, sample_rate))
+                Ok((stream, sample_rate, log))
             })();
 
             match built {
-                Ok((stream, sample_rate)) => {
-                    let _ = tx.send(Ok(sample_rate));
+                Ok((stream, sample_rate, log)) => {
+                    let _ = tx.send(Ok((sample_rate, log)));
                     // Park forever. The stream must outlive this scope or the
                     // device stops, and this thread exists only to hold it.
                     let _held = stream;
@@ -402,7 +503,7 @@ fn build_audio() -> Result<Audio, String> {
         })
         .map_err(|e| format!("could not start the audio thread: {e}"))?;
 
-    let sample_rate = rx
+    let (sample_rate, grain_log) = rx
         .recv()
         .map_err(|_| "the audio thread died during startup".to_string())??;
 
@@ -412,6 +513,9 @@ fn build_audio() -> Result<Audio, String> {
         grains,
         drift,
         playing,
+        grain_log,
+        audition,
+        auditioning,
         playhead,
         play_request,
         source: Mutex::new(source::startup_drone(sample_rate)),
@@ -450,6 +554,8 @@ pub fn run() {
             load_patch,
             source_info,
             load_sample,
+            grain_log,
+            audition_grain,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

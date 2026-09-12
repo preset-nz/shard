@@ -38,12 +38,39 @@ export interface Meters {
   playing: boolean;
   /** Where plain playback has reached, 0 to 1. */
   playhead: number;
+  /** True while one grain is being played on its own. */
+  auditioning: boolean;
 }
 
 export interface SourceInfo {
   name: string;
   seconds: number;
+  /** snake_case, like every other field: nothing here renames on the wire. */
+  sample_rate: number;
   peaks: number[];
+}
+
+/**
+ * One grain, as the engine spawned it.
+ *
+ * A grain is an event, not an object with a lifetime — the pool reuses its
+ * slots and stopping destroys every live one. What the inspector shows is a
+ * log of spawns. These six numbers are the whole of a grain, which is why any
+ * entry can be handed straight back to `auditionGrain` and heard again.
+ */
+export interface GrainInfo {
+  /** 0 to 1 across the whole source, trim already accounted for. */
+  position: number;
+  /** Samples per output sample. Negative means it ran backwards. */
+  rate: number;
+  /** Length in samples. */
+  len: number;
+  /** 0 hard left, 1 hard right. */
+  pan: number;
+  /** Index into WINDOW_NAMES. */
+  window: number;
+  /** Spawn number since the engine started. Strictly increasing. */
+  seq: number;
 }
 
 export const paramDefs = () => invoke<ParamInfo[]>('param_defs');
@@ -53,6 +80,19 @@ export const meters = () => invoke<Meters>('meters');
 export const setDrift = (on: boolean) => invoke<void>('set_drift', { on });
 export const sourceInfo = () => invoke<SourceInfo>('source_info');
 export const loadSample = (path: string) => invoke<SourceInfo>('load_sample', { path });
+
+/** Everything spawned since the last call. Drains, so poll it steadily. */
+export const grainLog = () => invoke<GrainInfo[]>('grain_log');
+
+/** Play one logged grain on its own. Rejects while the transport is running. */
+export const auditionGrain = (g: GrainInfo) =>
+  invoke<void>('audition_grain', {
+    position: g.position,
+    rate: g.rate,
+    len: g.len,
+    pan: g.pan,
+    window: g.window,
+  });
 
 /**
  * Control position (0..1) to real value, mirroring the Rust table's taper.

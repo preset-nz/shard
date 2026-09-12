@@ -7,6 +7,9 @@
 //! The grain pool is fixed and preallocated. Nothing here allocates, locks or
 //! logs, because all of it runs on the audio thread.
 
+use std::sync::Arc;
+
+use crate::inspect::{GrainLog, GrainSpawn};
 use crate::rng::Rng;
 
 /// How a grain fades in and out. A grain with no window clicks at both ends.
@@ -26,7 +29,7 @@ pub enum Window {
 impl Window {
     /// `phase` runs 0 to 1 across the grain's life.
     #[inline]
-    fn gain(self, phase: f32) -> f32 {
+    pub fn gain(self, phase: f32) -> f32 {
         match self {
             Window::Hann => 0.5 - 0.5 * (core::f32::consts::TAU * phase).cos(),
             Window::Triangle => 1.0 - (2.0 * phase - 1.0).abs(),
@@ -115,6 +118,13 @@ pub struct Granular {
     /// not quantised to whole samples at high rates.
     next_spawn: f32,
     rng: Rng,
+    /// Where the slice being read sits inside the whole source. The cloud only
+    /// ever sees `source[lo..hi]`, so without this every logged position would
+    /// be relative to the trim window and the marks would drift away from the
+    /// waveform the moment the trim moved.
+    window_offset: usize,
+    window_total: usize,
+    log: Option<Arc<GrainLog>>,
 }
 
 impl Granular {
@@ -125,7 +135,23 @@ impl Granular {
             sample_rate,
             next_spawn: 0.0,
             rng: Rng::new(0xC0FF_EE01),
+            window_offset: 0,
+            window_total: 0,
+            log: None,
         }
+    }
+
+    /// Record every spawn into this log. Optional: the CLI does not set one,
+    /// and nothing in the audio path depends on it being there.
+    pub fn set_log(&mut self, log: Arc<GrainLog>) {
+        self.log = Some(log);
+    }
+
+    /// Tell the cloud where its slice sits in the whole source. Called once
+    /// per block by the engine, before any grain is scheduled.
+    pub fn set_source_window(&mut self, offset: usize, total: usize) {
+        self.window_offset = offset;
+        self.window_total = total;
     }
 
     pub fn active_grains(&self) -> usize {
@@ -175,6 +201,51 @@ impl Granular {
         g.window = p.window;
         g.left = angle.cos();
         g.right = angle.sin();
+
+        if let Some(log) = &self.log {
+            let total = self.window_total.max(1) as f32;
+            log.push(&GrainSpawn {
+                position: ((self.window_offset as f32 + pos) / total).clamp(0.0, 1.0),
+                rate,
+                len,
+                pan,
+                window: Window::ALL.iter().position(|w| *w == p.window).unwrap_or(0) as u32,
+                // Filled in by the log itself; the caller's value is ignored.
+                seq: 0,
+            });
+        }
+    }
+
+    /// Activate one grain directly, bypassing the scheduler, exactly as it was
+    /// logged. `position` is normalised against the **whole** source, and so
+    /// is the buffer this grain will be rendered against — an audition ignores
+    /// the trim, because the point is to hear the grain as it happened.
+    ///
+    /// Returns false when the pool is full or the grain cannot fit the buffer.
+    pub fn trigger(&mut self, g: &GrainSpawn, source_len: usize) -> bool {
+        if source_len < 2 {
+            return false;
+        }
+        let Some(slot) = self.grains.iter().position(|x| !x.active) else {
+            return false;
+        };
+        let last = source_len as f32 - 1.0;
+        let angle = g.pan.clamp(0.0, 1.0) * core::f32::consts::FRAC_PI_2;
+
+        let grain = &mut self.grains[slot];
+        grain.active = true;
+        grain.pos = (g.position.clamp(0.0, 1.0) * last).clamp(0.0, last);
+        grain.rate = if g.rate.is_finite() && g.rate != 0.0 {
+            g.rate
+        } else {
+            1.0
+        };
+        grain.age = 0.0;
+        grain.len = g.len.max(2.0);
+        grain.window = Window::ALL[(g.window as usize).min(Window::ALL.len() - 1)];
+        grain.left = angle.cos();
+        grain.right = angle.sin();
+        true
     }
 
     /// Render one stereo sample. `source` is mono.
@@ -192,6 +263,17 @@ impl Granular {
             self.spawn(p, source.len());
         }
 
+        let (l, r) = self.render(source);
+
+        let overlap = (p.density * p.size_ms * 0.001).max(1.0);
+        let comp = p.gain / overlap.sqrt();
+        (l * comp, r * comp)
+    }
+
+    /// Advance every live grain by one sample and sum them. No scheduling and
+    /// no overlap compensation — both belong to the cloud, not to a grain.
+    #[inline]
+    fn render(&mut self, source: &[f32]) -> (f32, f32) {
         let mut l = 0.0;
         let mut r = 0.0;
         let last = source.len() - 1;
@@ -230,16 +312,23 @@ impl Granular {
             }
         }
 
-        // Overlap compensation. Grains sum, so without this `density` is also
-        // a volume control: sweeping it from sparse to dense adds 20 dB and
-        // slams the output. Expected overlap is density times grain length,
-        // and incoherent sources sum as the square root of their count, so
-        // dividing by sqrt(overlap) holds the level roughly steady while
-        // density moves. That makes density a texture control, which is what
-        // it is meant to be.
-        let overlap = (p.density * p.size_ms * 0.001).max(1.0);
-        let comp = p.gain / overlap.sqrt();
-        (l * comp, r * comp)
+        (l, r)
+    }
+
+    /// Render whatever grains are already live, without scheduling new ones
+    /// and without overlap compensation.
+    ///
+    /// This is the audition path. Compensation divides by the square root of
+    /// the expected overlap, which at a dense setting is a factor of six or
+    /// more — applying it to a single grain would make the thing you asked to
+    /// hear almost inaudible, and it would get quieter as you turned density
+    /// up, which is exactly backwards for an inspector.
+    #[inline]
+    pub fn render_solo(&mut self, source: &[f32]) -> (f32, f32) {
+        if source.len() < 2 {
+            return (0.0, 0.0);
+        }
+        self.render(source)
     }
 }
 
