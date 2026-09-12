@@ -389,6 +389,46 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Ms,
         smooth_ms: 0.0,
     },
+    // The tape transport. One mechanism: `speed` is a multiplier on tape time,
+    // and brake and reverse are two ways of asking for a different one. Both
+    // arrive through the same slew, which is what makes a stop sound like a
+    // finger on the reel rather than a mute.
+    ParamDef {
+        id: "tape.brake",
+        name: "Brake",
+        min: 0.0,
+        max: 1.0,
+        // Continuous, not a switch, even though the button only sends 0 and 1.
+        // A pedal or a MIDI CC lands here unchanged, and half a brake is a
+        // real thing: the tape runs slow and flat instead of stopping.
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        // Not smoothed here. `tape.time` is the slew, and it is the control
+        // that decides how the gesture sounds.
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "tape.time",
+        name: "Tape time",
+        min: 20.0,
+        max: 3000.0,
+        default: 400.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "tape.reverse",
+        name: "Reverse",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        // Stepped, so it draws as a selector and drift leaves it alone.
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
     ParamDef {
         id: "amp.gain",
         name: "Gain",
@@ -538,10 +578,15 @@ mod tests {
                 let t = step as f32 / 20.0;
                 let v = p.denormalise(t);
                 let back = p.normalise(v);
-                let tolerance = if matches!(p.taper, Taper::Stepped(_)) {
-                    0.3
-                } else {
-                    1e-3
+                // A stepped control cannot round-trip exactly: a position
+                // lands in a bucket and comes back as that bucket's centre.
+                // The error that allows is the bucket width, so the bound has
+                // to come from the step count — a flat 0.3 silently assumed
+                // four steps, and a two-step control has buckets twice as
+                // wide.
+                let tolerance = match p.taper {
+                    Taper::Stepped(n) => 1.0 / n.max(1) as f32 + 1e-3,
+                    _ => 1e-3,
                 };
                 assert!(
                     (back - t).abs() < tolerance,

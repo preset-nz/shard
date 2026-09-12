@@ -76,6 +76,14 @@ pub struct GrainParams {
     pub reverse: f32,
     pub window: Window,
     pub gain: f32,
+    /// Tape speed: 1 normal, 0 stopped, negative backwards.
+    ///
+    /// It scales *tape time*, not just pitch — the scheduler, each grain's
+    /// ageing and each grain's reading all run on it. That is what makes a
+    /// brake sound like a reel slowing rather than a pitch knob being turned:
+    /// grains stretch and thin out as they drop in pitch, and at a standstill
+    /// nothing new is thrown at all.
+    pub speed: f32,
 }
 
 impl Default for GrainParams {
@@ -91,6 +99,7 @@ impl Default for GrainParams {
             reverse: 0.0,
             window: Window::Hann,
             gain: 1.0,
+            speed: 1.0,
         }
     }
 }
@@ -255,15 +264,18 @@ impl Granular {
             return (0.0, 0.0);
         }
 
-        // Schedule. Density is grains per second, so the gap is sr / density.
-        self.next_spawn -= 1.0;
+        // Schedule on tape time. At a standstill the countdown stops, so a
+        // braked reel throws no new grains — the cloud freezes rather than
+        // filling with grains that read a single sample and thud.
+        let speed = if p.speed.is_finite() { p.speed } else { 1.0 };
+        self.next_spawn -= speed.abs();
         if self.next_spawn <= 0.0 {
             let density = p.density.clamp(0.1, 2000.0);
             self.next_spawn += (self.sample_rate / density).max(1.0);
             self.spawn(p, source.len());
         }
 
-        let (l, r) = self.render(source);
+        let (l, r) = self.render(source, speed);
 
         let overlap = (p.density * p.size_ms * 0.001).max(1.0);
         let comp = p.gain / overlap.sqrt();
@@ -273,7 +285,7 @@ impl Granular {
     /// Advance every live grain by one sample and sum them. No scheduling and
     /// no overlap compensation — both belong to the cloud, not to a grain.
     #[inline]
-    fn render(&mut self, source: &[f32]) -> (f32, f32) {
+    fn render(&mut self, source: &[f32], speed: f32) -> (f32, f32) {
         let mut l = 0.0;
         let mut r = 0.0;
         let last = source.len() - 1;
@@ -303,8 +315,12 @@ impl Granular {
             l += s * amp * g.left;
             r += s * amp * g.right;
 
-            g.pos += g.rate;
-            g.age += 1.0;
+            g.pos += g.rate * speed;
+            // Ageing runs on tape time too, so a grain stretches as the reel
+            // slows instead of ending early at a lower pitch. It also means
+            // `size_ms` is tape-milliseconds, not wall-clock ones, once the
+            // speed leaves unity.
+            g.age += speed.abs();
 
             // A grain that walks off either end is done, whichever way it ran.
             if g.pos < 0.0 || g.pos > last as f32 {
@@ -328,7 +344,11 @@ impl Granular {
         if source.len() < 2 {
             return (0.0, 0.0);
         }
-        self.render(source)
+        // Always at unity, whatever the tape is doing. Same reasoning as
+        // skipping overlap compensation and the effects: the question is what
+        // the grain sounded like, and a latched reverse would answer a
+        // different one.
+        self.render(source, 1.0)
     }
 }
 

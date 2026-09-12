@@ -183,6 +183,24 @@ export default function App() {
     };
   }, [defs, envKey]);
 
+  /**
+   * The tape brake — a finger on the reel, not a mute.
+   *
+   * Momentary on purpose: you press it, the tape slows and garbles, you let go
+   * and it winds back up. It writes `tape.brake` through `setParam` like every
+   * other control, which is the point — when this becomes a MIDI CC or a pedal
+   * it takes exactly the same path, and a continuous value already means
+   * something (half a brake is a tape running slow and flat).
+   */
+  const setBrake = useCallback((on: boolean) => {
+    void setParam('tape.brake', on ? 1 : 0);
+  }, []);
+
+  const toggleReverse = useCallback(() => {
+    const next = (values['tape.reverse'] ?? 0) >= 0.5 ? 0 : 1;
+    void setParam('tape.reverse', next);
+  }, [values]);
+
   const doAudition = useCallback(async (g: GrainInfo) => {
     setPicked(g);
     try {
@@ -277,15 +295,36 @@ export default function App() {
         void doLoad();
         return;
       }
-      if (e.code !== 'Space') return;
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
+
+      // Held, not toggled, so the keyboard feels like the button does. The
+      // repeat guard matters: without it every auto-repeat rewrites the
+      // parameter, which is harmless but makes the log noise misleading.
+      if (e.code === 'KeyB') {
+        if (!e.repeat) setBrake(true);
+        e.preventDefault();
+        return;
+      }
+      if (e.code === 'KeyR') {
+        if (!e.repeat) toggleReverse();
+        e.preventDefault();
+        return;
+      }
+      if (e.code !== 'Space') return;
       e.preventDefault();
       void togglePlay();
     };
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (e.code === 'KeyB') setBrake(false);
+    };
     window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay, doSave, doLoad]);
+    window.addEventListener('keyup', onKeyUp);
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    };
+  }, [togglePlay, doSave, doLoad, setBrake, toggleReverse]);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -300,6 +339,39 @@ export default function App() {
           }`}
         >
           {meter.playing ? 'Stop' : 'Play'}
+        </button>
+
+        <button
+          type="button"
+          title="Hold to press a finger against the reel — the tape slows, drops in pitch and garbles. Tape time sets how long it takes. (B)"
+          onPointerDown={(e) => {
+            // Capture, so letting go outside the button still releases the
+            // brake. Without it the tape stays stopped and looks broken.
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setBrake(true);
+          }}
+          onPointerUp={() => setBrake(false)}
+          onPointerCancel={() => setBrake(false)}
+          className={`rounded px-3 py-1 text-xs font-medium ${
+            (values['tape.brake'] ?? 0) > 0.01
+              ? 'bg-primary text-primary-foreground'
+              : 'border border-border hover:bg-accent'
+          }`}
+        >
+          Brake
+        </button>
+
+        <button
+          type="button"
+          title="Run the reel backwards. Shares the brake's slew, so it slows to a stop and climbs back the other way. (R)"
+          onClick={toggleReverse}
+          className={`rounded px-3 py-1 text-xs font-medium ${
+            (values['tape.reverse'] ?? 0) >= 0.5
+              ? 'bg-primary text-primary-foreground'
+              : 'border border-border hover:bg-accent'
+          }`}
+        >
+          Reverse
         </button>
         <span className="text-sm font-semibold tracking-tight">Shard</span>
         <span className="text-xs text-muted-foreground">

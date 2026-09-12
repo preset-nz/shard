@@ -26,6 +26,10 @@ const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
   { id: 'crush', label: 'Crush', prefix: 'crush.' },
+  // The tape transport. Brake and reverse are driven from the header buttons
+  // during a performance; these rows are for setting the feel — above all
+  // `tape.time`, which is what the gesture actually sounds like.
+  { id: 'tape', label: 'Tape', prefix: 'tape.' },
   { id: 'env', label: 'Envelope', prefix: 'env.' },
   { id: 'amp', label: 'Output', prefix: 'amp.' },
 ];

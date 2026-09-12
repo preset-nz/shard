@@ -42,8 +42,12 @@ impl Player {
         }
     }
 
+    /// `speed` is a multiplier on tape time: 1 is normal, 0 is stopped, and a
+    /// negative value runs the reel backwards. Fractional values are the whole
+    /// point — a tape slowing to a halt spends most of its time between the
+    /// two, and that is where the pitch drops and the sound garbles.
     #[inline]
-    pub fn process(&mut self, source: &[f32]) -> f32 {
+    pub fn process(&mut self, source: &[f32], speed: f32) -> f32 {
         if source.len() < 2 {
             return 0.0;
         }
@@ -68,10 +72,19 @@ impl Player {
             1.0
         };
 
-        self.pos += 1.0;
-        if self.pos > last as f32 {
-            self.pos = 0.0;
+        // Wrap by subtracting the span rather than snapping to zero, so a
+        // fractional speed does not lose its remainder at every loop and drift
+        // out of step with the envelope.
+        let span = last as f32;
+        self.pos += speed;
+        if self.pos > span {
+            self.pos -= span;
+        } else if self.pos < 0.0 {
+            self.pos += span;
         }
+        // A speed large enough to jump the whole buffer in one sample would
+        // leave the position outside it; clamp rather than trust the caller.
+        self.pos = self.pos.clamp(0.0, span);
 
         s * amp.sqrt()
     }
@@ -91,7 +104,7 @@ mod tests {
     fn silent_without_a_source() {
         let mut p = Player::new(48_000.0);
         for _ in 0..1000 {
-            assert_eq!(p.process(&[]), 0.0);
+            assert_eq!(p.process(&[], 1.0), 0.0);
         }
     }
 
@@ -102,7 +115,7 @@ mod tests {
         let mut peak: f32 = 0.0;
         // Three times round.
         for _ in 0..14_400 {
-            peak = peak.max(p.process(&src).abs());
+            peak = peak.max(p.process(&src, 1.0).abs());
         }
         assert!(peak > 0.5, "peak was {peak}");
     }
@@ -115,10 +128,10 @@ mod tests {
         // full amplitude.
         let src = tone(4_800);
         let mut p = Player::new(48_000.0);
-        let mut prev = p.process(&src);
+        let mut prev = p.process(&src, 1.0);
         let mut worst = 0.0f32;
         for _ in 0..24_000 {
-            let s = p.process(&src);
+            let s = p.process(&src, 1.0);
             worst = worst.max((s - prev).abs());
             prev = s;
         }
@@ -131,7 +144,7 @@ mod tests {
         let src = tone(4_800);
         let mut p = Player::new(48_000.0);
         for _ in 0..24_000 {
-            let s = p.process(&src);
+            let s = p.process(&src, 1.0);
             assert!(s.abs() <= 1.0 + 1e-5);
             assert!(s.is_finite());
         }
@@ -143,12 +156,12 @@ mod tests {
         let mut p = Player::new(48_000.0);
         assert_eq!(p.position(src.len()), 0.0);
         for _ in 0..500 {
-            p.process(&src);
+            p.process(&src, 1.0);
         }
         let mid = p.position(src.len());
         assert!(mid > 0.4 && mid < 0.6, "mid was {mid}");
         for _ in 0..600 {
-            p.process(&src);
+            p.process(&src, 1.0);
         }
         assert!(p.position(src.len()) < 0.2, "should have wrapped");
     }
@@ -158,7 +171,7 @@ mod tests {
         let src = tone(4_800);
         let mut p = Player::new(48_000.0);
         for _ in 0..2_000 {
-            p.process(&src);
+            p.process(&src, 1.0);
         }
         p.rewind();
         assert_eq!(p.position(src.len()), 0.0);

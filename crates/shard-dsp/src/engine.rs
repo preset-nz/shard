@@ -45,6 +45,9 @@ struct Slots {
     env_decay: usize,
     env_sustain: usize,
     env_release: usize,
+    tape_brake: usize,
+    tape_time: usize,
+    tape_reverse: usize,
     gain: usize,
 }
 
@@ -83,6 +86,9 @@ impl Slots {
             env_decay: at("env.decay"),
             env_sustain: at("env.sustain"),
             env_release: at("env.release"),
+            tape_brake: at("tape.brake"),
+            tape_time: at("tape.time"),
+            tape_reverse: at("tape.reverse"),
             gain: at("amp.gain"),
         }
     }
@@ -100,6 +106,9 @@ struct Smoothers {
     dry: OnePole,
     crush_mix: OnePole,
     gain: OnePole,
+    /// The tape's own inertia. Its time constant is `tape.time`, reset per
+    /// block, so the brake's feel is a control rather than a constant.
+    speed: OnePole,
 }
 
 pub struct Engine {
@@ -142,6 +151,7 @@ impl Engine {
             dry: mk(defs[slots.dry].smooth_ms),
             crush_mix: mk(defs[slots.crush_mix].smooth_ms),
             gain: mk(defs[slots.gain].smooth_ms),
+            speed: mk(defs[slots.tape_time].default),
         };
         // Start settled at the defaults, otherwise every parameter glides up
         // from zero for the first few milliseconds after load.
@@ -155,6 +165,10 @@ impl Engine {
         smooth.dry.reset(defs[slots.dry].default);
         smooth.crush_mix.reset(defs[slots.crush_mix].default);
         smooth.gain.reset(defs[slots.gain].default);
+        // Unity, not a parameter default. Copying the line above would reset
+        // the tape to `tape.brake`'s default of zero and pitch the instrument
+        // up from a standstill on every launch.
+        smooth.speed.reset(1.0);
 
         let log = Arc::new(GrainLog::new());
         let mut granular = Granular::new(sample_rate, max_grains);
@@ -314,6 +328,8 @@ impl Engine {
             reverse: bank.get(self.slots.reverse),
             window: window_from(bank.get(self.slots.window)),
             gain: bank.get(self.slots.gain),
+            // Set per sample below; this is only the struct's starting shape.
+            speed: 1.0,
         };
         let ring = RingModParams {
             freq: bank.get(self.slots.ring_freq),
@@ -361,6 +377,21 @@ impl Engine {
             release_ms: bank.get(self.slots.crush_env_release),
         };
 
+        // The tape. Brake and reverse are two ways of asking for a speed, and
+        // they share one slew — so flipping direction slows to a stop and
+        // climbs back the other way, exactly as a reel does. An instant flip
+        // would be one branch here, and would not sound like tape.
+        let direction = if bank.get(self.slots.tape_reverse) >= 0.5 {
+            -1.0
+        } else {
+            1.0
+        };
+        let brake = bank.get(self.slots.tape_brake).clamp(0.0, 1.0);
+        let speed_target = direction * (1.0 - brake);
+        self.smooth
+            .speed
+            .set_time(bank.get(self.slots.tape_time).max(0.0), self.sample_rate);
+
         let (lo, hi) = self.trim_range(bank);
         // The cloud only sees the slice, so it has to be told where the slice
         // is before it logs a spawn — otherwise every drawn mark would sit at
@@ -381,8 +412,10 @@ impl Engine {
             p.pan_spread = self.smooth.pan.process(target.pan_spread);
             p.gain = self.smooth.gain.process(target.gain);
 
+            p.speed = self.smooth.speed.process(speed_target);
+
             let dry_amount = self.smooth.dry.process(dry_target);
-            let dry = self.player.process(source);
+            let dry = self.player.process(source, p.speed);
             let (gl, gr) = self.granular.process(source, &p);
 
             // Equal-power crossfade. A linear blend dips by 3 dB in the middle,
@@ -407,6 +440,13 @@ impl Engine {
 
             let (l, r) = self.ringmod.process(l, r, &ring);
 
+            // A stopping reel loses level as well as pitch, because the head
+            // stops seeing tape. Without this the last of the brake is a cloud
+            // of grains each reading one frozen sample — a thud per grain, and
+            // a buzz at the spawn rate rather than a fade into silence.
+            let t = tape_gain(p.speed);
+            let (l, r) = (l * t, r * t);
+
             // One pass through the trimmed window is one envelope. The
             // player's position is the clock, so the release always lands on
             // the loop point whatever the sample's length.
@@ -429,6 +469,26 @@ impl Engine {
 
         self.trimmed_play_position =
             (lo as f32 + self.player.position(source.len()) * source.len() as f32) / span;
+    }
+}
+
+/// How far into a stop the level starts following the speed down.
+///
+/// Only the last sliver, so the brake reads as a slowing reel for almost all
+/// of its travel and only fades at the very end.
+const TAPE_KNEE: f32 = 0.12;
+
+/// Output level for a tape running at `speed`.
+///
+/// Returns exactly one above the knee — not a curve that merely approaches it.
+/// Every other node here is bit-exact when neutral, and a gain of 0.9997 at
+/// rest would break that quietly, in a way no existing test would catch.
+fn tape_gain(speed: f32) -> f32 {
+    let s = speed.abs();
+    if s >= TAPE_KNEE {
+        1.0
+    } else {
+        s / TAPE_KNEE
     }
 }
 
@@ -619,7 +679,7 @@ mod tests {
         for _ in 0..90 {
             e.process_block(&mut out, &bank);
             for frame in out.chunks(2) {
-                let expected = player.process(&src);
+                let expected = player.process(&src, 1.0);
                 worst = worst.max((frame[0] - expected).abs());
             }
         }
@@ -1064,6 +1124,199 @@ mod tests {
         assert!(e.audition(&g));
         e.set_playing(true);
         assert!(!e.auditioning());
+    }
+
+    #[test]
+    fn an_unbraked_tape_is_exactly_transparent() {
+        // The whole transport must vanish at rest. `tape_gain` returns a
+        // literal one above the knee for this reason: a curve that merely
+        // approached unity would put a silent 0.03 dB on everything.
+        assert_eq!(tape_gain(1.0), 1.0);
+        assert_eq!(tape_gain(-1.0), 1.0);
+        assert_eq!(tape_gain(TAPE_KNEE), 1.0);
+        assert_eq!(tape_gain(0.0), 0.0);
+        assert!(tape_gain(TAPE_KNEE * 0.5) < 1.0);
+    }
+
+    #[test]
+    fn the_brake_slows_the_tape_rather_than_muting_it() {
+        // The OP-1 gesture: a finger on the reel. Level has to survive well
+        // into the brake — if it did not, this would be a fade with extra
+        // steps — and the pitch has to fall, which shows up as the playhead
+        // covering less ground per block.
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "mix.dry", 1.0);
+        set(&bank, "amp.gain", 1.0);
+        set(&bank, "tape.time", 200.0);
+
+        let mut out = vec![0.0; 512];
+        for _ in 0..40 {
+            e.process_block(&mut out, &bank);
+        }
+        let free_start = e.play_position();
+        e.process_block(&mut out, &bank);
+        let free_step = e.play_position() - free_start;
+        let free_level = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+
+        // Half a brake: running slow, still clearly audible.
+        set(&bank, "tape.brake", 0.5);
+        for _ in 0..80 {
+            e.process_block(&mut out, &bank);
+        }
+        let half_start = e.play_position();
+        e.process_block(&mut out, &bank);
+        let half_step = e.play_position() - half_start;
+        let half_level = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+
+        assert!(
+            half_step < free_step * 0.75,
+            "half brake should slow the tape: {half_step} vs {free_step}"
+        );
+        assert!(
+            half_level > free_level * 0.5,
+            "half brake should not be a fade: {half_level} vs {free_level}"
+        );
+
+        // Full brake: the reel comes to rest and the level goes with it.
+        set(&bank, "tape.brake", 1.0);
+        for _ in 0..400 {
+            e.process_block(&mut out, &bank);
+        }
+        let level = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+        assert!(
+            level < free_level * 0.05,
+            "a stopped tape should be quiet: {level}"
+        );
+    }
+
+    #[test]
+    fn the_brake_takes_the_time_it_is_given() {
+        // `tape.time` is the gesture. A long brake must still be audibly
+        // moving at a point where a short one has already stopped, or the
+        // control is decorative.
+        let render = |time: f32, blocks: usize| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "mix.dry", 1.0);
+            set(&bank, "amp.gain", 1.0);
+            set(&bank, "tape.time", time);
+            let mut out = vec![0.0; 512];
+            for _ in 0..20 {
+                e.process_block(&mut out, &bank);
+            }
+            set(&bank, "tape.brake", 1.0);
+            let mut level = 0.0f32;
+            for _ in 0..blocks {
+                e.process_block(&mut out, &bank);
+                level = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
+            }
+            level
+        };
+        // ~0.5 s of audio after the brake goes on.
+        let quick = render(50.0, 90);
+        let slow = render(3000.0, 90);
+        assert!(quick < 0.05, "a 50 ms brake should be done by now: {quick}");
+        assert!(
+            slow > quick * 4.0,
+            "a 3 s brake should still be running: {slow}"
+        );
+    }
+
+    #[test]
+    fn reverse_runs_the_tape_backwards() {
+        // A ramp makes direction audible: forwards the playhead climbs, and
+        // backwards it falls.
+        let n = 48_000;
+        let src: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(src);
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "mix.dry", 1.0);
+        set(&bank, "tape.time", 20.0);
+
+        let mut out = vec![0.0; 512];
+        for _ in 0..40 {
+            e.process_block(&mut out, &bank);
+        }
+        let before = e.play_position();
+        e.process_block(&mut out, &bank);
+        assert!(e.play_position() > before, "forwards should advance");
+
+        set(&bank, "tape.reverse", 1.0);
+        // Long enough for the slew to cross zero and settle the other way.
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+        }
+        let a = e.play_position();
+        e.process_block(&mut out, &bank);
+        assert!(e.play_position() < a, "reverse should run the tape back");
+    }
+
+    #[test]
+    fn the_tape_stays_in_range_however_it_is_driven() {
+        // Brake and reverse are performance controls and will be thrown about.
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        let mut out = vec![0.0; 512];
+        for (brake, reverse, time) in [
+            (1.0, 1.0, 20.0),
+            (0.0, 1.0, 3000.0),
+            (0.5, 0.0, 20.0),
+            (1.0, 0.0, 20.0),
+            (0.0, 0.0, 20.0),
+        ] {
+            set(&bank, "tape.brake", brake);
+            set(&bank, "tape.reverse", reverse);
+            set(&bank, "tape.time", time);
+            for _ in 0..80 {
+                e.process_block(&mut out, &bank);
+                for s in &out {
+                    assert!(s.is_finite(), "non-finite at brake {brake} rev {reverse}");
+                    assert!((-1.0..=1.0).contains(s), "out of range: {s}");
+                }
+                assert!(
+                    (0.0..=1.0).contains(&e.play_position()),
+                    "playhead left the sample: {}",
+                    e.play_position()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn an_audition_ignores_the_tape() {
+        // A latched reverse must not make the inspector play grains backwards.
+        // The audition answers what the grain sounded like, not what the
+        // transport is currently doing to everything else.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let bank = ParamBank::new();
+        set(&bank, "tape.reverse", 1.0);
+        set(&bank, "tape.brake", 1.0);
+        let g = GrainSpawn {
+            position: 0.25,
+            rate: 1.0,
+            len: 4_800.0,
+            pan: 0.5,
+            window: 0,
+            seq: 1,
+        };
+        assert!(e.audition(&g));
+        let mut out = vec![0.0; 512];
+        let mut peak = 0.0f32;
+        for _ in 0..40 {
+            e.process_block(&mut out, &bank);
+            peak = peak.max(out.iter().fold(0.0f32, |a, s| a.max(s.abs())));
+        }
+        assert!(peak > 0.01, "a braked tape silenced the audition: {peak}");
     }
 
     #[test]
