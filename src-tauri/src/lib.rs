@@ -560,3 +560,40 @@ pub fn run() {
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The wire names the UI reads. Nothing here renames on the way out, so a
+    /// field added in Rust arrives in TypeScript spelled exactly as it is
+    /// written above — and a mismatch is invisible: `undefined` flows into the
+    /// drawing maths as `NaN`, `fillRect` silently draws nothing, and the
+    /// inspector looks empty with no error anywhere. Hence a test.
+    #[test]
+    fn the_ui_facing_structs_keep_their_field_names() {
+        let source = serde_json::to_value(SourceInfo {
+            name: "x".into(),
+            seconds: 1.0,
+            sample_rate: 48_000.0,
+            peaks: vec![0.0],
+        })
+        .expect("SourceInfo is serialisable");
+        for key in ["name", "seconds", "sample_rate", "peaks"] {
+            assert!(source.get(key).is_some(), "SourceInfo lost `{key}`");
+        }
+
+        let grain = serde_json::to_value(GrainInfo {
+            position: 0.5,
+            rate: 1.0,
+            len: 4_800.0,
+            pan: 0.5,
+            window: 0,
+            seq: 1,
+        })
+        .expect("GrainInfo is serialisable");
+        for key in ["position", "rate", "len", "pan", "window", "seq"] {
+            assert!(grain.get(key).is_some(), "GrainInfo lost `{key}`");
+        }
+    }
+}
