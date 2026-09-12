@@ -1,16 +1,18 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import { open } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   envelopeCurve,
   format,
   getParams,
+  loadPatch,
   loadSample,
   type Meters,
   type ParamInfo,
   paramDefs,
   meters as readMeters,
   type SourceInfo,
+  savePatch,
   setDrift,
   setParam,
   setParamDrift,
@@ -41,6 +43,8 @@ export default function App() {
   const defsRef = useRef<ParamInfo[] | null>(null);
   const [schemaVersion, setSchemaVersion] = useState(0);
   const [envelope, setEnvelope] = useState<number[] | null>(null);
+  const [patchName, setPatchName] = useState<string | null>(null);
+  const [note, setNote] = useState<string | null>(null);
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -143,6 +147,51 @@ export default function App() {
     };
   }, [defs, envKey]);
 
+  const doSave = useCallback(async () => {
+    try {
+      const path = await save({
+        defaultPath: patchName ?? 'untitled.shard',
+        filters: [{ name: 'Shard patch', extensions: ['shard'] }],
+      });
+      if (!path) return;
+      await savePatch(path);
+      setPatchName(path.split('/').pop() ?? path);
+      setNote(null);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, [patchName]);
+
+  const doLoad = useCallback(async () => {
+    try {
+      const path = await open({
+        multiple: false,
+        filters: [{ name: 'Shard patch', extensions: ['shard'] }],
+      });
+      if (typeof path !== 'string') return;
+      const report = await loadPatch(path);
+      setPatchName(path.split('/').pop() ?? path);
+      setSource(await sourceInfo());
+      setError(null);
+
+      // A partial load must not look like a clean one.
+      const parts: string[] = [];
+      if (report.sample_missing) {
+        parts.push(`sample not found: ${report.sample_path ?? 'unknown'}`);
+      }
+      if (report.unknown.length > 0) {
+        parts.push(`${report.unknown.length} unknown parameter(s) ignored`);
+      }
+      if (report.missing.length > 0) {
+        parts.push(`${report.missing.length} left at default`);
+      }
+      setNote(parts.length > 0 ? parts.join(' · ') : null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   const pickFile = useCallback(async () => {
     try {
       const picked = await open({
@@ -172,6 +221,16 @@ export default function App() {
   // a control has focus, so arrow keys on a slider still work.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
+        e.preventDefault();
+        void doSave();
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
+        e.preventDefault();
+        void doLoad();
+        return;
+      }
       if (e.code !== 'Space') return;
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
@@ -180,7 +239,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [togglePlay]);
+  }, [togglePlay, doSave, doLoad]);
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -198,9 +257,24 @@ export default function App() {
         </button>
         <span className="text-sm font-semibold tracking-tight">Shard</span>
         <span className="text-xs text-muted-foreground">
+          {patchName ? `${patchName} — ` : ''}
           {source ? `${source.name} · ${source.seconds.toFixed(1)}s` : 'loading'}
         </span>
         <div className="flex-1" />
+        <button
+          type="button"
+          onClick={doLoad}
+          className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
+        >
+          Open
+        </button>
+        <button
+          type="button"
+          onClick={doSave}
+          className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
+        >
+          Save
+        </button>
         <button
           type="button"
           onClick={pickFile}
@@ -220,6 +294,12 @@ export default function App() {
           Drift {meter.drift ? 'on' : 'off'}
         </button>
       </header>
+
+      {note && !error && (
+        <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+          {note}
+        </div>
+      )}
 
       {error && (
         <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">

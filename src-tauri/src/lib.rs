@@ -20,6 +20,7 @@ use shard_dsp::params::{index_of, Taper, Unit, PARAMS};
 use shard_dsp::{Engine, ParamBank};
 
 mod drift;
+mod patch;
 mod source;
 
 /// Shared between the UI thread, the drift thread and the audio thread.
@@ -157,6 +158,46 @@ fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
         release_ms: state.bank.get_by_id("env.release").unwrap_or(0.0),
     };
     env.curve(256, (hi - lo) as f32, state.sample_rate)
+}
+
+/// Write the current sound to a `.shard` file. A few kilobytes of readable
+/// JSON: parameter values by id, the drift flags, and where the sample was.
+#[tauri::command]
+fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String> {
+    let sample = {
+        let s = state.source.lock().expect("source poisoned");
+        s.path.clone()
+    };
+    let p = patch::Patch::capture(&state.bank, &state.drift.snapshot(), sample);
+    std::fs::write(&path, p.to_json()?).map_err(|e| format!("{path}: {e}"))
+}
+
+/// Read a `.shard` file back. Reloads the sample it names when that file is
+/// still there, and says so plainly when it is not rather than loading half
+/// the patch and looking fine.
+#[tauri::command]
+fn load_patch(state: tauri::State<'_, Audio>, path: String) -> Result<patch::LoadReport, String> {
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
+    let p = patch::Patch::from_json(&text)?;
+    let mut report = p.apply(&state.bank);
+
+    for (i, def) in PARAMS.iter().enumerate() {
+        state.drift.set(i, p.drifting.iter().any(|id| id == def.id));
+    }
+
+    if let Some(sample) = &p.sample_path {
+        match source::load(sample, state.sample_rate) {
+            Ok(loaded) => {
+                *state.swap.lock().expect("swap poisoned") = Some(loaded.samples.clone());
+                *state.source.lock().expect("source poisoned") = loaded;
+            }
+            // Not an error: the patch is still worth having with a different
+            // sample under it. The UI says which file is missing.
+            Err(_) => report.sample_missing = true,
+        }
+    }
+
+    Ok(report)
 }
 
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
@@ -405,6 +446,8 @@ pub fn run() {
             set_param_drift,
             set_playing,
             envelope_curve,
+            save_patch,
+            load_patch,
             source_info,
             load_sample,
         ])

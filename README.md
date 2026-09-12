@@ -27,6 +27,21 @@ oscillator, at a rate no other control shares. Click it again to take it
 back. That is the modulation matrix in embryo: one internal source per
 destination now, any source with a depth and a curve later.
 
+### Saving
+
+`Cmd-S` writes a `.shard` patch, `Cmd-O` reads one back.
+
+A patch is the sound, not the material: every parameter value, which
+parameters are drifting, and the path to the sample. A few kilobytes of
+readable JSON you can diff.
+
+**Values are keyed by parameter id, never by index**, so inserting a
+parameter into the middle of the table does not shift what an old patch
+loads. An id this build does not know is ignored and one it has but the file
+lacks keeps its default — both are counted and reported, because a patch
+that half-applied must not look like one that applied cleanly. A patch whose
+sample has moved still loads, and says which file is missing.
+
 ### Material
 
 `just material` writes four starting points to `assets/`, all synthesised or

@@ -5,6 +5,9 @@
 
 pub struct Loaded {
     pub name: String,
+    /// Where it was read from, so a patch can point back at it. None for the
+    /// built-in drone, which has nowhere to point.
+    pub path: Option<String>,
     pub samples: Vec<f32>,
 }
 
@@ -67,7 +70,11 @@ pub fn load(path: &str, target_rate: f32) -> Result<Loaded, String> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string());
 
-    Ok(Loaded { name, samples })
+    Ok(Loaded {
+        name,
+        path: Some(path.to_string()),
+        samples,
+    })
 }
 
 /// Two seconds of detuned drone, so the app makes sound the moment it opens
@@ -85,6 +92,7 @@ pub fn startup_drone(sample_rate: f32) -> Loaded {
         .collect();
     Loaded {
         name: "built-in drone".into(),
+        path: None,
         samples,
     }
 }
