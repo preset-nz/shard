@@ -126,6 +126,10 @@ export default function App() {
     values['trim.start'],
     values['trim.end'],
   ].join(',');
+  // envKey is the trigger, not an input: the command reads the values on the
+  // Rust side, so nothing in this effect references them, but it still has to
+  // re-run when they change.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
   useEffect(() => {
     if (!defs) return;
     let alive = true;
