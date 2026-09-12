@@ -21,6 +21,12 @@ install:
 run:
     pnpm tauri dev
 
+# Generate starter material into assets/ — drones, metal, clicks, and spoken
+# fragments through the system TTS. Nothing downloaded, nothing licensed.
+[group('setup')]
+material:
+    ./scripts/make-material.sh
+
 # The CLI playground: the same engine with no UI, drifting on its own.
 [group('dev')]
 play file="":

@@ -5,3 +5,4 @@ src-tauri/gen/
 *.wav
 !assets/*.wav
 .DS_Store
+assets/

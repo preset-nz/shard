@@ -12,10 +12,13 @@ export function Waveform({
   peaks,
   position,
   jitter,
+  playhead,
 }: {
   peaks: number[];
   position: number;
   jitter: number;
+  /** Plain playback's position, or null when stopped. */
+  playhead: number | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -57,13 +60,25 @@ export function Waveform({
       ctx.globalAlpha = 1;
     }
 
+    // Plain playback's head, drawn thinner and cooler than the grain
+    // position, so the two are never confused for each other.
+    if (playhead !== null) {
+      ctx.strokeStyle = wave;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(playhead * w, 0);
+      ctx.lineTo(playhead * w, h);
+      ctx.stroke();
+    }
+
+    // The grain read position, on top.
     ctx.strokeStyle = accent;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.moveTo(position * w, 0);
     ctx.lineTo(position * w, h);
     ctx.stroke();
-  }, [peaks, position, jitter]);
+  }, [peaks, position, jitter, playhead]);
 
   return (
     <canvas

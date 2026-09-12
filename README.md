@@ -14,16 +14,41 @@ evolving project. None of it is settled law.
 ## Hear it
 
 ```sh
-just run                       # built-in drone, parameters drifting
-just run path/to/sample.wav    # your own material
-just still path/to/sample.wav  # same, parameters held at defaults
-just render out.wav            # render 8s to a file instead of a device
+just material    # generate something to granulate, into assets/
+just run         # the app
 ```
 
-There is no UI yet. `shard-play` is a playground: it opens the default output
-device, loads a mono-summed WAV, and drifts position, size, density, jitter
-and ring frequency on slow incommensurate oscillators so the texture moves.
-Ring modulation fades in after about eight seconds.
+Press play. You hear the sample as it is, looping. **Dry / Granular** fades
+from that into the grain cloud, so every control has an audible before and
+after. Space toggles play.
+
+The wave icon beside a control hands that parameter to its own slow
+oscillator, at a rate no other control shares. Click it again to take it
+back. That is the modulation matrix in embryo: one internal source per
+destination now, any source with a depth and a curve later.
+
+### Material
+
+`just material` writes four starting points to `assets/`, all synthesised or
+spoken on this machine, so there is nothing to download and no licence to
+think about.
+
+| File | What it is | Why it is useful |
+|---|---|---|
+| `drone.wav` | Detuned sine stack, 12s | Long and harmonically dense, rewards slow position sweeps |
+| `metal.wav` | Resonant filtered noise | Short grains turn it into percussion |
+| `clicks.wav` | Gated pink noise | Sparse, so density and jitter are obvious |
+| `voices.wav` | System TTS, pitched down | Formants no longer match the pitch, so nothing human sounds like it |
+
+WAV only. Symphonia would bring MP3, FLAC and OGG but is MPL-2.0; see the
+licensing note below.
+
+### Without the UI
+
+```sh
+just play assets/drone.wav    # engine only, drifting on its own
+just render out.wav           # render 8s to a file instead of a device
+```
 
 `just render` exists so the signal path can be checked with no speakers and
 no audio device at all.

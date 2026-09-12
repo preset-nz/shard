@@ -11,7 +11,7 @@
 //! idea where the block boundary is. That is fine: triggers are meant to come
 //! from the Dark Time over MIDI, which arrives in this process.
 
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -30,6 +30,11 @@ pub struct Audio {
     /// Active grain count, for the UI. Written by the audio thread.
     grains: Arc<AtomicU32>,
     drift: Arc<drift::DriftState>,
+    /// Transport, mirrored out of the audio thread for the UI.
+    playing: Arc<AtomicBool>,
+    playhead: Arc<AtomicU32>,
+    /// Set by the UI, read by the audio thread at the top of each block.
+    play_request: Arc<AtomicBool>,
     /// The loaded sample, kept so the UI can draw a waveform and so a reload
     /// can replace it. Swapping goes through the queue, never a lock on audio.
     source: Mutex<source::Loaded>,
@@ -65,6 +70,9 @@ pub struct Meters {
     pub drift: bool,
     /// Per-parameter drift flags, indexed as `PARAMS`.
     pub drifting: Vec<bool>,
+    pub playing: bool,
+    /// Where plain playback has reached, 0 to 1.
+    pub playhead: f32,
 }
 
 #[derive(Serialize)]
@@ -130,7 +138,15 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         grains: state.grains.load(Ordering::Relaxed),
         drift: state.drift.master(),
         drifting: state.drift.snapshot(),
+        playing: state.playing.load(Ordering::Relaxed),
+        playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
     }
+}
+
+/// Start or stop playback. Stopping clears the grain pool, so stop is stop.
+#[tauri::command]
+fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
+    state.play_request.store(playing, Ordering::Relaxed);
 }
 
 /// The master switch. Off means nothing drifts; flipping it back restores the
@@ -188,12 +204,18 @@ fn build_audio() -> Result<Audio, String> {
     let peak = Arc::new(AtomicU32::new(0));
     let grains = Arc::new(AtomicU32::new(0));
     let drift = Arc::new(drift::DriftState::new());
+    let playing = Arc::new(AtomicBool::new(false));
+    let playhead = Arc::new(AtomicU32::new(0));
+    let play_request = Arc::new(AtomicBool::new(false));
     let swap: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
 
     let audio_bank = Arc::clone(&bank);
     let audio_peak = Arc::clone(&peak);
     let audio_grains = Arc::clone(&grains);
     let audio_swap = Arc::clone(&swap);
+    let audio_playing = Arc::clone(&playing);
+    let audio_playhead = Arc::clone(&playhead);
+    let audio_request = Arc::clone(&play_request);
 
     let (tx, rx) = std::sync::mpsc::channel::<Result<f32, String>>();
 
@@ -228,6 +250,15 @@ fn build_audio() -> Result<Audio, String> {
                                 }
                             }
 
+                            // The transport is a request the audio thread
+                            // honours at a block boundary, so a stop never
+                            // lands mid-grain.
+                            let want = audio_request.load(Ordering::Relaxed);
+                            if want != engine.playing() {
+                                engine.set_playing(want);
+                                audio_playing.store(want, Ordering::Relaxed);
+                            }
+
                             let frames = out.len() / channels;
                             let needed = frames * 2;
                             if needed > scratch.len() {
@@ -258,6 +289,8 @@ fn build_audio() -> Result<Audio, String> {
                             let prev = f32::from_bits(audio_peak.load(Ordering::Relaxed));
                             audio_peak.store(block_peak.max(prev).to_bits(), Ordering::Relaxed);
                             audio_grains.store(engine.active_grains() as u32, Ordering::Relaxed);
+                            audio_playhead
+                                .store(engine.play_position().to_bits(), Ordering::Relaxed);
                         },
                         |err| eprintln!("audio stream error: {err}"),
                         None,
@@ -296,6 +329,9 @@ fn build_audio() -> Result<Audio, String> {
         peak,
         grains,
         drift,
+        playing,
+        playhead,
+        play_request,
         source: Mutex::new(source::startup_drone(sample_rate)),
         swap,
         sample_rate,
@@ -326,6 +362,7 @@ pub fn run() {
             meters,
             set_drift,
             set_param_drift,
+            set_playing,
             source_info,
             load_sample,
         ])

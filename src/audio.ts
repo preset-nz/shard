@@ -35,6 +35,9 @@ export interface Meters {
   drift: boolean;
   /** Per-parameter drift flags, indexed as the definitions are. */
   drifting: boolean[];
+  playing: boolean;
+  /** Where plain playback has reached, 0 to 1. */
+  playhead: number;
 }
 
 export interface SourceInfo {
@@ -99,6 +102,9 @@ export function format(p: ParamInfo, v: number): string {
   if (p.unit === 'st') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`;
   return v.toFixed(2);
 }
+
+/** Start or stop. Stopping clears the grain pool, so stop means stop. */
+export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
 
 /** Hand one parameter to the drift oscillator, or take it back. */
 export const setParamDrift = (id: string, on: boolean) =>

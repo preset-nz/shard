@@ -14,6 +14,7 @@
 pub mod engine;
 pub mod granular;
 pub mod params;
+pub mod player;
 pub mod ringmod;
 pub mod rng;
 pub mod smooth;
@@ -21,5 +22,6 @@ pub mod smooth;
 pub use engine::Engine;
 pub use granular::{GrainParams, Granular, Window};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
+pub use player::Player;
 pub use ringmod::{RingMod, RingModParams};
 pub use smooth::OnePole;

@@ -6,6 +6,7 @@
 
 use crate::granular::{GrainParams, Granular, Window};
 use crate::params::{index_of, ParamBank};
+use crate::player::Player;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::OnePole;
 
@@ -23,6 +24,7 @@ struct Slots {
     window: usize,
     ring_freq: usize,
     ring_mix: usize,
+    dry: usize,
     gain: usize,
 }
 
@@ -45,6 +47,7 @@ impl Slots {
             window: at("grain.window"),
             ring_freq: at("ring.freq"),
             ring_mix: at("ring.mix"),
+            dry: at("mix.dry"),
             gain: at("amp.gain"),
         }
     }
@@ -59,11 +62,15 @@ struct Smoothers {
     pitch: OnePole,
     spread: OnePole,
     pan: OnePole,
+    dry: OnePole,
     gain: OnePole,
 }
 
 pub struct Engine {
     source: Vec<f32>,
+    player: Player,
+    /// Transport. Stopped means silence out and no grains left hanging.
+    playing: bool,
     granular: Granular,
     ringmod: RingMod,
     slots: Slots,
@@ -89,6 +96,7 @@ impl Engine {
             pitch: mk(defs[slots.pitch].smooth_ms),
             spread: mk(defs[slots.spread].smooth_ms),
             pan: mk(defs[slots.pan].smooth_ms),
+            dry: mk(defs[slots.dry].smooth_ms),
             gain: mk(defs[slots.gain].smooth_ms),
         };
         // Start settled at the defaults, otherwise every parameter glides up
@@ -100,10 +108,13 @@ impl Engine {
         smooth.pitch.reset(defs[slots.pitch].default);
         smooth.spread.reset(defs[slots.spread].default);
         smooth.pan.reset(defs[slots.pan].default);
+        smooth.dry.reset(defs[slots.dry].default);
         smooth.gain.reset(defs[slots.gain].default);
 
         Self {
             source: Vec::new(),
+            player: Player::new(sample_rate),
+            playing: false,
             granular: Granular::new(sample_rate, max_grains),
             ringmod: RingMod::new(sample_rate),
             slots,
@@ -119,6 +130,25 @@ impl Engine {
     pub fn set_source(&mut self, samples: Vec<f32>) {
         self.source = samples;
         self.granular.clear();
+        self.player.rewind();
+    }
+
+    pub fn playing(&self) -> bool {
+        self.playing
+    }
+
+    /// Start or stop. Stopping clears the grain pool rather than letting the
+    /// cloud ring out, so stop means stop.
+    pub fn set_playing(&mut self, playing: bool) {
+        if !playing {
+            self.granular.clear();
+        }
+        self.playing = playing;
+    }
+
+    /// Where plain playback has reached, 0 to 1. For drawing the playhead.
+    pub fn play_position(&self) -> f32 {
+        self.player.position(self.source.len())
     }
 
     pub fn source_len(&self) -> usize {
@@ -160,6 +190,13 @@ impl Engine {
             mix: bank.get(self.slots.ring_mix),
         };
 
+        if !self.playing {
+            out.fill(0.0);
+            return;
+        }
+
+        let dry_target = bank.get(self.slots.dry);
+
         let mut p = target;
         for frame in out.chunks_mut(2) {
             p.position = self.smooth.position.process(target.position);
@@ -171,7 +208,18 @@ impl Engine {
             p.pan_spread = self.smooth.pan.process(target.pan_spread);
             p.gain = self.smooth.gain.process(target.gain);
 
-            let (l, r) = self.granular.process(&self.source, &p);
+            let dry_amount = self.smooth.dry.process(dry_target);
+            let dry = self.player.process(&self.source);
+            let (gl, gr) = self.granular.process(&self.source, &p);
+
+            // Equal-power crossfade. A linear blend dips by 3 dB in the middle,
+            // which reads as the instrument getting quieter as you introduce
+            // grains rather than as one sound becoming another.
+            let a = (dry_amount.clamp(0.0, 1.0) * core::f32::consts::FRAC_PI_2).sin();
+            let b = (dry_amount.clamp(0.0, 1.0) * core::f32::consts::FRAC_PI_2).cos();
+            let l = dry * a + gl * b;
+            let r = dry * a + gr * b;
+
             let (l, r) = self.ringmod.process(l, r, &ring);
 
             // A safety clip, not a limiter. Dense clouds sum above unity and
@@ -207,6 +255,7 @@ mod tests {
     #[test]
     fn silent_with_no_source_loaded() {
         let mut e = Engine::new(48_000.0, 64);
+        e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 512];
         for _ in 0..100 {
@@ -219,6 +268,7 @@ mod tests {
     fn makes_sound_once_a_source_is_loaded() {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(48_000));
+        e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 512];
         let mut peak: f32 = 0.0;
@@ -233,6 +283,7 @@ mod tests {
     fn output_never_leaves_the_valid_range() {
         let mut e = Engine::new(48_000.0, 256);
         e.set_source(tone(48_000));
+        e.set_playing(true);
         let bank = ParamBank::new();
         bank.set_by_id("grain.density", 200.0);
         bank.set_by_id("grain.size", 500.0);
@@ -253,7 +304,10 @@ mod tests {
         for step in 0..4 {
             let mut e = Engine::new(48_000.0, 64);
             e.set_source(tone(48_000));
+            e.set_playing(true);
             let bank = ParamBank::new();
+            // Fully granular, or the window makes no difference to the output.
+            bank.set_by_id("mix.dry", 0.0);
             bank.set_by_id("grain.window", step as f32);
             let mut out = vec![0.0; 512];
             let mut peak: f32 = 0.0;
@@ -271,6 +325,7 @@ mod tests {
         // must not put a step into the output.
         let mut e = Engine::new(48_000.0, 128);
         e.set_source(tone(48_000));
+        e.set_playing(true);
         let bank = ParamBank::new();
         bank.set_by_id("grain.density", 60.0);
         let mut out = vec![0.0; 256];
@@ -293,6 +348,7 @@ mod tests {
     fn peak_meter_reports_then_resets() {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(48_000));
+        e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 512];
         for _ in 0..200 {
@@ -306,6 +362,7 @@ mod tests {
     fn swapping_the_source_does_not_leave_stale_grains() {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(48_000));
+        e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 512];
         for _ in 0..200 {
@@ -321,9 +378,97 @@ mod tests {
     }
 
     #[test]
+    fn stopped_means_silence() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let bank = ParamBank::new();
+        let mut out = vec![0.0; 512];
+        assert!(!e.playing(), "should start stopped");
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+            assert!(out.iter().all(|s| *s == 0.0), "output while stopped");
+        }
+    }
+
+    #[test]
+    fn stopping_does_not_leave_the_cloud_ringing() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        bank.set_by_id("mix.dry", 0.0);
+        let mut out = vec![0.0; 512];
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+        }
+        assert!(e.active_grains() > 0);
+        e.set_playing(false);
+        assert_eq!(e.active_grains(), 0, "stop must mean stop");
+    }
+
+    #[test]
+    fn fully_dry_is_the_sample_itself() {
+        // The contract the transport exists for: press play and you hear the
+        // material, not a texture derived from it. Fully dry output must track
+        // plain playback closely enough to be recognisably the same sound.
+        let src = tone(48_000);
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(src.clone());
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        bank.set_by_id("mix.dry", 1.0);
+        bank.set_by_id("amp.gain", 1.0);
+
+        let mut player = crate::player::Player::new(48_000.0);
+        let mut out = vec![0.0; 512];
+        let mut worst = 0.0f32;
+        for _ in 0..90 {
+            e.process_block(&mut out, &bank);
+            for frame in out.chunks(2) {
+                let expected = player.process(&src);
+                worst = worst.max((frame[0] - expected).abs());
+            }
+        }
+        assert!(worst < 0.02, "dry path diverged from playback by {worst}");
+    }
+
+    #[test]
+    fn the_dry_blend_holds_its_level() {
+        // Equal-power, so introducing grains should not read as a volume dip.
+        let src = tone(48_000);
+        let level = |dry: f32| {
+            let mut e = Engine::new(48_000.0, 256);
+            e.set_source(src.clone());
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            bank.set_by_id("mix.dry", dry);
+            let mut out = vec![0.0; 512];
+            let mut sum = 0.0f64;
+            let mut n = 0u32;
+            for b in 0..200 {
+                e.process_block(&mut out, &bank);
+                if b > 20 {
+                    for s in &out {
+                        sum += (*s as f64) * (*s as f64);
+                        n += 1;
+                    }
+                }
+            }
+            (sum / n as f64).sqrt()
+        };
+        let (a, mid, b) = (level(1.0), level(0.5), level(0.0));
+        let floor = a.min(b) * 0.5;
+        assert!(
+            mid > floor,
+            "midpoint {mid} dipped below {floor} ({a} .. {b})"
+        );
+    }
+
+    #[test]
     fn handles_an_odd_length_output_buffer() {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(48_000));
+        e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 511];
         e.process_block(&mut out, &bank);

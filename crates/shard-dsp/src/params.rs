@@ -193,6 +193,18 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // Defaults fully dry on purpose. Pressing play should give you the sample
+    // as it is, so every granular control has an audible before and after.
+    ParamDef {
+        id: "mix.dry",
+        name: "Dry / Granular",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 40.0,
+    },
     ParamDef {
         id: "ring.freq",
         name: "Ring freq",

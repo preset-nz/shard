@@ -12,6 +12,7 @@ import {
   type SourceInfo,
   setDrift,
   setParamDrift,
+  setPlaying,
   sourceInfo,
 } from '@/audio';
 import { Meter } from '@/components/Meter';
@@ -27,6 +28,8 @@ export default function App() {
     grains: 0,
     drift: true,
     drifting: [],
+    playing: false,
+    playhead: 0,
   });
   // Re-registering the scope is how the drift flags reach the field
   // definitions, since facets reads them from the schema rather than from the
@@ -126,9 +129,38 @@ export default function App() {
     await setDrift(!meter.drift);
   }, [meter.drift]);
 
+  const togglePlay = useCallback(async () => {
+    await setPlaying(!meter.playing);
+  }, [meter.playing]);
+
+  // Space for play/stop, the way every other audio tool does it. Ignored while
+  // a control has focus, so arrow keys on a slider still work.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.code !== 'Space') return;
+      const t = e.target as HTMLElement | null;
+      if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
+      e.preventDefault();
+      void togglePlay();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [togglePlay]);
+
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
       <header className="flex items-center gap-3 border-b border-border px-4 py-2">
+        <button
+          type="button"
+          onClick={togglePlay}
+          className={`rounded px-3 py-1 text-xs font-medium ${
+            meter.playing
+              ? 'bg-primary text-primary-foreground'
+              : 'border border-border hover:bg-accent'
+          }`}
+        >
+          {meter.playing ? 'Stop' : 'Play'}
+        </button>
         <span className="text-sm font-semibold tracking-tight">Shard</span>
         <span className="text-xs text-muted-foreground">
           {source ? `${source.name} · ${source.seconds.toFixed(1)}s` : 'loading'}
@@ -166,6 +198,7 @@ export default function App() {
             peaks={source?.peaks ?? []}
             position={values['grain.position'] ?? 0}
             jitter={values['grain.jitter'] ?? 0}
+            playhead={meter.playing ? meter.playhead : null}
           />
 
           <div className="flex items-center gap-6 text-xs text-muted-foreground">
