@@ -1,0 +1,13 @@
+[package]
+name = "shard-play"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The smallest thing that makes the engine audible: open a device, load a WAV,
+# run the engine, animate a few parameters so it evolves while you listen.
+# Exists so the DSP can be heard before any UI exists.
+[dependencies]
+shard-dsp.workspace = true
+cpal.workspace = true
+hound.workspace = true

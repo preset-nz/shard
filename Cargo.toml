@@ -1,0 +1,24 @@
+# Workspace: a UI-free DSP crate plus the thin binaries that drive it.
+# shard-dsp must pass `cargo test` with no audio device and no I/O at all.
+[workspace]
+resolver = "2"
+members = ["crates/shard-dsp", "crates/shard-play"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Licence gate (family rule: permissive only, no copyleft in the shipped tree).
+# Checked 2026-09-12 with `cargo metadata`. symphonia is deliberately absent —
+# it is MPL-2.0, which is file-level copyleft, and the only MPL exceptions in
+# the family are build-time tools that never ship. hound covers WAV, which is
+# all batch one needs. Revisit only if MP3/FLAC input is ever wanted.
+[workspace.dependencies]
+cpal = "0.15"
+hound = "3"
+shard-dsp = { path = "crates/shard-dsp" }
+
+[profile.release]
+lto = true
+codegen-units = 1

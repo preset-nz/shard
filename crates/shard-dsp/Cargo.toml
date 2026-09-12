@@ -1,0 +1,10 @@
+[package]
+name = "shard-dsp"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# No dependencies, on purpose. This crate must build and test with no audio
+# device, no file I/O and no async runtime. If something here needs a crate,
+# it probably belongs in shard-play or the Tauri shell instead.
+[dependencies]
