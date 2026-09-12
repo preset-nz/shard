@@ -19,9 +19,11 @@ export function Waveform({
   onTrim,
 }: {
   peaks: number[];
+  /** Grain read position, as a fraction of the *trimmed window*. */
   position: number;
+  /** Grain jitter, also a fraction of the trimmed window. */
   jitter: number;
-  /** Plain playback's position, or null when stopped. */
+  /** Plain playback's position, already in whole-file terms. */
   playhead: number | null;
   trimStart: number;
   trimEnd: number;
@@ -47,8 +49,8 @@ export function Waveform({
     const wave = style.getPropertyValue('--wave-color').trim() || '#7c8aa5';
     const accent = style.getPropertyValue('--wave-accent').trim() || '#e0a96d';
 
-    // What trim excludes, dimmed. Drawn first so the waveform sits on top of
-    // it and the excluded part still reads as part of the same file.
+    // The trimmed window, in file coordinates. Everything below is expressed
+    // against this, since the engine only ever reads inside it.
     const lo = Math.min(trimStart, trimEnd);
     const hi = Math.max(trimStart, trimEnd);
 
@@ -78,13 +80,21 @@ export function Waveform({
       }
     }
 
+    // Grain position and jitter are fractions of the trimmed window, not of
+    // the file, because the engine hands the granular voice a slice. Map them
+    // back into file coordinates or the line walks outside the trim, which is
+    // exactly what it looked like it was doing.
+    const span = hi - lo;
+    const grainX = lo + position * span;
+    const jitterSpan = jitter * span;
+
     // Jitter band first, so the position line sits on top of it.
-    if (jitter > 0.001) {
+    if (jitterSpan > 0.001) {
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.15;
-      const lo = Math.max(0, position - jitter) * w;
-      const hi = Math.min(1, position + jitter) * w;
-      ctx.fillRect(lo, 0, hi - lo, h);
+      const a = Math.max(lo, grainX - jitterSpan) * w;
+      const b = Math.min(hi, grainX + jitterSpan) * w;
+      ctx.fillRect(a, 0, b - a, h);
       ctx.globalAlpha = 1;
     }
 
@@ -103,8 +113,8 @@ export function Waveform({
     ctx.strokeStyle = accent;
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.moveTo(position * w, 0);
-    ctx.lineTo(position * w, h);
+    ctx.moveTo(grainX * w, 0);
+    ctx.lineTo(grainX * w, h);
     ctx.stroke();
   }, [peaks, position, jitter, playhead, trimStart, trimEnd]);
 
