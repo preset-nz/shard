@@ -143,6 +143,38 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 30.0,
     },
+    // Section switches, one per effect. Stepped, and never smoothed here: the
+    // engine fades each bypass itself over a fixed 10 ms, so a switch cannot
+    // click, and a section that is off is bit-exact with its mix at zero. The
+    // panel draws them in the section header, not as rows.
+    //
+    // Effects start off (Georg, 2026-09-13). Pressing play gives the sample as
+    // it is, and switching a section on is the before and after. The envelope
+    // starts on, because its neutral shape is already transparent. A patch
+    // saved before the switches existed loads with its effects off.
+    ParamDef {
+        id: "grain.on",
+        name: "Granular",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    // Formerly `mix.dry`, inverted: granular is an effect like the others, and
+    // this is its mix. First in its section, because it is the first control
+    // you reach for after switching granular on.
+    ParamDef {
+        id: "grain.mix",
+        name: "Grain mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 40.0,
+    },
     ParamDef {
         id: "grain.position",
         name: "Position",
@@ -233,41 +265,12 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
-    // Section switches, one per effect. Stepped, and never smoothed here: the
-    // engine fades each bypass itself over a fixed 10 ms, so a switch cannot
-    // click, and a section that is off is bit-exact with its mix at zero.
-    // Default on, so a patch saved before they existed loads unchanged. The
-    // panel draws them in the section header, not as rows.
-    ParamDef {
-        id: "grain.on",
-        name: "Granular",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    // No grains by default, on purpose. Pressing play should give you the
-    // sample as it is, so every granular control has an audible before and
-    // after. Formerly `mix.dry`, inverted: granular is an effect like the
-    // others, and this is its mix.
-    ParamDef {
-        id: "grain.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 40.0,
-    },
     ParamDef {
         id: "ring.on",
         name: "Ring modulation",
         min: 0.0,
         max: 1.0,
-        default: 1.0,
+        default: 0.0,
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
@@ -357,7 +360,7 @@ pub const PARAMS: &[ParamDef] = &[
         name: "Crush",
         min: 0.0,
         max: 1.0,
-        default: 1.0,
+        default: 0.0,
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,

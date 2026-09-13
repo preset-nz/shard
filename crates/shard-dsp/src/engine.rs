@@ -138,15 +138,20 @@ struct Fades {
 }
 
 impl Fades {
-    fn new(sample_rate: f32) -> Self {
-        // Settled on, like the table's defaults.
-        let mut on = Ramp::new(1.0);
-        on.set_time(BYPASS_MS, sample_rate);
+    fn new(sample_rate: f32, slots: &Slots) -> Self {
+        let defs = crate::params::PARAMS;
+        // Settled at each switch's own default, so nothing fades in or out
+        // on launch. Effects start off and the envelope starts on.
+        let ramp = |slot: usize| {
+            let mut r = Ramp::new(defs[slot].default);
+            r.set_time(BYPASS_MS, sample_rate);
+            r
+        };
         Self {
-            grain: on,
-            crush: on,
-            ring: on,
-            env: on,
+            grain: ramp(slots.grain_on),
+            crush: ramp(slots.crush_on),
+            ring: ramp(slots.ring_on),
+            env: ramp(slots.env_on),
         }
     }
 }
@@ -179,6 +184,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(sample_rate: f32, max_grains: usize) -> Self {
         let slots = Slots::resolve();
+        let fades = Fades::new(sample_rate, &slots);
         let mk = |ms: f32| {
             let mut p = OnePole::new();
             p.set_time(ms, sample_rate);
@@ -232,7 +238,7 @@ impl Engine {
             ringmod: RingMod::new(sample_rate),
             slots,
             smooth,
-            fades: Fades::new(sample_rate),
+            fades,
             sample_rate,
             peak: 0.0,
             trimmed_play_position: 0.0,
@@ -688,6 +694,10 @@ mod tests {
         bank.set_by_id("grain.size", 500.0);
         bank.set_by_id("amp.gain", 1.5);
         bank.set_by_id("ring.mix", 1.0);
+        // Every effect in, or the range check is only checking the dry path.
+        bank.set_by_id("ring.on", 1.0);
+        bank.set_by_id("crush.on", 1.0);
+        bank.set_by_id("grain.on", 1.0);
         let mut out = vec![0.0; 512];
         for _ in 0..500 {
             e.process_block(&mut out, &bank);
@@ -707,6 +717,7 @@ mod tests {
             let bank = ParamBank::new();
             // Fully granular, or the window makes no difference to the output.
             bank.set_by_id("grain.mix", 1.0);
+            bank.set_by_id("grain.on", 1.0);
             bank.set_by_id("grain.window", step as f32);
             let mut out = vec![0.0; 512];
             let mut peak: f32 = 0.0;
@@ -727,6 +738,9 @@ mod tests {
         e.set_playing(true);
         let bank = ParamBank::new();
         bank.set_by_id("grain.density", 60.0);
+        // Grains audible, or jerking their position moves nothing you hear.
+        bank.set_by_id("grain.on", 1.0);
+        bank.set_by_id("grain.mix", 1.0);
         let mut out = vec![0.0; 256];
         let mut prev = 0.0f32;
         let mut worst = 0.0f32;
@@ -763,6 +777,7 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        set(&bank, "grain.on", 1.0);
         let mut out = vec![0.0; 512];
         for _ in 0..200 {
             e.process_block(&mut out, &bank);
@@ -796,6 +811,7 @@ mod tests {
         e.set_playing(true);
         let bank = ParamBank::new();
         bank.set_by_id("grain.mix", 1.0);
+        bank.set_by_id("grain.on", 1.0);
         let mut out = vec![0.0; 512];
         for _ in 0..200 {
             e.process_block(&mut out, &bank);
@@ -863,8 +879,10 @@ mod tests {
         );
     }
 
-    /// A second of the tone with `configure` applied; the last half of it.
-    fn render_tail(configure: impl Fn(&ParamBank)) -> Vec<f32> {
+    /// A second of the tone: `configure` before the first block, `later` about
+    /// a tenth of a second in, and everything after 0.64 s returned. Long
+    /// enough for the ring modulator's own mix smoothing to settle.
+    fn render_tail(configure: impl Fn(&ParamBank), later: impl Fn(&ParamBank)) -> Vec<f32> {
         let mut e = Engine::new(48_000.0, 128);
         e.set_source(tone(48_000));
         e.set_playing(true);
@@ -872,9 +890,12 @@ mod tests {
         configure(&bank);
         let mut out = vec![0.0; 512];
         let mut tail = Vec::new();
-        for block in 0..94 {
+        for block in 0..188 {
+            if block == 20 {
+                later(&bank);
+            }
             e.process_block(&mut out, &bank);
-            if block >= 47 {
+            if block >= 120 {
                 tail.extend_from_slice(&out);
             }
         }
@@ -886,26 +907,34 @@ mod tests {
         // The null test for every switch. Off must not merely sound off: once
         // the fade has landed it has to be bit-exact with the section's own mix
         // at zero, or "off" is quietly colouring the signal.
+        //
+        // Each section starts *on* and audible, then is switched off partway
+        // in, so the fade actually runs. Effects default off, and a section
+        // that was never on would pass this trivially.
         type Settings<'a> = &'a [(&'a str, f32)];
-        let cases: [(&str, Settings, Settings); 4] = [
+        let cases: [(&str, &str, Settings, Settings); 4] = [
             (
                 "granular",
-                &[("grain.mix", 1.0), ("grain.on", 0.0)],
+                "grain.on",
+                &[("grain.mix", 1.0)],
                 &[("grain.mix", 0.0)],
             ),
             (
                 "crush",
-                &[("crush.mix", 1.0), ("crush.bits", 4.0), ("crush.on", 0.0)],
+                "crush.on",
+                &[("crush.mix", 1.0), ("crush.bits", 4.0)],
                 &[("crush.mix", 0.0), ("crush.bits", 4.0)],
             ),
             (
                 "ring",
-                &[("ring.mix", 1.0), ("ring.on", 0.0)],
+                "ring.on",
+                &[("ring.mix", 1.0)],
                 &[("ring.mix", 0.0)],
             ),
             (
                 "envelope",
-                &[("env.attack", 300.0), ("env.sustain", 0.3), ("env.on", 0.0)],
+                "env.on",
+                &[("env.attack", 300.0), ("env.sustain", 0.3)],
                 &[
                     ("env.attack", 300.0),
                     ("env.sustain", 0.3),
@@ -913,17 +942,25 @@ mod tests {
                 ],
             ),
         ];
-        for (name, off, zero) in cases {
-            let switched = render_tail(|b| {
-                for (id, v) in off {
-                    set(b, id, *v);
-                }
-            });
-            let at_zero = render_tail(|b| {
-                for (id, v) in zero {
-                    set(b, id, *v);
-                }
-            });
+        for (name, switch, active, zero) in cases {
+            let switched = render_tail(
+                |b| {
+                    set(b, switch, 1.0);
+                    for (id, v) in active {
+                        set(b, id, *v);
+                    }
+                },
+                |b| set(b, switch, 0.0),
+            );
+            let at_zero = render_tail(
+                |b| {
+                    set(b, switch, 1.0);
+                    for (id, v) in zero {
+                        set(b, id, *v);
+                    }
+                },
+                |_| {},
+            );
             assert!(
                 switched == at_zero,
                 "{name} switched off is not bit-exact with its mix at zero"
@@ -943,6 +980,9 @@ mod tests {
             let bank = ParamBank::new();
             set(&bank, "grain.mix", 0.5);
             set(&bank, "ring.mix", 1.0);
+            // The steady baseline is both sections on and audible.
+            set(&bank, "grain.on", 1.0);
+            set(&bank, "ring.on", 1.0);
             let mut out = vec![0.0; 256];
             let (mut prev, mut worst) = (0.0f32, 0.0f32);
             for block in 0..400 {
@@ -1139,7 +1179,12 @@ mod tests {
         // all — not a small one. A near-miss would mean the crusher had put a
         // delay or a gain into the path everything else runs through.
         let neutral = render_crushed(&[]);
-        let destructive = render_crushed(&[("crush.bits", 1.0), ("crush.rate", 200.0)]);
+        // Switched on, so this tests the mix at zero rather than the bypass.
+        let destructive = render_crushed(&[
+            ("crush.on", 1.0),
+            ("crush.bits", 1.0),
+            ("crush.rate", 200.0),
+        ]);
         assert_eq!(neutral.len(), destructive.len());
         for (i, (a, b)) in neutral.iter().zip(destructive.iter()).enumerate() {
             assert_eq!(a, b, "frame {i} differs with the crush mix shut");
@@ -1153,6 +1198,7 @@ mod tests {
         // effect fully in by the end of it.
         let clean = render_crushed(&[]);
         let swelling = render_crushed(&[
+            ("crush.on", 1.0),
             ("crush.bits", 1.0),
             ("crush.rate", 400.0),
             ("crush.mix", 1.0),
@@ -1190,6 +1236,7 @@ mod tests {
         // fades the pass out while the crush envelope fades the effect in.
         // Neither may cancel the other.
         let out = render_crushed(&[
+            ("crush.on", 1.0),
             ("crush.bits", 2.0),
             ("crush.mix", 1.0),
             ("crush.env.attack", 900.0),
@@ -1219,6 +1266,7 @@ mod tests {
         set(&bank, "grain.position", 0.5);
         set(&bank, "grain.jitter", 0.0);
         set(&bank, "grain.mix", 1.0);
+        set(&bank, "grain.on", 1.0);
 
         let log = e.grain_log();
         let mut out = vec![0.0; 512];
@@ -1244,6 +1292,7 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        set(&bank, "grain.on", 1.0);
         set(&bank, "grain.size", 100.0);
         set(&bank, "grain.reverse", 0.0);
         set(&bank, "grain.pan", 0.0);
@@ -1288,6 +1337,7 @@ mod tests {
         e.set_playing(true);
         let bank = ParamBank::new();
         set(&bank, "grain.mix", 1.0);
+        set(&bank, "grain.on", 1.0);
 
         let log = e.grain_log();
         let mut out = vec![0.0; 512];
@@ -1517,6 +1567,7 @@ mod tests {
             e.set_playing(true);
             let bank = ParamBank::new();
             set(&bank, "grain.mix", 1.0);
+            set(&bank, "grain.on", 1.0);
             set(&bank, "grain.density", 40.0);
             set(&bank, "material.octave", octave);
             let mut out = vec![0.0; 512];

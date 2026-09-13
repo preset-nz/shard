@@ -72,6 +72,9 @@ fn transport_and_audition_never_touch_the_allocator() {
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(48_000));
     let bank = ParamBank::new();
+    // Effects start off; run a real cloud so stopping has grains to clear.
+    bank.set_by_id("grain.on", 1.0);
+    bank.set_by_id("grain.mix", 1.0);
     let mut out = vec![0.0f32; 512];
     let spawn = GrainSpawn {
         position: 0.3,

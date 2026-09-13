@@ -108,6 +108,10 @@ fn render(source: Vec<f32>, sample_rate: f32, seconds: f32, out: &str) -> Result
     let mut engine = Engine::new(sample_rate, 256);
     engine.set_source(source);
     let bank = ParamBank::new();
+    for id in ["grain.on", "ring.on"] {
+        bank.set_by_id(id, 1.0);
+    }
+    bank.set_by_id("grain.mix", 1.0);
 
     let spec = hound::WavSpec {
         channels: 2,
@@ -193,6 +197,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     engine.set_source(source);
 
     let bank = Arc::new(ParamBank::new());
+    // Effects start off in the table. The playground is here to demonstrate
+    // the cloud and the ring modulator, so it switches both on.
+    for id in ["grain.on", "ring.on"] {
+        bank.set_by_id(id, 1.0);
+    }
+    bank.set_by_id("grain.mix", 1.0);
     let audio_bank = Arc::clone(&bank);
 
     // Interleaved stereo scratch, sized once. The device may hand us a
