@@ -63,11 +63,14 @@ export function NodePresets({
     try {
       const report = await applyPreset(node, preset);
       onError(null);
-      onNote(
-        report.unknown.length > 0
-          ? `Applied “${preset}”, but ${report.unknown.length} of its values no longer exist and were skipped.`
-          : null,
-      );
+      const parts: string[] = [];
+      if (report.unknown.length > 0) {
+        parts.push(`${report.unknown.length} of its values no longer exist and were skipped`);
+      }
+      if (report.refused.length > 0) {
+        parts.push(`${report.refused.length} of its links name an LFO this patch cannot use`);
+      }
+      onNote(parts.length > 0 ? `Applied “${preset}”, but ${parts.join(', and ')}.` : null);
     } catch (e) {
       onError(String(e));
     }

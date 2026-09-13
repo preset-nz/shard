@@ -170,12 +170,23 @@ export interface LoadReport {
   sample_path: string | null;
   /** The patch named a sample that is no longer where it said it was. */
   sample_missing: boolean;
+  /** LFOs and links the engine could not use. They stay in the patch. */
+  refused: Refused[];
 }
 
-/** What applying a preset did. `unknown` lists values it could not apply. */
+/** Something in the patch's modulation the engine could not use. */
+export interface Refused {
+  /** A parameter id for a link, or `lfo:<id>` for an LFO. */
+  id: string;
+  reason: string;
+}
+
+/** What applying a preset did. `unknown` lists values and links it could not apply. */
 export interface PresetReport {
   applied: number;
   unknown: string[];
+  /** Links the preset restored that the engine could not use. */
+  refused: Refused[];
 }
 
 /** Node presets live in the patch; `node` is a section id such as `grain`. */

@@ -200,6 +200,64 @@ fn the_callback_hand_offs_never_touch_the_allocator() {
 }
 
 #[test]
+fn handing_a_modulation_set_across_never_touches_the_allocator() {
+    // The app's callback takes a rebuilt `ModSet` from a primed slot, swaps it
+    // into the running engine, and gives the one it replaced back through a
+    // second slot, as it does a source buffer. The old set holds LFOs, so
+    // freeing it here instead would be caught.
+    let lfos = |n: u64| -> Vec<LfoSpec> {
+        (1..=n)
+            .map(|id| LfoSpec {
+                id,
+                rate_hz: id as f32,
+                shape: Shape::Sine,
+                phase: 0.0,
+            })
+            .collect()
+    };
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    e.set_playing(true);
+    drop(e.set_modulation(ModSet::new(&lfos(4))));
+
+    let swap: Mutex<Option<ModSet>> = Mutex::new(Some(ModSet::new(&lfos(2))));
+    let retired: Mutex<Option<ModSet>> = Mutex::new(None);
+    drop(swap.lock());
+    drop(retired.lock());
+
+    let bank = ParamBank::new();
+    let mut out = vec![0.0f32; 512];
+    let mut retiring: Option<ModSet> = None;
+    let ((), caught) = no_alloc(|| {
+        for _ in 0..3 {
+            if let Some(old) = retiring.take() {
+                match retired.try_lock() {
+                    Ok(mut slot) if slot.is_none() => *slot = Some(old),
+                    _ => retiring = Some(old),
+                }
+            }
+            if retiring.is_none() {
+                if let Ok(mut pending) = swap.try_lock() {
+                    if let Some(set) = pending.take() {
+                        retiring = Some(e.set_modulation(set));
+                    }
+                }
+            }
+            e.process_block(&mut out, &bank);
+        }
+    });
+    assert_eq!(
+        caught, 0,
+        "the modulation hand-off touched the allocator {caught} time(s)"
+    );
+    let old = retired.lock().ok().and_then(|mut slot| slot.take());
+    assert!(
+        old.is_some_and(|set| set.lfo_value(4).is_some()),
+        "the replaced set should be waiting in the retired slot"
+    );
+}
+
+#[test]
 fn swapping_the_source_hands_the_old_buffer_back_instead_of_freeing_it() {
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(48_000));

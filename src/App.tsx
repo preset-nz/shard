@@ -287,6 +287,9 @@ export default function App() {
       if (report.missing.length > 0) {
         parts.push(`${report.missing.length} left at default`);
       }
+      if (report.refused.length > 0) {
+        parts.push(`${report.refused.length} LFO or link(s) could not be used`);
+      }
       setNote(parts.length > 0 ? parts.join(' · ') : null);
     } catch (e) {
       setError(String(e));

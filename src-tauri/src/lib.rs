@@ -19,9 +19,10 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 use shard_dsp::params::{index_of, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
-use shard_dsp::{Engine, GrainLog, GrainSpawn, ParamBank};
+use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
 
 mod drift;
+mod modulation;
 mod patch;
 mod presets;
 mod source;
@@ -62,10 +63,17 @@ pub struct Audio {
     /// Node presets for the open patch. Saved with it and replaced when
     /// another patch loads; never touched by the audio thread.
     presets: Mutex<presets::Presets>,
+    /// The open patch's LFOs and links. Every edit rebuilds a `ModSet` from
+    /// this and hands it across through `mod_swap`.
+    modulation: Mutex<modulation::Modulation>,
     swap: Arc<Mutex<Option<Vec<f32>>>>,
     /// A source buffer the audio thread swapped out and handed back, waiting
     /// for `meters` to free it here rather than on the audio thread.
     retired: Arc<Mutex<Option<Vec<f32>>>>,
+    /// A modulation set waiting for the audio thread, and the one it replaced,
+    /// handed back the same way as a source buffer.
+    mod_swap: Arc<Mutex<Option<ModSet>>>,
+    mod_retired: Arc<Mutex<Option<ModSet>>>,
     /// The slowest block since `meters` last asked.
     timer: Arc<BlockTimer>,
     /// The audio-thread allocation count `meters` last logged, so a new one is
@@ -205,6 +213,9 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
     if let Ok(mut slot) = state.retired.lock() {
         drop(slot.take());
     }
+    if let Ok(mut slot) = state.mod_retired.lock() {
+        drop(slot.take());
+    }
 
     let audio_allocs = rt::violations();
     let logged = state.reported_allocs.swap(audio_allocs, Ordering::Relaxed);
@@ -309,6 +320,11 @@ fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String
     };
     let mut p = patch::Patch::capture(&state.bank, &state.drift.snapshot(), sample);
     p.presets = state.presets.lock().expect("presets poisoned").clone();
+    p.modulation = state
+        .modulation
+        .lock()
+        .expect("modulation poisoned")
+        .clone();
     std::fs::write(&path, p.to_json()?).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -322,6 +338,10 @@ fn load_patch(state: tauri::State<'_, Audio>, path: String) -> Result<patch::Loa
     let mut report = p.apply(&state.bank);
     // Presets belong to the patch, so the loaded patch's set replaces the old.
     *state.presets.lock().expect("presets poisoned") = p.presets.clone();
+    // So do LFOs and links. Anything the engine cannot use stays in the
+    // document and is reported.
+    report.refused = state.send_modulation(&p.modulation);
+    *state.modulation.lock().expect("modulation poisoned") = p.modulation.clone();
 
     for (i, def) in PARAMS.iter().enumerate() {
         state.drift.set(i, p.drifting.iter().any(|id| id == def.id));
@@ -348,40 +368,47 @@ fn preset_names(state: tauri::State<'_, Audio>, node: String) -> Vec<String> {
     state.presets.lock().expect("presets poisoned").names(&node)
 }
 
-/// Store a node's current values as a new preset. Refuses a name in use, so a
-/// preset is never overwritten by accident; that is what `update_preset` is for.
+// The preset commands take the presets lock, then the modulation lock, always
+// in that order.
+
+/// Store a node's current values and links as a new preset. Refuses a name in
+/// use, so a preset is never overwritten by accident; that is what
+/// `update_preset` is for.
 #[tauri::command]
 fn save_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
-    state
-        .presets
-        .lock()
-        .expect("presets poisoned")
-        .save(&state.bank, &node, &name)
+    let mut presets = state.presets.lock().expect("presets poisoned");
+    let doc = state.modulation.lock().expect("modulation poisoned");
+    presets.save(&state.bank, &doc.links, &node, &name)
 }
 
-/// Overwrite an existing preset with the node's current values.
+/// Overwrite an existing preset with the node's current values and links.
 #[tauri::command]
 fn update_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
-    state
-        .presets
-        .lock()
-        .expect("presets poisoned")
-        .update(&state.bank, &node, &name)
+    let mut presets = state.presets.lock().expect("presets poisoned");
+    let doc = state.modulation.lock().expect("modulation poisoned");
+    presets.update(&state.bank, &doc.links, &node, &name)
 }
 
-/// Write a preset's values into the bank. Smoothed parameters glide to their
-/// new values; the section's switch is left as it is.
+/// Write a preset's values into the bank and its links into the patch.
+/// Smoothed parameters glide to their new values; the section's switch is
+/// left as it is.
 #[tauri::command]
 fn apply_preset(
     state: tauri::State<'_, Audio>,
     node: String,
     name: String,
 ) -> Result<presets::ApplyReport, String> {
-    state
-        .presets
-        .lock()
-        .expect("presets poisoned")
-        .apply(&state.bank, &node, &name)
+    let presets = state.presets.lock().expect("presets poisoned");
+    let mut doc = state.modulation.lock().expect("modulation poisoned");
+    let mut report = presets.apply(&state.bank, &mut doc.links, &node, &name)?;
+    // Only this node's refusals: anything else refused was already reported
+    // when it arrived.
+    report.refused = state
+        .send_modulation(&doc)
+        .into_iter()
+        .filter(|r| presets::belongs(&node, &r.id))
+        .collect();
+    Ok(report)
 }
 
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
@@ -443,6 +470,15 @@ fn load_sample(state: tauri::State<'_, Audio>, path: String) -> Result<SourceInf
 /// forever holding it — dropping the stream would stop the device. Only the
 /// atomics and queues cross back, and those are all `Send`.
 impl Audio {
+    /// Build the engine's modulation set from `doc` here, on the command
+    /// thread, and leave it for the audio thread to take at a block boundary.
+    /// A set still waiting from an earlier edit is replaced and freed here.
+    fn send_modulation(&self, doc: &modulation::Modulation) -> Vec<modulation::Refused> {
+        let (set, refused) = doc.build();
+        *self.mod_swap.lock().expect("modulation swap poisoned") = Some(set);
+        refused
+    }
+
     /// The trimmed window in sample indices, mirroring the engine's own
     /// clamping so a drawn curve matches the one being heard.
     fn trim_indices(&self) -> (usize, usize) {
@@ -480,6 +516,8 @@ fn build_audio() -> Result<Audio, String> {
     let auditioning = Arc::new(AtomicBool::new(false));
     let reversing = Arc::new(AtomicBool::new(false));
     let retired: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
+    let mod_swap: Arc<Mutex<Option<ModSet>>> = Arc::new(Mutex::new(None));
+    let mod_retired: Arc<Mutex<Option<ModSet>>> = Arc::new(Mutex::new(None));
     let timer = Arc::new(BlockTimer::new());
 
     // Lock every slot the callback hands off through once, here. On macOS a
@@ -489,6 +527,8 @@ fn build_audio() -> Result<Audio, String> {
     drop(swap.lock());
     drop(audition.lock());
     drop(retired.lock());
+    drop(mod_swap.lock());
+    drop(mod_retired.lock());
 
     let audio_bank = Arc::clone(&bank);
     let audio_peak = Arc::clone(&peak);
@@ -501,6 +541,8 @@ fn build_audio() -> Result<Audio, String> {
     let audio_auditioning = Arc::clone(&auditioning);
     let audio_reversing = Arc::clone(&reversing);
     let audio_retired = Arc::clone(&retired);
+    let audio_mod_swap = Arc::clone(&mod_swap);
+    let audio_mod_retired = Arc::clone(&mod_retired);
     let audio_timer = Arc::clone(&timer);
 
     // The log is created by the engine, which only exists inside the audio
@@ -527,6 +569,8 @@ fn build_audio() -> Result<Audio, String> {
                 let mut scratch = vec![0.0f32; 8192];
                 // A swapped-out source, held until the UI side can take it.
                 let mut retiring: Option<Vec<f32>> = None;
+                // A swapped-out modulation set, held the same way.
+                let mut mods_retiring: Option<ModSet> = None;
 
                 let stream = device
                     .build_output_stream(
@@ -558,6 +602,23 @@ fn build_audio() -> Result<Audio, String> {
                                     if let Ok(mut pending) = audio_swap.try_lock() {
                                         if let Some(buf) = pending.take() {
                                             retiring = Some(engine.set_source(buf));
+                                        }
+                                    }
+                                }
+
+                                // LFOs and links arrive the same way as a
+                                // sample, with their own pair of slots. The
+                                // engine carries running LFOs across by id.
+                                if let Some(old) = mods_retiring.take() {
+                                    match audio_mod_retired.try_lock() {
+                                        Ok(mut slot) if slot.is_none() => *slot = Some(old),
+                                        _ => mods_retiring = Some(old),
+                                    }
+                                }
+                                if mods_retiring.is_none() {
+                                    if let Ok(mut pending) = audio_mod_swap.try_lock() {
+                                        if let Some(set) = pending.take() {
+                                            mods_retiring = Some(engine.set_modulation(set));
                                         }
                                     }
                                 }
@@ -671,8 +732,11 @@ fn build_audio() -> Result<Audio, String> {
         play_request,
         source: Mutex::new(source::startup_drone(sample_rate)),
         presets: Mutex::new(presets::Presets::default()),
+        modulation: Mutex::new(modulation::Modulation::default()),
         swap,
         retired,
+        mod_swap,
+        mod_retired,
         timer,
         reported_allocs: AtomicU64::new(0),
         sample_rate,
@@ -787,8 +851,30 @@ mod tests {
 
         let report = serde_json::to_value(presets::ApplyReport::default())
             .expect("ApplyReport is serialisable");
-        for key in ["applied", "unknown"] {
+        for key in ["applied", "unknown", "refused"] {
             assert!(report.get(key).is_some(), "ApplyReport lost `{key}`");
+        }
+
+        let load =
+            serde_json::to_value(patch::LoadReport::default()).expect("LoadReport is serialisable");
+        for key in [
+            "applied",
+            "unknown",
+            "missing",
+            "sample_path",
+            "sample_missing",
+            "refused",
+        ] {
+            assert!(load.get(key).is_some(), "LoadReport lost `{key}`");
+        }
+
+        let refused = serde_json::to_value(modulation::Refused {
+            id: "grain.size".into(),
+            reason: "x".into(),
+        })
+        .expect("Refused is serialisable");
+        for key in ["id", "reason"] {
+            assert!(refused.get(key).is_some(), "Refused lost `{key}`");
         }
     }
 }

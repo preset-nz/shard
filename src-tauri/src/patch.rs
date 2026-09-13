@@ -1,7 +1,8 @@
 //! The document.
 //!
 //! A patch is the sound: every parameter value, which parameters are drifting,
-//! and a reference to the material. Not the material itself — samples stay
+//! the LFOs and what follows them, node presets, and a reference to the
+//! material. Not the material itself — samples stay
 //! where they are, so a patch is a few kilobytes of text you can read and diff.
 //!
 //! **Parameters are stored by id, never by index.** The table's order is an
@@ -20,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use shard_dsp::params::PARAMS;
 use shard_dsp::ParamBank;
 
+use crate::modulation::{Modulation, Refused};
 use crate::presets::Presets;
 
 /// Bumped only for a change old builds cannot read. Adding parameters does
@@ -42,6 +44,11 @@ pub struct Patch {
     /// with the patch. See `presets.rs`.
     #[serde(default, skip_serializing_if = "Presets::is_empty")]
     pub presets: Presets,
+    /// The LFOs, and which parameter follows which, as top-level `lfos` and
+    /// `links`. Document data beside the values, never mixed into them: the
+    /// values stay the hand's. See `modulation.rs`.
+    #[serde(flatten)]
+    pub modulation: Modulation,
 }
 
 /// What happened on load. Surfaced rather than logged, because a patch that
@@ -56,6 +63,8 @@ pub struct LoadReport {
     pub sample_path: Option<String>,
     /// Set when the sample could not be found where the patch said it was.
     pub sample_missing: bool,
+    /// LFOs and links the engine could not use. They stay in the document.
+    pub refused: Vec<Refused>,
 }
 
 impl Patch {
@@ -75,6 +84,7 @@ impl Patch {
                 .collect(),
             sample_path,
             presets: Presets::default(),
+            modulation: Modulation::default(),
         }
     }
 
@@ -228,10 +238,46 @@ mod tests {
     fn presets_travel_with_the_patch() {
         let bank = ParamBank::new();
         let mut patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
-        patch.presets.save(&bank, "grain", "cloud").unwrap();
+        patch
+            .presets
+            .save(&bank, &Default::default(), "grain", "cloud")
+            .unwrap();
         let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
         assert_eq!(back.presets, patch.presets);
         assert_eq!(back.presets.names("grain"), vec!["cloud"]);
+    }
+
+    #[test]
+    fn lfos_and_links_travel_with_the_patch() {
+        use crate::modulation::{LfoRecord, LinkRecord};
+
+        let bank = ParamBank::new();
+        let mut patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
+        patch.modulation.lfos.push(LfoRecord {
+            id: 2,
+            name: "wander".into(),
+            rate: 0.3,
+            shape: "smooth-random".into(),
+            phase: 0.25,
+        });
+        patch.modulation.links.insert(
+            "grain.position".into(),
+            LinkRecord {
+                lfo: 2,
+                depth: -0.4,
+            },
+        );
+
+        let text = patch.to_json().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(json["lfos"].is_array(), "lfos is a top-level list: {text}");
+        assert!(
+            json["links"]["grain.position"].is_object(),
+            "links sit beside params: {text}"
+        );
+
+        let back = Patch::from_json(&text).unwrap();
+        assert_eq!(back.modulation, patch.modulation);
     }
 
     #[test]

@@ -63,6 +63,46 @@ impl Shape {
         Shape::Eased(Curve::Bounce, Ease::Out),
         Shape::Eased(Curve::Bounce, Ease::InOut),
     ];
+
+    /// How each shape in `ALL` is spelled in a patch, in the same order.
+    ///
+    /// **A wire format**, like parameter ids: renaming one breaks every saved
+    /// LFO that uses it. Flat kebab-case, so a hand-edited `.shard` file stays
+    /// readable, and so this crate needs no serialiser to define it.
+    pub const NAMES: [&'static str; 20] = [
+        "sine",
+        "triangle",
+        "saw",
+        "square",
+        "smooth-random",
+        "quad-in",
+        "quad-out",
+        "quad-in-out",
+        "cubic-in",
+        "cubic-out",
+        "cubic-in-out",
+        "expo-in",
+        "expo-out",
+        "expo-in-out",
+        "elastic-in",
+        "elastic-out",
+        "elastic-in-out",
+        "bounce-in",
+        "bounce-out",
+        "bounce-in-out",
+    ];
+
+    pub fn name(self) -> &'static str {
+        let i = Self::ALL.iter().position(|s| *s == self).unwrap_or(0);
+        Self::NAMES[i]
+    }
+
+    pub fn from_name(name: &str) -> Option<Shape> {
+        Self::NAMES
+            .iter()
+            .position(|n| *n == name)
+            .map(|i| Self::ALL[i])
+    }
 }
 
 /// An easing family, after Robert Penner's easing equations (BSD-licensed;
@@ -385,6 +425,18 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|(_, p)| !matches!(p.taper, Taper::Stepped(_)))
+    }
+
+    #[test]
+    fn every_shape_has_one_name_and_comes_back_from_it() {
+        for shape in Shape::ALL {
+            assert_eq!(Shape::from_name(shape.name()), Some(shape));
+        }
+        let mut names = Shape::NAMES.to_vec();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), Shape::ALL.len(), "two shapes share a name");
+        assert_eq!(Shape::from_name("wobble"), None);
     }
 
     #[test]
