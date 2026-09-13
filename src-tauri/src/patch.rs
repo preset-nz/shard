@@ -1,8 +1,7 @@
 //! The document.
 //!
-//! A patch is the sound: every parameter value, which parameters are drifting,
-//! the LFOs and what follows them, node presets, and a reference to the
-//! material. Not the material itself — samples stay
+//! A patch is the sound: every parameter value, the LFOs and what follows
+//! them, node presets, and a reference to the material. Not the material itself — samples stay
 //! where they are, so a patch is a few kilobytes of text you can read and diff.
 //!
 //! **Parameters are stored by id, never by index.** The table's order is an
@@ -33,9 +32,6 @@ pub struct Patch {
     pub version: u32,
     /// Parameter values by id. A map, not a list, so order never matters.
     pub params: BTreeMap<String, f32>,
-    /// Which parameters are handed to the drift oscillator.
-    #[serde(default)]
-    pub drifting: Vec<String>,
     /// Where the material was. Absolute, because this is a personal tool and
     /// samples live wherever they live.
     #[serde(default)]
@@ -68,19 +64,13 @@ pub struct LoadReport {
 }
 
 impl Patch {
-    pub fn capture(bank: &ParamBank, drifting: &[bool], sample_path: Option<String>) -> Self {
+    pub fn capture(bank: &ParamBank, sample_path: Option<String>) -> Self {
         Self {
             version: VERSION,
             params: PARAMS
                 .iter()
                 .enumerate()
                 .map(|(i, p)| (p.id.to_string(), bank.get(i)))
-                .collect(),
-            drifting: PARAMS
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| drifting.get(*i).copied().unwrap_or(false))
-                .map(|(_, p)| p.id.to_string())
                 .collect(),
             sample_path,
             presets: Presets::default(),
@@ -143,7 +133,7 @@ mod tests {
         }
         let before: Vec<f32> = (0..PARAMS.len()).map(|i| bank.get(i)).collect();
 
-        let patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
+        let patch = Patch::capture(&bank, None);
         let text = patch.to_json().unwrap();
 
         let fresh = ParamBank::new();
@@ -219,25 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn drift_flags_survive_the_round_trip() {
+    fn the_sample_path_survives_the_round_trip() {
         let bank = ParamBank::new();
-        let mut flags = vec![false; PARAMS.len()];
-        flags[shard_dsp::params::index_of("grain.position").unwrap()] = true;
-        flags[shard_dsp::params::index_of("ring.freq").unwrap()] = true;
-
-        let patch = Patch::capture(&bank, &flags, Some("/tmp/x.wav".into()));
+        let patch = Patch::capture(&bank, Some("/tmp/x.wav".into()));
         let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
-
-        assert_eq!(back.drifting.len(), 2);
-        assert!(back.drifting.contains(&"grain.position".to_string()));
-        assert!(back.drifting.contains(&"ring.freq".to_string()));
         assert_eq!(back.sample_path.as_deref(), Some("/tmp/x.wav"));
     }
 
     #[test]
     fn presets_travel_with_the_patch() {
         let bank = ParamBank::new();
-        let mut patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
+        let mut patch = Patch::capture(&bank, None);
         patch
             .presets
             .save(&bank, &Default::default(), "grain", "cloud")
@@ -252,7 +234,7 @@ mod tests {
         use crate::modulation::{LfoRecord, LinkRecord};
 
         let bank = ParamBank::new();
-        let mut patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
+        let mut patch = Patch::capture(&bank, None);
         patch.modulation.lfos.push(LfoRecord {
             id: 2,
             name: "wander".into(),
@@ -283,7 +265,7 @@ mod tests {
     #[test]
     fn a_patch_with_no_sample_still_loads() {
         let bank = ParamBank::new();
-        let patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
+        let patch = Patch::capture(&bank, None);
         let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
         assert!(back.sample_path.is_none());
         assert!(!back.apply(&bank).sample_missing);

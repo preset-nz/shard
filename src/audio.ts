@@ -21,9 +21,6 @@ export interface ParamInfo {
   default: number;
   taper: Taper;
   steps: number | null;
-  /** Stepped parameters cannot drift; walking enum values at random is a
-   *  different feature. */
-  can_drift: boolean;
   unit: string;
   smooth_ms: number;
 }
@@ -31,10 +28,6 @@ export interface ParamInfo {
 export interface Meters {
   peak: number;
   grains: number;
-  /** Master drift switch. */
-  drift: boolean;
-  /** Per-parameter drift flags, indexed as the definitions are. */
-  drifting: boolean[];
   playing: boolean;
   /** Where plain playback has reached, 0 to 1. */
   playhead: number;
@@ -92,7 +85,6 @@ export const paramDefs = () => invoke<ParamInfo[]>('param_defs');
 export const getParams = () => invoke<number[]>('get_params');
 export const setParam = (id: string, value: number) => invoke<void>('set_param', { id, value });
 export const meters = () => invoke<Meters>('meters');
-export const setDrift = (on: boolean) => invoke<void>('set_drift', { on });
 export const sourceInfo = () => invoke<SourceInfo>('source_info');
 export const loadSample = (path: string) => invoke<SourceInfo>('load_sample', { path });
 
@@ -206,10 +198,6 @@ export const envelopeCurve = () => invoke<number[]>('envelope_curve');
 
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
-
-/** Hand one parameter to the drift oscillator, or take it back. */
-export const setParamDrift = (id: string, on: boolean) =>
-  invoke<void>('set_param_drift', { id, on });
 
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];

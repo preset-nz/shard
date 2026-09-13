@@ -526,7 +526,7 @@ pub const PARAMS: &[ParamDef] = &[
         min: 0.0,
         max: 1.0,
         default: 0.0,
-        // Stepped, so it draws as a selector and drift leaves it alone.
+        // Stepped, so it draws as a selector and cannot be linked to an LFO.
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,

@@ -31,9 +31,9 @@ destination now, any source with a depth and a curve later.
 
 `Cmd-S` writes a `.shard` patch, `Cmd-O` reads one back.
 
-A patch is the sound, not the material: every parameter value, which
-parameters are drifting, and the path to the sample. A few kilobytes of
-readable JSON you can diff.
+A patch is the sound, not the material: every parameter value, the LFOs and
+the parameters linked to them, node presets, and the path to the sample. A
+few kilobytes of readable JSON you can diff.
 
 **Values are keyed by parameter id, never by index**, so inserting a
 parameter into the middle of the table does not shift what an old patch

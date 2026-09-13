@@ -17,11 +17,10 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
-use shard_dsp::params::{index_of, Taper, Unit, PARAMS};
+use shard_dsp::params::{Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
 
-mod drift;
 mod modulation;
 mod patch;
 mod presets;
@@ -34,14 +33,13 @@ mod source;
 #[global_allocator]
 static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 
-/// Shared between the UI thread, the drift thread and the audio thread.
+/// Shared between the UI thread and the audio thread.
 pub struct Audio {
     bank: Arc<ParamBank>,
     /// Peak since the UI last asked, as f32 bits. Written by the audio thread.
     peak: Arc<AtomicU32>,
     /// Active grain count, for the UI. Written by the audio thread.
     grains: Arc<AtomicU32>,
-    drift: Arc<drift::DriftState>,
     /// Transport, mirrored out of the audio thread for the UI.
     playing: Arc<AtomicBool>,
     /// Every grain the cloud has spawned, drained by the UI at poll rate.
@@ -95,9 +93,6 @@ pub struct ParamInfo {
     pub taper: &'static str,
     /// Present only for stepped parameters.
     pub steps: Option<u32>,
-    /// Whether this parameter can be handed to drift at all. Stepped ones
-    /// cannot: walking through window shapes at random is a different feature.
-    pub can_drift: bool,
     pub unit: &'static str,
     pub smooth_ms: f32,
 }
@@ -106,10 +101,6 @@ pub struct ParamInfo {
 pub struct Meters {
     pub peak: f32,
     pub grains: u32,
-    /// Master drift switch.
-    pub drift: bool,
-    /// Per-parameter drift flags, indexed as `PARAMS`.
-    pub drifting: Vec<bool>,
     pub playing: bool,
     /// Where plain playback has reached, 0 to 1.
     pub playhead: f32,
@@ -178,7 +169,6 @@ fn param_defs() -> Vec<ParamInfo> {
                 Taper::Stepped(n) => Some(n),
                 _ => None,
             },
-            can_drift: !matches!(p.taper, Taper::Stepped(_)),
             unit: match p.unit {
                 Unit::None => "",
                 Unit::Ms => "ms",
@@ -232,8 +222,6 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         audio_allocs,
         peak: f32::from_bits(state.peak.swap(0, Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
-        drift: state.drift.master(),
-        drifting: state.drift.snapshot(),
         playing: state.playing.load(Ordering::Relaxed),
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
@@ -311,14 +299,15 @@ fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
 }
 
 /// Write the current sound to a `.shard` file. A few kilobytes of readable
-/// JSON: parameter values by id, the drift flags, and where the sample was.
+/// JSON: parameter values by id, LFOs and links, presets, and where the sample
+/// was.
 #[tauri::command]
 fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String> {
     let sample = {
         let s = state.source.lock().expect("source poisoned");
         s.path.clone()
     };
-    let mut p = patch::Patch::capture(&state.bank, &state.drift.snapshot(), sample);
+    let mut p = patch::Patch::capture(&state.bank, sample);
     p.presets = state.presets.lock().expect("presets poisoned").clone();
     p.modulation = state
         .modulation
@@ -342,10 +331,6 @@ fn load_patch(state: tauri::State<'_, Audio>, path: String) -> Result<patch::Loa
     // document and is reported.
     report.refused = state.send_modulation(&p.modulation);
     *state.modulation.lock().expect("modulation poisoned") = p.modulation.clone();
-
-    for (i, def) in PARAMS.iter().enumerate() {
-        state.drift.set(i, p.drifting.iter().any(|id| id == def.id));
-    }
 
     if let Some(sample) = &p.sample_path {
         match source::load(sample, state.sample_rate) {
@@ -415,24 +400,6 @@ fn apply_preset(
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
     state.play_request.store(playing, Ordering::Relaxed);
-}
-
-/// The master switch. Off means nothing drifts; flipping it back restores the
-/// per-parameter flags rather than clearing them.
-#[tauri::command]
-fn set_drift(state: tauri::State<'_, Audio>, on: bool) {
-    state.drift.set_master(on);
-}
-
-/// Hand one parameter to the oscillator, or take it back.
-#[tauri::command]
-fn set_param_drift(state: tauri::State<'_, Audio>, id: String, on: bool) -> Result<(), String> {
-    let i = index_of(&id).ok_or_else(|| format!("unknown parameter: {id}"))?;
-    if !drift::DriftState::can_drift(i) {
-        return Err(format!("{id} cannot drift"));
-    }
-    state.drift.set(i, on);
-    Ok(())
 }
 
 #[tauri::command]
@@ -507,7 +474,6 @@ fn build_audio() -> Result<Audio, String> {
     let bank = Arc::new(ParamBank::new());
     let peak = Arc::new(AtomicU32::new(0));
     let grains = Arc::new(AtomicU32::new(0));
-    let drift = Arc::new(drift::DriftState::new());
     let playing = Arc::new(AtomicBool::new(false));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
@@ -722,7 +688,6 @@ fn build_audio() -> Result<Audio, String> {
         bank,
         peak,
         grains,
-        drift,
         playing,
         grain_log,
         audition,
@@ -753,8 +718,6 @@ pub fn run() {
         }
     };
 
-    drift::spawn(Arc::clone(&audio.bank), Arc::clone(&audio.drift));
-
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
@@ -765,8 +728,6 @@ pub fn run() {
             get_params,
             set_param,
             meters,
-            set_drift,
-            set_param_drift,
             set_playing,
             envelope_curve,
             save_patch,
@@ -822,8 +783,6 @@ mod tests {
         let meters = serde_json::to_value(Meters {
             peak: 0.0,
             grains: 0,
-            drift: true,
-            drifting: vec![false],
             playing: false,
             playhead: 0.0,
             auditioning: false,
@@ -836,8 +795,6 @@ mod tests {
         for key in [
             "peak",
             "grains",
-            "drift",
-            "drifting",
             "playing",
             "playhead",
             "auditioning",

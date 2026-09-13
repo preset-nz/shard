@@ -16,9 +16,7 @@ import {
   meters as readMeters,
   type SourceInfo,
   savePatch,
-  setDrift,
   setParam,
-  setParamDrift,
   setPlaying,
   sourceInfo,
 } from '@/audio';
@@ -55,8 +53,6 @@ export default function App() {
   const [meter, setMeter] = useState<Meters>({
     peak: 0,
     grains: 0,
-    drift: true,
-    drifting: [],
     playing: false,
     playhead: 0,
     auditioning: false,
@@ -78,13 +74,8 @@ export default function App() {
   // interval down and rebuild it on every freeze.
   const frozenRef = useRef(false);
   frozenRef.current = frozen;
-  // Re-registering the scope is how the drift flags reach the field
-  // definitions, since facets reads them from the schema rather than from the
-  // values. Keyed on the flag pattern so it only happens when one flips.
-  const driftKey = useRef('');
   const [error, setError] = useState<string | null>(null);
   const defsRef = useRef<ParamInfo[] | null>(null);
-  const [schemaVersion, setSchemaVersion] = useState(0);
   const [envelope, setEnvelope] = useState<number[] | null>(null);
   const [patchName, setPatchName] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -108,12 +99,7 @@ export default function App() {
       try {
         const d = await paramDefs();
         if (cancelled) return;
-        const m = await readMeters();
-        const on = new Set(d.filter((_, i) => m.drifting[i]).map((x) => x.id));
-        driftKey.current = d.map((_, i) => (m.drifting[i] ? '1' : '0')).join('');
-        registerParamScope(d, on, (id, next) => {
-          void setParamDrift(id, next);
-        });
+        registerParamScope(d);
         defsRef.current = d;
         setDefs(d);
         const v = await getParams();
@@ -132,8 +118,8 @@ export default function App() {
     };
   }, []);
 
-  // Poll. Thirty hertz is enough for a meter and for watching the drift move
-  // the controls, and it keeps the boundary quiet. Nothing here is on the
+  // Poll. Thirty hertz is enough for a meter and for the controls to follow a
+  // patch load or a preset, and it keeps the boundary quiet. Nothing here is on the
   // audio path, so a late frame costs nothing but a slightly stale number.
   useEffect(() => {
     if (!defs) return;
@@ -157,15 +143,6 @@ export default function App() {
         }
         const d = defsRef.current;
         if (d) {
-          const key = m.drifting.map((b) => (b ? '1' : '0')).join('');
-          if (key !== driftKey.current) {
-            driftKey.current = key;
-            const on = new Set(d.filter((_, i) => m.drifting[i]).map((x) => x.id));
-            registerParamScope(d, on, (id, next) => {
-              void setParamDrift(id, next);
-            });
-            setSchemaVersion((n) => n + 1);
-          }
           const next: ParamValues = {};
           d.forEach((p, i) => {
             next[p.id] = v[i];
@@ -312,10 +289,6 @@ export default function App() {
       setError(String(e));
     }
   }, []);
-
-  const toggleDrift = useCallback(async () => {
-    await setDrift(!meter.drift);
-  }, [meter.drift]);
 
   const togglePlay = useCallback(async () => {
     await setPlaying(!meter.playing);
@@ -472,17 +445,6 @@ export default function App() {
         >
           Load WAV
         </button>
-        <button
-          type="button"
-          onClick={toggleDrift}
-          className={`rounded border px-2 py-1 text-xs ${
-            meter.drift
-              ? 'border-primary bg-primary/15 text-primary'
-              : 'border-border hover:bg-accent'
-          }`}
-        >
-          Drift {meter.drift ? 'on' : 'off'}
-        </button>
       </header>
 
       {note && !error && (
@@ -553,12 +515,6 @@ export default function App() {
             )}
           </div>
 
-          <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
-            Drift walks position, size, density, jitter and ring frequency on slow oscillators that
-            never quite line up, so the texture keeps moving on its own. Those five controls are
-            held while it runs. Everything else is yours either way.
-          </p>
-
           <GrainInspector
             grains={grains}
             frozen={frozen}
@@ -592,7 +548,6 @@ export default function App() {
                   {...switchFor(s.id)}
                 >
                   <PropertyPanel
-                    key={schemaVersion}
                     scopeKey={scopeKeyFor(s.id)}
                     selection={values}
                     ctx={{ defs }}

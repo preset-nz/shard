@@ -69,7 +69,7 @@ export function paramSections(defs: ParamInfo[]): ParamSectionInfo[] {
   }));
 }
 
-function fieldFor(p: ParamInfo, drifting: Set<string>) {
+function fieldFor(p: ParamInfo) {
   const base = { id: p.id, path: p.id, label: p.name };
 
   if (p.taper === 'stepped') {
@@ -89,27 +89,18 @@ function fieldFor(p: ParamInfo, drifting: Set<string>) {
     };
   }
 
-  // A custom kind, so one row can carry both the slider and its drift toggle.
-  // facets looks renderers up by string and passes the whole field through,
-  // so the extra props ride along untouched.
+  // A custom kind, so the row can draw its value beside the label. facets
+  // looks renderers up by string and passes the whole field through, so the
+  // extra props ride along untouched.
   return {
     ...base,
     kind: 'param' as const,
     def: p,
-    drifting: drifting.has(p.id),
-    onDriftToggle: onDriftToggle,
   };
 }
 
-/** Set by `registerParamScope`, so the row component can reach the app. */
-let onDriftToggle: (id: string, on: boolean) => void = () => {};
-
 /** The schema for one section. Untitled: the section header carries the name. */
-export function buildSchema(
-  defs: ParamInfo[],
-  drifting: Set<string>,
-  section: string,
-): PropertySchema {
+export function buildSchema(defs: ParamInfo[], section: string): PropertySchema {
   const g = GROUPS.find((x) => x.id === section);
   return {
     version: 1,
@@ -119,7 +110,7 @@ export function buildSchema(
             id: g.id,
             rows: defs
               .filter((p) => p.id.startsWith(g.prefix) && p.id !== `${g.id}.on`)
-              .map((p) => fieldFor(p, drifting)),
+              .map((p) => fieldFor(p)),
           },
         ]
       : [],
@@ -130,18 +121,13 @@ export function buildSchema(
  * Register every section's scope. `selection` is the current values object;
  * `ctx` carries the definitions so read and write can apply the right taper.
  */
-export function registerParamScope(
-  defs: ParamInfo[],
-  drifting: Set<string>,
-  toggle: (id: string, on: boolean) => void,
-) {
+export function registerParamScope(defs: ParamInfo[]) {
   const byId = new Map(defs.map((d) => [d.id, d]));
-  onDriftToggle = toggle;
   registerFieldRenderer('param', ParamRow);
 
   for (const section of paramSections(defs)) {
     registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(section.id), {
-      schema: buildSchema(defs, drifting, section.id),
+      schema: buildSchema(defs, section.id),
 
       read: (values) => {
         const out: Record<string, unknown> = {};
