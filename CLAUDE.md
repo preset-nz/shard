@@ -39,6 +39,14 @@ All of `shard-dsp` ends up on the audio thread. Non-negotiable:
 - Anything that allocates (loading a sample) happens above, before the stream
   starts or across a queue.
 
+The first rule is enforced. `shard_dsp::rt::GuardedAlloc` counts allocator
+calls (frees included) inside the audio callback in debug builds, and the app
+shows the count beside its meters. `crates/shard-dsp/tests/audio_thread.rs`
+holds it at zero. **When you add something the callback calls, add it to that
+test.** Two traps it has already caught: a buffer dropped on the audio thread
+(hand it back instead), and a mutex's first lock, which allocates on macOS
+(lock every hand-off slot once before the stream starts).
+
 ## Parameters
 
 `params.rs` holds one flat table. **Ids are a wire format** — renaming one

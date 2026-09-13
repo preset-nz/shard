@@ -46,6 +46,15 @@ export interface Meters {
    * the button lights from.
    */
   reversing: boolean;
+  /** The slowest audio block since the last poll, in microseconds. */
+  block_us: number;
+  /** What the device allows for one block, in microseconds. Past it is a dropout. */
+  block_budget_us: number;
+  /**
+   * Allocator calls inside the audio callback since launch. Counted in debug
+   * builds only; a release build has no guard and always reports zero.
+   */
+  audio_allocs: number;
 }
 
 export interface SourceInfo {

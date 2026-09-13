@@ -11,17 +11,26 @@
 //! idea where the block boundary is. That is fine: triggers are meant to come
 //! from the Dark Time over MIDI, which arrives in this process.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 use shard_dsp::params::{index_of, Taper, Unit, PARAMS};
+use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::{Engine, GrainLog, GrainSpawn, ParamBank};
 
 mod drift;
 mod patch;
 mod source;
+
+/// Debug builds count every allocator call made inside the audio callback,
+/// and `meters` reports the running total. Release builds keep the plain
+/// system allocator and always report zero. See `shard_dsp::rt`.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 
 /// Shared between the UI thread, the drift thread and the audio thread.
 pub struct Audio {
@@ -50,6 +59,14 @@ pub struct Audio {
     /// can replace it. Swapping goes through the queue, never a lock on audio.
     source: Mutex<source::Loaded>,
     swap: Arc<Mutex<Option<Vec<f32>>>>,
+    /// A source buffer the audio thread swapped out and handed back, waiting
+    /// for `meters` to free it here rather than on the audio thread.
+    retired: Arc<Mutex<Option<Vec<f32>>>>,
+    /// The slowest block since `meters` last asked.
+    timer: Arc<BlockTimer>,
+    /// The audio-thread allocation count `meters` last logged, so a new one is
+    /// printed once rather than thirty times a second.
+    reported_allocs: AtomicU64,
     sample_rate: f32,
 }
 
@@ -89,6 +106,14 @@ pub struct Meters {
     /// Whether the tape is running backwards. Not the same as the reverse
     /// gate: a tap keeps this true for the flick time after you let go.
     pub reversing: bool,
+    /// The slowest audio block since the last poll, in microseconds.
+    pub block_us: u32,
+    /// What the device allows for one block, in microseconds. A block that
+    /// takes longer is a dropout.
+    pub block_budget_us: u32,
+    /// Allocator calls inside the audio callback since launch. Debug builds
+    /// only; a release build has no guard and reports zero.
+    pub audio_allocs: u64,
 }
 
 /// One logged grain, on its way to the UI. Mirrors `shard_dsp::GrainSpawn`,
@@ -170,7 +195,25 @@ fn set_param(state: tauri::State<'_, Audio>, id: String, value: f32) -> Result<(
 
 #[tauri::command]
 fn meters(state: tauri::State<'_, Audio>) -> Meters {
+    // Free whatever source buffer the audio thread retired since the last
+    // poll. Blocking here is fine; the audio thread only ever tries the lock.
+    if let Ok(mut slot) = state.retired.lock() {
+        drop(slot.take());
+    }
+
+    let audio_allocs = rt::violations();
+    let logged = state.reported_allocs.swap(audio_allocs, Ordering::Relaxed);
+    if audio_allocs > logged {
+        eprintln!(
+            "shard: the audio thread touched the allocator {} more time(s), {audio_allocs} since launch",
+            audio_allocs - logged
+        );
+    }
+
     Meters {
+        block_us: state.timer.take_worst_us(),
+        block_budget_us: state.timer.budget_us(),
+        audio_allocs,
         peak: f32::from_bits(state.peak.swap(0, Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
         drift: state.drift.master(),
@@ -384,6 +427,16 @@ fn build_audio() -> Result<Audio, String> {
     let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
     let auditioning = Arc::new(AtomicBool::new(false));
     let reversing = Arc::new(AtomicBool::new(false));
+    let retired: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
+    let timer = Arc::new(BlockTimer::new());
+
+    // Lock every slot the callback hands off through once, here. On macOS a
+    // mutex allocates on its first lock, and without this that first lock
+    // would land on the audio thread. `tests/audio_thread.rs` in shard-dsp
+    // holds the pattern.
+    drop(swap.lock());
+    drop(audition.lock());
+    drop(retired.lock());
 
     let audio_bank = Arc::clone(&bank);
     let audio_peak = Arc::clone(&peak);
@@ -395,6 +448,8 @@ fn build_audio() -> Result<Audio, String> {
     let audio_audition = Arc::clone(&audition);
     let audio_auditioning = Arc::clone(&auditioning);
     let audio_reversing = Arc::clone(&reversing);
+    let audio_retired = Arc::clone(&retired);
+    let audio_timer = Arc::clone(&timer);
 
     // The log is created by the engine, which only exists inside the audio
     // thread, so its handle comes back out alongside the sample rate.
@@ -418,72 +473,105 @@ fn build_audio() -> Result<Audio, String> {
                 engine.set_source(source::startup_drone(sample_rate).samples);
                 let log = engine.grain_log();
                 let mut scratch = vec![0.0f32; 8192];
+                // A swapped-out source, held until the UI side can take it.
+                let mut retiring: Option<Vec<f32>> = None;
 
                 let stream = device
                     .build_output_stream(
                         &config.into(),
                         move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
-                            // The only lock on this thread, and it never
-                            // blocks. If the UI holds it this block, the swap
-                            // happens on the next one.
-                            if let Ok(mut pending) = audio_swap.try_lock() {
-                                if let Some(buf) = pending.take() {
-                                    engine.set_source(buf);
-                                }
-                            }
-
-                            // The transport is a request the audio thread
-                            // honours at a block boundary, so a stop never
-                            // lands mid-grain.
-                            let want = audio_request.load(Ordering::Relaxed);
-                            if want != engine.playing() {
-                                engine.set_playing(want);
-                                audio_playing.store(want, Ordering::Relaxed);
-                            }
-
-                            // Same non-blocking hand-off as the sample swap.
-                            // A missed block just means the grain sounds one
-                            // buffer later, which nobody can perceive.
-                            if let Ok(mut pending) = audio_audition.try_lock() {
-                                if let Some(g) = pending.take() {
-                                    engine.audition(&g);
-                                }
-                            }
-
+                            let started = Instant::now();
                             let frames = out.len() / channels;
-                            let needed = frames * 2;
-                            if needed > scratch.len() {
-                                out.fill(0.0);
-                                return;
-                            }
-                            engine.process_block(&mut scratch[..needed], &audio_bank);
 
-                            for (i, frame) in out.chunks_mut(channels).enumerate() {
-                                let l = scratch[i * 2];
-                                let r = scratch[i * 2 + 1];
-                                match frame.len() {
-                                    0 => {}
-                                    1 => frame[0] = (l + r) * 0.5,
-                                    _ => {
-                                        frame[0] = l;
-                                        frame[1] = r;
-                                        for extra in &mut frame[2..] {
-                                            *extra = 0.0;
+                            // The whole block runs inside the guard. The flag
+                            // is set here, in the callback, because CoreAudio
+                            // calls this on its own thread rather than the one
+                            // that built the stream.
+                            rt::no_alloc(|| {
+                                // A retired source waits here until `meters`
+                                // collects it, and no new swap is taken while
+                                // one is waiting, so a buffer is never freed
+                                // on this thread.
+                                if let Some(old) = retiring.take() {
+                                    match audio_retired.try_lock() {
+                                        Ok(mut slot) if slot.is_none() => *slot = Some(old),
+                                        _ => retiring = Some(old),
+                                    }
+                                }
+
+                                // Locks on this thread are only ever tried,
+                                // never waited on. If the UI holds one this
+                                // block, the hand-off happens on the next.
+                                if retiring.is_none() {
+                                    if let Ok(mut pending) = audio_swap.try_lock() {
+                                        if let Some(buf) = pending.take() {
+                                            retiring = Some(engine.set_source(buf));
                                         }
                                     }
                                 }
-                            }
 
-                            // Hold the running maximum until the UI reads it,
-                            // so a peak between polls is never missed.
-                            let block_peak = engine.take_peak();
-                            let prev = f32::from_bits(audio_peak.load(Ordering::Relaxed));
-                            audio_peak.store(block_peak.max(prev).to_bits(), Ordering::Relaxed);
-                            audio_grains.store(engine.active_grains() as u32, Ordering::Relaxed);
-                            audio_playhead
-                                .store(engine.play_position().to_bits(), Ordering::Relaxed);
-                            audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
-                            audio_reversing.store(engine.reversing(), Ordering::Relaxed);
+                                // The transport is a request the audio thread
+                                // honours at a block boundary, so a stop never
+                                // lands mid-grain.
+                                let want = audio_request.load(Ordering::Relaxed);
+                                if want != engine.playing() {
+                                    engine.set_playing(want);
+                                    audio_playing.store(want, Ordering::Relaxed);
+                                }
+
+                                // Same non-blocking hand-off as the sample swap.
+                                // A missed block just means the grain sounds one
+                                // buffer later, which nobody can perceive.
+                                if let Ok(mut pending) = audio_audition.try_lock() {
+                                    if let Some(g) = pending.take() {
+                                        engine.audition(&g);
+                                    }
+                                }
+
+                                let needed = frames * 2;
+                                if needed > scratch.len() {
+                                    out.fill(0.0);
+                                    return;
+                                }
+                                engine.process_block(&mut scratch[..needed], &audio_bank);
+
+                                for (i, frame) in out.chunks_mut(channels).enumerate() {
+                                    let l = scratch[i * 2];
+                                    let r = scratch[i * 2 + 1];
+                                    match frame.len() {
+                                        0 => {}
+                                        1 => frame[0] = (l + r) * 0.5,
+                                        _ => {
+                                            frame[0] = l;
+                                            frame[1] = r;
+                                            for extra in &mut frame[2..] {
+                                                *extra = 0.0;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                // Hold the running maximum until the UI reads
+                                // it, so a peak between polls is never missed.
+                                let block_peak = engine.take_peak();
+                                let prev = f32::from_bits(audio_peak.load(Ordering::Relaxed));
+                                audio_peak.store(block_peak.max(prev).to_bits(), Ordering::Relaxed);
+                                audio_grains
+                                    .store(engine.active_grains() as u32, Ordering::Relaxed);
+                                audio_playhead
+                                    .store(engine.play_position().to_bits(), Ordering::Relaxed);
+                                audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
+                                audio_reversing.store(engine.reversing(), Ordering::Relaxed);
+                            });
+
+                            // Measured around everything, including the
+                            // hand-offs, because a dropout does not care which
+                            // part was slow. `Instant::now` is a clock read,
+                            // not a syscall, so it stays on in release too.
+                            audio_timer.record(
+                                started.elapsed(),
+                                Duration::from_secs_f64(frames as f64 / sample_rate as f64),
+                            );
                         },
                         |err| eprintln!("audio stream error: {err}"),
                         None,
@@ -531,6 +619,9 @@ fn build_audio() -> Result<Audio, String> {
         play_request,
         source: Mutex::new(source::startup_drone(sample_rate)),
         swap,
+        retired,
+        timer,
+        reported_allocs: AtomicU64::new(0),
         sample_rate,
     })
 }
@@ -605,6 +696,36 @@ mod tests {
         .expect("GrainInfo is serialisable");
         for key in ["position", "rate", "len", "pan", "window", "seq"] {
             assert!(grain.get(key).is_some(), "GrainInfo lost `{key}`");
+        }
+
+        let meters = serde_json::to_value(Meters {
+            peak: 0.0,
+            grains: 0,
+            drift: true,
+            drifting: vec![false],
+            playing: false,
+            playhead: 0.0,
+            auditioning: false,
+            reversing: false,
+            block_us: 0,
+            block_budget_us: 0,
+            audio_allocs: 0,
+        })
+        .expect("Meters is serialisable");
+        for key in [
+            "peak",
+            "grains",
+            "drift",
+            "drifting",
+            "playing",
+            "playhead",
+            "auditioning",
+            "reversing",
+            "block_us",
+            "block_budget_us",
+            "audio_allocs",
+        ] {
+            assert!(meters.get(key).is_some(), "Meters lost `{key}`");
         }
     }
 }

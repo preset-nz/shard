@@ -199,14 +199,19 @@ impl Engine {
         }
     }
 
-    /// Replace the source material. Allocates, so call it from the loader
-    /// thread before the stream starts, or hand the buffer across a queue.
-    /// Never from inside `process_block`.
-    pub fn set_source(&mut self, samples: Vec<f32>) {
-        self.source = samples;
+    /// Replace the source material and hand back the old buffer.
+    ///
+    /// Safe on the audio thread at a block boundary, because nothing here
+    /// touches the allocator: the new buffer arrives already built, and the
+    /// old one is returned rather than dropped. Freeing it takes the
+    /// allocator's lock just as building it did, so the caller passes it to a
+    /// thread that is allowed to block. Never from inside `process_block`.
+    pub fn set_source(&mut self, samples: Vec<f32>) -> Vec<f32> {
+        let old = std::mem::replace(&mut self.source, samples);
         self.granular.clear();
         self.auditioning = false;
         self.player.rewind();
+        old
     }
 
     /// The spawn log, for whatever wants to draw it. Cloning the handle is the

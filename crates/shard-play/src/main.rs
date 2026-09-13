@@ -16,7 +16,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::{Engine, ParamBank};
+
+/// Debug builds count allocator calls inside the audio callback and report
+/// them once a second. `just play` builds release, where this is absent; run
+/// `cargo run -p shard-play` to have it. See `shard_dsp::rt`.
+#[cfg(debug_assertions)]
+#[global_allocator]
+static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 
 /// Mono, at the engine's rate. Multi-channel files are summed.
 fn load_wav(path: &str, target_rate: f32) -> Result<Vec<f32>, String> {
@@ -192,34 +200,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // callback spreads it.
     let mut scratch = vec![0.0f32; 4096];
 
+    let timer = Arc::new(BlockTimer::new());
+    let audio_timer = Arc::clone(&timer);
+
     let stream = device.build_output_stream(
         &config.clone().into(),
         move |out: &mut [f32], _: &cpal::OutputCallbackInfo| {
+            let started = Instant::now();
             let frames = out.len() / channels;
-            let needed = frames * 2;
-            if scratch.len() < needed {
-                // Cannot grow here without allocating on the audio thread, so
-                // render what fits and leave the rest silent. With a 4096-slot
-                // scratch this never happens at any sane buffer size.
-                out.fill(0.0);
-                return;
-            }
-            engine.process_block(&mut scratch[..needed], &audio_bank);
-            for (i, frame) in out.chunks_mut(channels).enumerate() {
-                let l = scratch[i * 2];
-                let r = scratch[i * 2 + 1];
-                match frame.len() {
-                    0 => {}
-                    1 => frame[0] = (l + r) * 0.5,
-                    _ => {
-                        frame[0] = l;
-                        frame[1] = r;
-                        for extra in &mut frame[2..] {
-                            *extra = 0.0;
+            // Inside the guard, set here because the callback runs on the
+            // device's own thread.
+            rt::no_alloc(|| {
+                let needed = frames * 2;
+                if scratch.len() < needed {
+                    // Cannot grow here without allocating on the audio thread,
+                    // so render what fits and leave the rest silent. With a
+                    // 4096-slot scratch this never happens at any sane buffer
+                    // size.
+                    out.fill(0.0);
+                    return;
+                }
+                engine.process_block(&mut scratch[..needed], &audio_bank);
+                for (i, frame) in out.chunks_mut(channels).enumerate() {
+                    let l = scratch[i * 2];
+                    let r = scratch[i * 2 + 1];
+                    match frame.len() {
+                        0 => {}
+                        1 => frame[0] = (l + r) * 0.5,
+                        _ => {
+                            frame[0] = l;
+                            frame[1] = r;
+                            for extra in &mut frame[2..] {
+                                *extra = 0.0;
+                            }
                         }
                     }
                 }
-            }
+            });
+            audio_timer.record(
+                started.elapsed(),
+                Duration::from_secs_f64(frames as f64 / sample_rate as f64),
+            );
         },
         |err| eprintln!("audio stream error: {err}"),
         None,
@@ -244,6 +265,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ctrl_c_hook(move || flag.store(false, Ordering::Relaxed));
 
     let start = Instant::now();
+    let mut last_report = Instant::now();
     while running.load(Ordering::Relaxed) {
         if !still {
             let t = start.elapsed().as_secs_f32();
@@ -259,6 +281,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // on its own first, then bring it in and let it breathe.
             let ring = ((t - 8.0) / 12.0).clamp(0.0, 1.0);
             bank.set_by_id("ring.mix", ring * (0.25 + 0.45 * osc(0.023, 0.8)));
+        }
+        // Once a second, the slowest block since the last report. The average
+        // would flatter; the worst case is the one that drops out.
+        if last_report.elapsed() >= Duration::from_secs(1) {
+            last_report = Instant::now();
+            println!(
+                "  worst block {:.2} ms of {:.1} ms · {} audio-thread allocations",
+                timer.take_worst_us() as f32 / 1000.0,
+                timer.budget_us() as f32 / 1000.0,
+                rt::violations(),
+            );
         }
         std::thread::sleep(Duration::from_millis(16));
     }

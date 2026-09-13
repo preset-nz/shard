@@ -10,6 +10,10 @@
 //! - No allocation, no locks, no logging in anything called per sample.
 //! - Buffers are sized once, at construction.
 //! - Parameters arrive through an atomic bank and are read once per block.
+//!
+//! The first rule is enforced, not just written down: `rt` holds a guard
+//! allocator, and `tests/audio_thread.rs` runs every audio-thread call inside
+//! it.
 
 pub mod crush;
 pub mod engine;
@@ -20,6 +24,7 @@ pub mod params;
 pub mod player;
 pub mod ringmod;
 pub mod rng;
+pub mod rt;
 pub mod smooth;
 
 pub use crush::{Crush, CrushParams};

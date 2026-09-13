@@ -52,6 +52,9 @@ export default function App() {
     playhead: 0,
     auditioning: false,
     reversing: false,
+    block_us: 0,
+    block_budget_us: 0,
+    audio_allocs: 0,
   });
   /**
    * The grain scrollback. The Rust side drains — it hands over what has
@@ -76,6 +79,13 @@ export default function App() {
   const [envelope, setEnvelope] = useState<number[] | null>(null);
   const [patchName, setPatchName] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /**
+   * The slowest audio block, held for two seconds. Rust already holds the
+   * worst case between polls; this holds it long enough to read, because a
+   * spike shown for one 33 ms frame is a spike nobody sees.
+   */
+  const [blockWorst, setBlockWorst] = useState(0);
+  const worstRef = useRef({ us: 0, at: 0 });
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -121,6 +131,11 @@ export default function App() {
         const [m, v, fresh] = await Promise.all([readMeters(), getParams(), grainLog()]);
         if (!alive) return;
         setMeter(m);
+        const now = performance.now();
+        if (m.block_us >= worstRef.current.us || now - worstRef.current.at > 2000) {
+          worstRef.current = { us: m.block_us, at: now };
+          setBlockWorst(m.block_us);
+        }
         // Drain regardless of the freeze, or resuming would dump a backlog of
         // everything that happened while it was frozen. Frozen means "stop
         // adding to what I am looking at", not "stop the engine logging".
@@ -475,6 +490,26 @@ export default function App() {
               {((values['grain.density'] ?? 0) * (values['grain.size'] ?? 0) * 0.001).toFixed(1)}{' '}
               expected
             </span>
+            <span
+              title="The slowest audio block in the last two seconds, against the time the device allows for one. A block past its budget is a dropout."
+              className={
+                meter.block_budget_us > 0 && blockWorst > meter.block_budget_us * 0.75
+                  ? 'text-destructive'
+                  : undefined
+              }
+            >
+              {meter.block_budget_us > 0
+                ? `${(blockWorst / 1000).toFixed(2)} of ${(meter.block_budget_us / 1000).toFixed(1)} ms`
+                : '— ms'}
+            </span>
+            {meter.audio_allocs > 0 && (
+              <span
+                className="text-destructive"
+                title="Allocator calls inside the audio callback since launch. Each can cause a dropout. Counted in debug builds only."
+              >
+                {meter.audio_allocs} audio-thread allocations
+              </span>
+            )}
           </div>
 
           <p className="max-w-prose text-xs leading-relaxed text-muted-foreground">
