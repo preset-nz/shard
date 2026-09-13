@@ -111,7 +111,8 @@ fn render(source: Vec<f32>, sample_rate: f32, seconds: f32, out: &str) -> Result
     for id in ["grain.on", "ring.on"] {
         bank.set_by_id(id, 1.0);
     }
-    bank.set_by_id("grain.mix", 1.0);
+    // The cloud on its own, so the playground is heard as grains.
+    bank.set_by_id("material.on", 0.0);
 
     let spec = hound::WavSpec {
         channels: 2,
@@ -202,7 +203,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for id in ["grain.on", "ring.on"] {
         bank.set_by_id(id, 1.0);
     }
-    bank.set_by_id("grain.mix", 1.0);
+    // The cloud on its own, so the playground is heard as grains.
+    bank.set_by_id("material.on", 0.0);
     let audio_bank = Arc::clone(&bank);
 
     // Interleaved stereo scratch, sized once. The device may hand us a

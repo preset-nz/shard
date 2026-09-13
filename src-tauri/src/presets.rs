@@ -218,13 +218,13 @@ mod tests {
         // switch, or a value that no longer exists applies none of those, and
         // says so.
         let text =
-            r#"{"ring":{"odd":{"ring.mix":0.5,"ring.on":1.0,"grain.mix":1.0,"ring.gone":2.0}}}"#;
+            r#"{"ring":{"odd":{"ring.mix":0.5,"ring.on":1.0,"grain.gain":0.25,"ring.gone":2.0}}}"#;
         let p: Presets = serde_json::from_str(text).unwrap();
         let bank = ParamBank::new();
         let report = p.apply(&bank, "ring", "odd").unwrap();
         assert_eq!(report.applied, 1);
         assert_eq!(report.unknown.len(), 3);
         assert_eq!(bank.get_by_id("ring.on"), Some(0.0));
-        assert_eq!(bank.get_by_id("grain.mix"), Some(0.0));
+        assert_eq!(bank.get_by_id("grain.gain"), Some(1.0));
     }
 }

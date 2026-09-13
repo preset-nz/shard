@@ -109,12 +109,38 @@ impl ParamDef {
 /// crush mix, where neutral means "leave the knob alone". Same maths, opposite
 /// reading of the same number — see `Engine::process_block`.
 ///
-/// **Every effect follows one pattern** (Georg, 2026-09-13). Its switch is
-/// `<node>.on`, and the first row after it is `<node>.mix`, named "Mix". No
-/// row's name repeats its node's name, because the section header already
-/// says it: "Frequency", not "Ring freq". The panel draws rows in table order,
-/// so order here is layout. The tests at the bottom hold all of this.
+/// **Every switchable node follows one pattern, by role** (Georg, 2026-09-13).
+/// Its switch is `<node>.on`. A **generator** makes sound, and its first row
+/// after the switch is `<node>.gain`, named "Gain". An **effect** shapes
+/// sound, and its first row is `<node>.mix`, named "Mix". No row's name
+/// repeats its node's name, because the section header already says it:
+/// "Frequency", not "Ring freq". The panel draws rows in table order, so order
+/// here is layout. The tests at the bottom hold all of this.
 pub const PARAMS: &[ParamDef] = &[
+    // Generators make sound, effects shape it (Georg, 2026-09-13). The plain
+    // sample is one generator and the grain cloud is another; each has a
+    // switch and a Gain, and the two are summed into the effects. The plain
+    // sample starts on, so pressing play gives the material.
+    ParamDef {
+        id: "material.on",
+        name: "Material",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "material.gain",
+        name: "Gain",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
     // Material pre-conditions: how the source is read before anything shapes
     // it. Varispeed, so an octave up is twice as fast as well as twice as
     // high. Stepped, because an octave is the point; a glide is a different
@@ -154,9 +180,10 @@ pub const PARAMS: &[ParamDef] = &[
     // click, and a section that is off is bit-exact with its mix at zero. The
     // panel draws them in the section header, not as rows.
     //
-    // Effects start off (Georg, 2026-09-13). Pressing play gives the sample as
-    // it is, and switching a section on is the before and after. The envelope
-    // starts on, because its neutral shape is already transparent.
+    // Effects and the grain cloud start off (Georg, 2026-09-13). Pressing play
+    // gives the plain sample, and switching a section on is the before and
+    // after. The envelope starts on, because its neutral shape is already
+    // transparent.
     ParamDef {
         id: "grain.on",
         name: "Granular",
@@ -167,14 +194,15 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
-    // Formerly `mix.dry`, inverted: granular is an effect like the others, and
-    // this is its mix.
+    // The cloud's own level. Unity by default, so switching granular on is
+    // heard at once: a generator's neutral is unity, where an effect's mix is
+    // zero.
     ParamDef {
-        id: "grain.mix",
-        name: "Mix",
+        id: "grain.gain",
+        name: "Gain",
         min: 0.0,
-        max: 1.0,
-        default: 0.0,
+        max: 2.0,
+        default: 1.0,
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
@@ -515,6 +543,7 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Ms,
         smooth_ms: 0.0,
     },
+    // The master gain, after every generator and effect. Unity is bit-exact.
     ParamDef {
         id: "amp.gain",
         name: "Gain",
@@ -526,6 +555,10 @@ pub const PARAMS: &[ParamDef] = &[
         smooth_ms: 20.0,
     },
 ];
+
+/// The switchable nodes that make sound rather than shape it. They lead with
+/// Gain; every other switchable node is an effect and leads with Mix.
+pub const GENERATORS: &[&str] = &["material", "grain"];
 
 pub fn index_of(id: &str) -> Option<usize> {
     PARAMS.iter().position(|p| p.id == id)
@@ -722,10 +755,11 @@ mod tests {
     }
 
     #[test]
-    fn every_effect_leads_with_its_mix() {
-        // One pattern for every switchable node: its switch, then its mix as
-        // the first row the panel draws. The panel draws in table order, so
-        // this is a test of the table's order as much as of its names.
+    fn every_switchable_node_leads_with_its_level() {
+        // One pattern for every switchable node: its switch, then its level
+        // as the first row the panel draws. Gain for a generator, Mix for an
+        // effect. The panel draws in table order, so this is a test of the
+        // table's order as much as of its names.
         let switches: Vec<_> = PARAMS.iter().filter(|p| p.id.ends_with(".on")).collect();
         assert!(!switches.is_empty());
         for switch in switches {
@@ -735,12 +769,13 @@ mod tests {
                 .iter()
                 .find(|p| p.id.starts_with(&prefix) && p.id != switch.id)
                 .unwrap_or_else(|| panic!("{node} has a switch and nothing else"));
-            assert_eq!(
-                first.id,
-                format!("{node}.mix"),
-                "{node} must lead with its mix"
-            );
-            assert_eq!(first.name, "Mix", "{node}'s mix must be called Mix");
+            let (id, name) = if GENERATORS.contains(&node) {
+                (format!("{node}.gain"), "Gain")
+            } else {
+                (format!("{node}.mix"), "Mix")
+            };
+            assert_eq!(first.id, id, "{node} must lead with its {name}");
+            assert_eq!(first.name, name, "{node}'s first row must be called {name}");
         }
     }
 

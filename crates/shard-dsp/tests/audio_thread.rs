@@ -74,7 +74,7 @@ fn transport_and_audition_never_touch_the_allocator() {
     let bank = ParamBank::new();
     // Effects start off; run a real cloud so stopping has grains to clear.
     bank.set_by_id("grain.on", 1.0);
-    bank.set_by_id("grain.mix", 1.0);
+    bank.set_by_id("grain.gain", 1.0);
     let mut out = vec![0.0f32; 512];
     let spawn = GrainSpawn {
         position: 0.3,
@@ -135,7 +135,7 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
     for id in ["grain.on", "ring.on", "crush.on"] {
         bank.set_by_id(id, 1.0);
     }
-    bank.set_by_id("grain.mix", 1.0);
+    bank.set_by_id("grain.gain", 1.0);
     e.set_playing(true);
     drop(e.set_modulation(first));
 

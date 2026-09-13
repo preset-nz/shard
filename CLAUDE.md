@@ -55,12 +55,19 @@ taper is both a value mapping and a hint about what control to draw.
 
 Keep the table small. Do not add a parameter the DSP does not read.
 
-**Every effect follows one pattern.** Its switch is `<node>.on`, drawn in the
-section header. The first row after it is `<node>.mix`, named "Mix". No row's
-name repeats its node's name, because the header already says it. The panel
-draws rows in table order, so order in `params.rs` is layout. The tests
-`every_effect_leads_with_its_mix` and `no_parameter_repeats_its_node_name`
-hold this: a new effect that breaks the pattern fails `just check`.
+**Every switchable node follows one pattern, by role.**
+- Its switch is `<node>.on`, drawn in the section header.
+- A **generator** makes sound, and its first row after the switch is
+  `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
+  plain sample (`material`) and the cloud (`grain`). Generators are summed.
+- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".
+- `amp.gain` is the master gain, after everything.
+- No row's name repeats its node's name, because the header already says it.
+- The panel draws rows in table order, so order in `params.rs` is layout.
+
+The tests `every_switchable_node_leads_with_its_level` and
+`no_parameter_repeats_its_node_name` hold this, so a node that breaks the
+pattern fails `just check`.
 
 ## Testing
 
