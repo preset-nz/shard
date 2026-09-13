@@ -27,7 +27,13 @@ import { Meter } from '@/components/Meter';
 import { ParamSection } from '@/components/ParamSection';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
-import { type ParamValues, paramSections, registerParamScope, scopeKeyFor } from '@/scope';
+import {
+  type ParamValues,
+  paramSections,
+  registerParamScope,
+  scopeKeyFor,
+  sectionSwitchId,
+} from '@/scope';
 
 /**
  * How many spawns the inspector keeps.
@@ -180,6 +186,7 @@ export default function App() {
   // Polling it thirty times a second would be free but pointless; this way
   // the drawn curve is the one Rust computes, not a copy of the maths.
   const envKey = [
+    values['env.on'],
     values['env.amount'],
     values['env.attack'],
     values['env.decay'],
@@ -321,6 +328,18 @@ export default function App() {
     },
     [sections, setCollapsed],
   );
+
+  /** A section's bypass switch, if the table gives it one. */
+  const switchFor = (section: string) => {
+    const id = defs ? sectionSwitchId(defs, section) : null;
+    if (!id) return {};
+    return {
+      on: (values[id] ?? 1) >= 0.5,
+      onSwitch: (next: boolean) => {
+        void setParam(id, next ? 1 : 0);
+      },
+    };
+  };
 
   // Space for play/stop, the way every other audio tool does it. Ignored while
   // a control has focus, so arrow keys on a slider still work.
@@ -560,6 +579,7 @@ export default function App() {
                 label={s.label}
                 collapsed={collapsed.includes(s.id)}
                 onToggle={(all) => toggleSection(s.id, all)}
+                {...switchFor(s.id)}
               >
                 <PropertyPanel
                   key={schemaVersion}

@@ -52,6 +52,54 @@ impl Default for OnePole {
     }
 }
 
+/// A linear ramp that arrives.
+///
+/// Where `OnePole` approaches its target and never lands, this moves a fixed
+/// step per sample and then sits *exactly* on the target. That is what a
+/// bypass needs: a section switched off has to end at a literal zero, so the
+/// output is bit-exact with the section absent rather than merely close.
+#[derive(Debug, Clone, Copy)]
+pub struct Ramp {
+    value: f32,
+    step: f32,
+}
+
+impl Ramp {
+    /// Settled at `value`. Jumps instantly until `set_time` is called.
+    pub fn new(value: f32) -> Self {
+        Self {
+            value,
+            step: f32::INFINITY,
+        }
+    }
+
+    /// Milliseconds to travel a distance of one. Zero, or anything under a
+    /// sample, jumps.
+    pub fn set_time(&mut self, ms: f32, sample_rate: f32) {
+        let samples = ms * 0.001 * sample_rate;
+        self.step = if samples <= 1.0 {
+            f32::INFINITY
+        } else {
+            1.0 / samples
+        };
+    }
+
+    pub fn value(&self) -> f32 {
+        self.value
+    }
+
+    #[inline]
+    pub fn process(&mut self, target: f32) -> f32 {
+        let distance = target - self.value;
+        if distance.abs() <= self.step {
+            self.value = target;
+        } else {
+            self.value += self.step.copysign(distance);
+        }
+        self.value
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -110,5 +158,38 @@ mod tests {
             slow.process(1.0);
         }
         assert!(fast.value() > slow.value());
+    }
+
+    #[test]
+    fn a_ramp_lands_exactly_on_its_target_and_stays() {
+        // The property a bypass is built on: not "within epsilon", zero.
+        let mut r = Ramp::new(1.0);
+        r.set_time(10.0, 48_000.0);
+        let mut last = 1.0;
+        let mut landed_at = None;
+        for i in 0..2_000 {
+            let v = r.process(0.0);
+            assert!(v <= last, "must fall monotonically");
+            assert!(v >= 0.0, "must never overshoot");
+            if v == 0.0 && landed_at.is_none() {
+                landed_at = Some(i);
+            }
+            last = v;
+        }
+        let at = landed_at.expect("never reached an exact zero");
+        assert!(
+            (470..=490).contains(&at),
+            "10 ms at 48 kHz should take ~480 samples, took {at}"
+        );
+        assert_eq!(r.value(), 0.0);
+        assert!(r.process(1.0) > 0.0, "and it climbs back when asked");
+    }
+
+    #[test]
+    fn a_ramp_with_no_time_jumps() {
+        let mut r = Ramp::new(0.0);
+        r.set_time(0.0, 48_000.0);
+        assert_eq!(r.process(1.0), 1.0);
+        assert_eq!(r.process(0.25), 0.25);
     }
 }

@@ -25,7 +25,6 @@ const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
   // spirit, but its ids are a wire format, so it keeps its own section.
   { id: 'material', label: 'Material', prefix: 'material.' },
   { id: 'trim', label: 'Trim', prefix: 'trim.' },
-  { id: 'mix', label: 'Blend', prefix: 'mix.' },
   { id: 'grain', label: 'Granular', prefix: 'grain.' },
   { id: 'ring', label: 'Ring modulation', prefix: 'ring.' },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
@@ -51,6 +50,15 @@ export interface ParamSectionInfo {
 /** The facets scope key for one section. */
 export function scopeKeyFor(section: string): string {
   return `shard.params.${section}`;
+}
+
+/**
+ * A section's bypass switch, when the table has one: `grain.on` for Granular.
+ * Drawn in the section header rather than as a row.
+ */
+export function sectionSwitchId(defs: ParamInfo[], section: string): string | null {
+  const id = `${section}.on`;
+  return defs.some((p) => p.id === id) ? id : null;
 }
 
 /** The sections that actually have parameters, in panel order. */
@@ -109,7 +117,9 @@ export function buildSchema(
       ? [
           {
             id: g.id,
-            rows: defs.filter((p) => p.id.startsWith(g.prefix)).map((p) => fieldFor(p, drifting)),
+            rows: defs
+              .filter((p) => p.id.startsWith(g.prefix) && p.id !== `${g.id}.on`)
+              .map((p) => fieldFor(p, drifting)),
           },
         ]
       : [],

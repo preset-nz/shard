@@ -60,6 +60,16 @@ impl RingMod {
     pub fn process(&mut self, l: f32, r: f32, p: &RingModParams) -> (f32, f32) {
         let freq = self.freq.process(p.freq.clamp(0.0, 20_000.0));
         let mix = self.mix.process(p.mix.clamp(0.0, 1.0));
+        // Snap the last of a fade to a true zero. A one-pole only approaches
+        // its target, and a section switched off in the engine has to be
+        // bit-exact with no ring modulation at all, not a millionth of it. The
+        // step this leaves is under 2e-5 of the signal.
+        let mix = if p.mix <= 0.0 && mix < 1e-5 {
+            self.mix.reset(0.0);
+            0.0
+        } else {
+            mix
+        };
 
         let carrier = (core::f32::consts::TAU * self.phase).sin();
         self.phase += freq / self.sample_rate;
@@ -79,6 +89,30 @@ impl RingMod {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mix_faded_to_zero_ends_exactly_transparent() {
+        // The engine's section switch relies on this: the smoothed mix has to
+        // arrive at a true zero, or "off" leaves a trace of modulation behind.
+        let mut rm = RingMod::new(48_000.0);
+        let on = RingModParams {
+            mix: 1.0,
+            ..Default::default()
+        };
+        let off = RingModParams {
+            mix: 0.0,
+            ..Default::default()
+        };
+        for _ in 0..4_800 {
+            rm.process(0.5, 0.5, &on);
+        }
+        for _ in 0..48_000 {
+            rm.process(0.5, 0.5, &off);
+        }
+        for _ in 0..1_000 {
+            assert_eq!(rm.process(0.5, -0.25, &off), (0.5, -0.25));
+        }
+    }
 
     fn rms(v: &[f32]) -> f32 {
         (v.iter().map(|x| x * x).sum::<f32>() / v.len() as f32).sqrt()

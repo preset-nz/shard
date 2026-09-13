@@ -233,17 +233,44 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
-    // Defaults fully dry on purpose. Pressing play should give you the sample
-    // as it is, so every granular control has an audible before and after.
+    // Section switches, one per effect. Stepped, and never smoothed here: the
+    // engine fades each bypass itself over a fixed 10 ms, so a switch cannot
+    // click, and a section that is off is bit-exact with its mix at zero.
+    // Default on, so a patch saved before they existed loads unchanged. The
+    // panel draws them in the section header, not as rows.
     ParamDef {
-        id: "mix.dry",
-        name: "Dry / Granular",
+        id: "grain.on",
+        name: "Granular",
         min: 0.0,
         max: 1.0,
         default: 1.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    // No grains by default, on purpose. Pressing play should give you the
+    // sample as it is, so every granular control has an audible before and
+    // after. Formerly `mix.dry`, inverted: granular is an effect like the
+    // others, and this is its mix.
+    ParamDef {
+        id: "grain.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+    },
+    ParamDef {
+        id: "ring.on",
+        name: "Ring modulation",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
     },
     ParamDef {
         id: "ring.freq",
@@ -264,6 +291,16 @@ pub const PARAMS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "env.on",
+        name: "Envelope",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
     },
     ParamDef {
         id: "env.amount",
@@ -313,6 +350,16 @@ pub const PARAMS: &[ParamDef] = &[
         default: 0.0,
         taper: Taper::Linear,
         unit: Unit::Ms,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "crush.on",
+        name: "Crush",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
         smooth_ms: 0.0,
     },
     ParamDef {
