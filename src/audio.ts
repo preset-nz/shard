@@ -150,7 +150,10 @@ export function normalise(p: ParamInfo, v: number): number {
 
 /** How a value is shown. Time and frequency get coarser as they get bigger. */
 export function format(p: ParamInfo, v: number): string {
-  if (p.taper === 'stepped') return String(Math.round(v));
+  if (p.taper === 'stepped') {
+    const step = Math.round(v);
+    return p.unit === 'oct' ? `${step > 0 ? '+' : ''}${step} oct` : String(step);
+  }
   if (p.unit === '%') return `${Math.round(v * 100)}%`;
   if (p.unit === 'Hz') return v >= 100 ? `${Math.round(v)} Hz` : `${v.toFixed(1)} Hz`;
   if (p.unit === 'ms') return v >= 100 ? `${Math.round(v)} ms` : `${v.toFixed(1)} ms`;

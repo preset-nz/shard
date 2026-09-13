@@ -37,6 +37,7 @@ pub enum Unit {
     Hz,
     Semitones,
     Percent,
+    Octaves,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -108,6 +109,20 @@ impl ParamDef {
 /// crush mix, where neutral means "leave the knob alone". Same maths, opposite
 /// reading of the same number — see `Engine::process_block`.
 pub const PARAMS: &[ParamDef] = &[
+    // Material pre-conditions: how the source is read before anything shapes
+    // it. Varispeed, so an octave up is twice as fast as well as twice as
+    // high. Stepped, because an octave is the point; a glide is a different
+    // control.
+    ParamDef {
+        id: "material.octave",
+        name: "Octave",
+        min: -2.0,
+        max: 2.0,
+        default: 0.0,
+        taper: Taper::Stepped(5),
+        unit: Unit::Octaves,
+        smooth_ms: 0.0,
+    },
     ParamDef {
         id: "trim.start",
         name: "Trim start",
@@ -631,6 +646,23 @@ mod tests {
             assert!(*v >= 0.0 && *v <= 3.0);
         }
         assert!(seen.contains(&0.0) && seen.contains(&3.0));
+    }
+
+    #[test]
+    fn octave_steps_are_whole_octaves_centred_on_zero() {
+        // The first stepped range that does not start at zero, so the one
+        // that would expose index-for-value confusion anywhere downstream.
+        let o = &PARAMS[index_of("material.octave").unwrap()];
+        let seen: Vec<f32> = (0..=40).map(|i| o.denormalise(i as f32 / 40.0)).collect();
+        for want in [-2.0, -1.0, 0.0, 1.0, 2.0] {
+            assert!(seen.contains(&want), "never reached {want}");
+        }
+        assert!(seen.iter().all(|v| (v - v.round()).abs() < 1e-4));
+        assert_eq!(
+            o.denormalise(o.normalise(o.default)),
+            0.0,
+            "the default must survive a round trip"
+        );
     }
 
     #[test]

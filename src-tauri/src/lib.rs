@@ -173,6 +173,7 @@ fn param_defs() -> Vec<ParamInfo> {
                 Unit::Hz => "Hz",
                 Unit::Semitones => "st",
                 Unit::Percent => "%",
+                Unit::Octaves => "oct",
             },
             smooth_ms: p.smooth_ms,
         })

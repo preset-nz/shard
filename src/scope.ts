@@ -16,11 +16,14 @@
  * it. See `components/ParamSection.tsx`.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
-import { denormalise, normalise, type ParamInfo, setParam, WINDOW_NAMES } from '@/audio';
+import { denormalise, format, normalise, type ParamInfo, setParam, WINDOW_NAMES } from '@/audio';
 import { ParamRow } from '@/components/ParamRow';
 
 /** Which section a parameter belongs to, by id prefix. Order here is panel order. */
 const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
+  // How the source is read before anything shapes it. Trim belongs here in
+  // spirit, but its ids are a wire format, so it keeps its own section.
+  { id: 'material', label: 'Material', prefix: 'material.' },
   { id: 'trim', label: 'Trim', prefix: 'trim.' },
   { id: 'mix', label: 'Blend', prefix: 'mix.' },
   { id: 'grain', label: 'Granular', prefix: 'grain.' },
@@ -67,10 +70,14 @@ function fieldFor(p: ParamInfo, drifting: Set<string>) {
     return {
       ...base,
       kind: 'select' as const,
-      options: Array.from({ length: n }, (_, i) => ({
-        value: String(i),
-        label: names?.[i] ?? String(i),
-      })),
+      // Option values are the real stepped values, not indices. `read` hands
+      // facets the rounded real value, so an index only matched while every
+      // stepped range started at zero; octave runs from −2 to +2. Steps are
+      // assumed whole, which every stepped row in the table is.
+      options: Array.from({ length: n }, (_, i) => {
+        const real = Math.round(p.min + ((p.max - p.min) * i) / Math.max(1, n - 1));
+        return { value: String(real), label: names?.[i] ?? format(p, real) };
+      }),
     };
   }
 

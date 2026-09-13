@@ -27,6 +27,7 @@ struct Slots {
     pan: usize,
     reverse: usize,
     window: usize,
+    octave: usize,
     ring_freq: usize,
     ring_mix: usize,
     crush_bits: usize,
@@ -69,6 +70,7 @@ impl Slots {
             pan: at("grain.pan"),
             reverse: at("grain.reverse"),
             window: at("grain.window"),
+            octave: at("material.octave"),
             ring_freq: at("ring.freq"),
             ring_mix: at("ring.mix"),
             crush_bits: at("crush.bits"),
@@ -441,6 +443,20 @@ impl Engine {
             .speed
             .set_time(bank.get(self.slots.tape_time).max(0.0), self.sample_rate);
 
+        // Octave is a pre-condition on the material, not a property of the
+        // tape: it changes how fast the source is *read*, and nothing else.
+        // The player reads 2ⁿ faster and each grain is transposed by n octaves
+        // at spawn, but the grain scheduler and grain ageing stay on tape time
+        // — so density stays in hertz and a grain keeps its length, where a
+        // tape at double speed would throw twice as many half-length grains.
+        //
+        // Varispeed, so an octave up also halves the pass. The envelopes run
+        // on the player's position, so they follow the sample, not the clock:
+        // an attack drawn over the first bar of the waveform stays there.
+        let octave = bank.get(self.slots.octave).round().clamp(-2.0, 2.0);
+        let read_ratio = octave.exp2();
+        let octave_semis = 12.0 * octave;
+
         let (lo, hi) = self.trim_range(bank);
         // The cloud only sees the slice, so it has to be told where the slice
         // is before it logs a spawn — otherwise every drawn mark would sit at
@@ -456,7 +472,8 @@ impl Engine {
             p.jitter = self.smooth.jitter.process(target.jitter);
             p.size_ms = self.smooth.size.process(target.size_ms);
             p.density = self.smooth.density.process(target.density);
-            p.pitch = self.smooth.pitch.process(target.pitch);
+            // Added after smoothing: the octave is stepped and lands at once.
+            p.pitch = self.smooth.pitch.process(target.pitch) + octave_semis;
             p.pitch_spread = self.smooth.spread.process(target.pitch_spread);
             p.pan_spread = self.smooth.pan.process(target.pan_spread);
             p.gain = self.smooth.gain.process(target.gain);
@@ -464,7 +481,10 @@ impl Engine {
             p.speed = self.smooth.speed.process(speed_target);
 
             let dry_amount = self.smooth.dry.process(dry_target);
-            let dry = self.player.process(source, p.speed);
+            // The octave scales the read, never `p.speed` itself: the tape's
+            // level fade below reads speed alone, and an octave down must not
+            // sound like a reel slowing to a stop.
+            let dry = self.player.process(source, p.speed * read_ratio);
             let (gl, gr) = self.granular.process(source, &p);
 
             // Equal-power crossfade. A linear blend dips by 3 dB in the middle,
@@ -1274,6 +1294,77 @@ mod tests {
             slow > quick * 4.0,
             "a 3 s brake should still be running: {slow}"
         );
+    }
+
+    #[test]
+    fn an_octave_reads_the_material_at_twice_or_half_the_speed() {
+        // Varispeed: an octave up covers twice the ground per block, so the
+        // pass through the sample halves. Down is the reverse.
+        let step = |octave: f32| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(96_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "mix.dry", 1.0);
+            set(&bank, "material.octave", octave);
+            let mut out = vec![0.0; 512];
+            e.process_block(&mut out, &bank);
+            let start = e.play_position();
+            e.process_block(&mut out, &bank);
+            e.play_position() - start
+        };
+        let unity = step(0.0);
+        for (octave, ratio) in [(-2.0, 0.25), (-1.0, 0.5), (1.0, 2.0), (2.0, 4.0)] {
+            let s = step(octave);
+            assert!(
+                (s / unity - ratio).abs() < 1e-3,
+                "octave {octave}: step {s} against {unity}, wanted ×{ratio}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_octave_transposes_grains_without_changing_density() {
+        // The difference from the tape. An octave is read rate only: grains
+        // read 2ⁿ faster, but the scheduler throws exactly as many per second,
+        // so density stays in hertz whatever the octave.
+        let run = |octave: f32| {
+            let mut e = Engine::new(48_000.0, 256);
+            e.set_source(tone(96_000));
+            let log = e.grain_log();
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "mix.dry", 0.0);
+            set(&bank, "grain.density", 40.0);
+            set(&bank, "material.octave", octave);
+            let mut out = vec![0.0; 512];
+            // About a second.
+            for _ in 0..94 {
+                e.process_block(&mut out, &bank);
+            }
+            let mut spawns = Vec::new();
+            log.drain(&mut spawns);
+            spawns
+        };
+        let unity = run(0.0);
+        assert!(
+            unity.len() > 20,
+            "expected a cloud, got {} grains",
+            unity.len()
+        );
+        for octave in [-2.0f32, 2.0] {
+            let shifted = run(octave);
+            assert_eq!(
+                shifted.len(),
+                unity.len(),
+                "octave {octave} changed how many grains were thrown"
+            );
+            let want = octave.exp2();
+            assert!(
+                shifted.iter().all(|g| (g.rate - want).abs() < 1e-4),
+                "octave {octave}: every grain should read at ×{want}"
+            );
+        }
     }
 
     #[test]
