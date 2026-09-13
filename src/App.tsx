@@ -24,6 +24,7 @@ import {
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Meter } from '@/components/Meter';
+import { NodePresets } from '@/components/NodePresets';
 import { ParamSection } from '@/components/ParamSection';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
@@ -574,21 +575,28 @@ export default function App() {
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
           {defs ? (
             sections.map((s) => (
-              <ParamSection
+              <NodePresets
                 key={s.id}
+                node={s.id}
                 label={s.label}
-                collapsed={collapsed.includes(s.id)}
-                onToggle={(all) => toggleSection(s.id, all)}
-                {...switchFor(s.id)}
+                onError={setError}
+                onNote={setNote}
               >
-                <PropertyPanel
-                  key={schemaVersion}
-                  scopeKey={scopeKeyFor(s.id)}
-                  selection={values}
-                  ctx={{ defs }}
-                  emptyState={<p className="text-xs">No parameters.</p>}
-                />
-              </ParamSection>
+                <ParamSection
+                  label={s.label}
+                  collapsed={collapsed.includes(s.id)}
+                  onToggle={(all) => toggleSection(s.id, all)}
+                  {...switchFor(s.id)}
+                >
+                  <PropertyPanel
+                    key={schemaVersion}
+                    scopeKey={scopeKeyFor(s.id)}
+                    selection={values}
+                    ctx={{ defs }}
+                    emptyState={<p className="text-xs">No parameters.</p>}
+                  />
+                </ParamSection>
+              </NodePresets>
             ))
           ) : (
             <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>

@@ -23,6 +23,7 @@ use shard_dsp::{Engine, GrainLog, GrainSpawn, ParamBank};
 
 mod drift;
 mod patch;
+mod presets;
 mod source;
 
 /// Debug builds count every allocator call made inside the audio callback,
@@ -58,6 +59,9 @@ pub struct Audio {
     /// The loaded sample, kept so the UI can draw a waveform and so a reload
     /// can replace it. Swapping goes through the queue, never a lock on audio.
     source: Mutex<source::Loaded>,
+    /// Node presets for the open patch. Saved with it and replaced when
+    /// another patch loads; never touched by the audio thread.
+    presets: Mutex<presets::Presets>,
     swap: Arc<Mutex<Option<Vec<f32>>>>,
     /// A source buffer the audio thread swapped out and handed back, waiting
     /// for `meters` to free it here rather than on the audio thread.
@@ -303,7 +307,8 @@ fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String
         let s = state.source.lock().expect("source poisoned");
         s.path.clone()
     };
-    let p = patch::Patch::capture(&state.bank, &state.drift.snapshot(), sample);
+    let mut p = patch::Patch::capture(&state.bank, &state.drift.snapshot(), sample);
+    p.presets = state.presets.lock().expect("presets poisoned").clone();
     std::fs::write(&path, p.to_json()?).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -315,6 +320,8 @@ fn load_patch(state: tauri::State<'_, Audio>, path: String) -> Result<patch::Loa
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
     let p = patch::Patch::from_json(&text)?;
     let mut report = p.apply(&state.bank);
+    // Presets belong to the patch, so the loaded patch's set replaces the old.
+    *state.presets.lock().expect("presets poisoned") = p.presets.clone();
 
     for (i, def) in PARAMS.iter().enumerate() {
         state.drift.set(i, p.drifting.iter().any(|id| id == def.id));
@@ -333,6 +340,48 @@ fn load_patch(state: tauri::State<'_, Audio>, path: String) -> Result<patch::Loa
     }
 
     Ok(report)
+}
+
+/// The preset names saved for one node, such as `grain`, in the open patch.
+#[tauri::command]
+fn preset_names(state: tauri::State<'_, Audio>, node: String) -> Vec<String> {
+    state.presets.lock().expect("presets poisoned").names(&node)
+}
+
+/// Store a node's current values as a new preset. Refuses a name in use, so a
+/// preset is never overwritten by accident; that is what `update_preset` is for.
+#[tauri::command]
+fn save_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
+    state
+        .presets
+        .lock()
+        .expect("presets poisoned")
+        .save(&state.bank, &node, &name)
+}
+
+/// Overwrite an existing preset with the node's current values.
+#[tauri::command]
+fn update_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
+    state
+        .presets
+        .lock()
+        .expect("presets poisoned")
+        .update(&state.bank, &node, &name)
+}
+
+/// Write a preset's values into the bank. Smoothed parameters glide to their
+/// new values; the section's switch is left as it is.
+#[tauri::command]
+fn apply_preset(
+    state: tauri::State<'_, Audio>,
+    node: String,
+    name: String,
+) -> Result<presets::ApplyReport, String> {
+    state
+        .presets
+        .lock()
+        .expect("presets poisoned")
+        .apply(&state.bank, &node, &name)
 }
 
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
@@ -621,6 +670,7 @@ fn build_audio() -> Result<Audio, String> {
         playhead,
         play_request,
         source: Mutex::new(source::startup_drone(sample_rate)),
+        presets: Mutex::new(presets::Presets::default()),
         swap,
         retired,
         timer,
@@ -661,6 +711,10 @@ pub fn run() {
             load_sample,
             grain_log,
             audition_grain,
+            preset_names,
+            save_preset,
+            update_preset,
+            apply_preset,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -729,6 +783,12 @@ mod tests {
             "audio_allocs",
         ] {
             assert!(meters.get(key).is_some(), "Meters lost `{key}`");
+        }
+
+        let report = serde_json::to_value(presets::ApplyReport::default())
+            .expect("ApplyReport is serialisable");
+        for key in ["applied", "unknown"] {
+            assert!(report.get(key).is_some(), "ApplyReport lost `{key}`");
         }
     }
 }

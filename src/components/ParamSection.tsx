@@ -31,7 +31,9 @@ export function ParamSection({
   const isOn = on ?? true;
 
   return (
-    <section className="border-b border-border last:border-b-0">
+    // The divider between sections belongs to `NodePresets`, which wraps each
+    // section for its context menu.
+    <section>
       <div className="flex items-center pr-3">
         <button
           type="button"

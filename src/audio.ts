@@ -172,6 +172,21 @@ export interface LoadReport {
   sample_missing: boolean;
 }
 
+/** What applying a preset did. `unknown` lists values it could not apply. */
+export interface PresetReport {
+  applied: number;
+  unknown: string[];
+}
+
+/** Node presets live in the patch; `node` is a section id such as `grain`. */
+export const presetNames = (node: string) => invoke<string[]>('preset_names', { node });
+export const savePreset = (node: string, name: string) =>
+  invoke<void>('save_preset', { node, name });
+export const updatePreset = (node: string, name: string) =>
+  invoke<void>('update_preset', { node, name });
+export const applyPreset = (node: string, name: string) =>
+  invoke<PresetReport>('apply_preset', { node, name });
+
 export const savePatch = (path: string) => invoke<void>('save_patch', { path });
 export const loadPatch = (path: string) => invoke<LoadReport>('load_patch', { path });
 

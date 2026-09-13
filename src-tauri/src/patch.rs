@@ -20,6 +20,8 @@ use serde::{Deserialize, Serialize};
 use shard_dsp::params::PARAMS;
 use shard_dsp::ParamBank;
 
+use crate::presets::Presets;
+
 /// Bumped only for a change old builds cannot read. Adding parameters does
 /// not need it, because unknown and missing ids are both handled.
 pub const VERSION: u32 = 1;
@@ -36,6 +38,10 @@ pub struct Patch {
     /// samples live wherever they live.
     #[serde(default)]
     pub sample_path: Option<String>,
+    /// Node presets, by node and then by name. Document data, so they travel
+    /// with the patch. See `presets.rs`.
+    #[serde(default, skip_serializing_if = "Presets::is_empty")]
+    pub presets: Presets,
 }
 
 /// What happened on load. Surfaced rather than logged, because a patch that
@@ -68,6 +74,7 @@ impl Patch {
                 .map(|(_, p)| p.id.to_string())
                 .collect(),
             sample_path,
+            presets: Presets::default(),
         }
     }
 
@@ -215,6 +222,23 @@ mod tests {
         assert!(back.drifting.contains(&"grain.position".to_string()));
         assert!(back.drifting.contains(&"ring.freq".to_string()));
         assert_eq!(back.sample_path.as_deref(), Some("/tmp/x.wav"));
+    }
+
+    #[test]
+    fn presets_travel_with_the_patch() {
+        let bank = ParamBank::new();
+        let mut patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);
+        patch.presets.save(&bank, "grain", "cloud").unwrap();
+        let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
+        assert_eq!(back.presets, patch.presets);
+        assert_eq!(back.presets.names("grain"), vec!["cloud"]);
+    }
+
+    #[test]
+    fn a_patch_from_before_presets_still_loads() {
+        let text = r#"{"version":1,"params":{"grain.size":200.0}}"#;
+        let back = Patch::from_json(text).unwrap();
+        assert!(back.presets.is_empty());
     }
 
     #[test]
