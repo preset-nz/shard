@@ -149,6 +149,26 @@ pub struct SourceInfo {
     pub peaks: Vec<f32>,
 }
 
+/// The open patch's LFOs and links as the UI draws them, and what in them the
+/// engine could not use. Every modulation command answers with one, so the UI
+/// never draws a document older than its own last edit.
+#[derive(Serialize)]
+pub struct ModulationView {
+    pub lfos: Vec<modulation::LfoRecord>,
+    pub links: modulation::Links,
+    pub refused: Vec<modulation::Refused>,
+}
+
+impl ModulationView {
+    fn of(doc: &modulation::Modulation, refused: Vec<modulation::Refused>) -> Self {
+        Self {
+            lfos: doc.lfos.clone(),
+            links: doc.links.clone(),
+            refused,
+        }
+    }
+}
+
 #[tauri::command]
 fn param_defs() -> Vec<ParamInfo> {
     PARAMS
@@ -396,6 +416,60 @@ fn apply_preset(
     Ok(report)
 }
 
+// The modulation commands take only the modulation lock.
+
+/// The open patch's LFOs and links. Builds the set to find what is refused,
+/// but sends nothing: the audio thread already has it.
+#[tauri::command]
+fn modulation(state: tauri::State<'_, Audio>) -> ModulationView {
+    let doc = state.modulation.lock().expect("modulation poisoned");
+    ModulationView::of(&doc, doc.build().1)
+}
+
+/// Add an LFO. It is last in the answer's `lfos`.
+#[tauri::command]
+fn add_lfo(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| {
+        doc.add_lfo();
+        Ok(())
+    })
+}
+
+/// Remove an LFO. Parameters that followed it stay linked, and are reported.
+#[tauri::command]
+fn remove_lfo(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| doc.remove_lfo(id))
+}
+
+/// Change an LFO's name, rate, shape and phase. Running LFOs keep their place.
+#[tauri::command]
+fn set_lfo(
+    state: tauri::State<'_, Audio>,
+    lfo: modulation::LfoRecord,
+) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| doc.set_lfo(lfo))
+}
+
+/// Make a parameter follow an LFO, or change the depth it follows at.
+#[tauri::command]
+fn link_param(
+    state: tauri::State<'_, Audio>,
+    id: String,
+    lfo: u64,
+    depth: f32,
+) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| doc.link(&id, lfo, depth))
+}
+
+/// Stop a parameter following anything.
+#[tauri::command]
+fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| {
+        doc.unlink(&id);
+        Ok(())
+    })
+}
+
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
@@ -444,6 +518,19 @@ impl Audio {
         let (set, refused) = doc.build();
         *self.mod_swap.lock().expect("modulation swap poisoned") = Some(set);
         refused
+    }
+
+    /// Apply one edit to the open patch's LFOs and links, hand the rebuilt set
+    /// to the audio thread, and answer with what the UI should now draw. A
+    /// refused edit has changed nothing, so nothing is sent.
+    fn edit_modulation(
+        &self,
+        edit: impl FnOnce(&mut modulation::Modulation) -> Result<(), String>,
+    ) -> Result<ModulationView, String> {
+        let mut doc = self.modulation.lock().expect("modulation poisoned");
+        edit(&mut doc)?;
+        let refused = self.send_modulation(&doc);
+        Ok(ModulationView::of(&doc, refused))
     }
 
     /// The trimmed window in sample indices, mirroring the engine's own
@@ -740,6 +827,12 @@ pub fn run() {
             save_preset,
             update_preset,
             apply_preset,
+            modulation,
+            add_lfo,
+            remove_lfo,
+            set_lfo,
+            link_param,
+            unlink_param,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -832,6 +925,24 @@ mod tests {
         .expect("Refused is serialisable");
         for key in ["id", "reason"] {
             assert!(refused.get(key).is_some(), "Refused lost `{key}`");
+        }
+
+        let mut doc = modulation::Modulation::default();
+        let id = doc.add_lfo().id;
+        doc.link("grain.size", id, 0.5).unwrap();
+        let view = serde_json::to_value(ModulationView::of(&doc, Vec::new()))
+            .expect("ModulationView is serialisable");
+        for key in ["lfos", "links", "refused"] {
+            assert!(view.get(key).is_some(), "ModulationView lost `{key}`");
+        }
+        for key in ["id", "name", "rate", "shape", "phase"] {
+            assert!(view["lfos"][0].get(key).is_some(), "LfoRecord lost `{key}`");
+        }
+        for key in ["lfo", "depth"] {
+            assert!(
+                view["links"]["grain.size"].get(key).is_some(),
+                "LinkRecord lost `{key}`"
+            );
         }
     }
 }
