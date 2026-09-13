@@ -11,7 +11,7 @@ use std::hint::black_box;
 use std::sync::Mutex;
 
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
-use shard_dsp::{Engine, GrainSpawn, ParamBank, PARAMS};
+use shard_dsp::{Engine, GrainSpawn, LfoSpec, ModSet, ParamBank, Shape, Taper, PARAMS};
 
 #[global_allocator]
 static GUARD: GuardedAlloc = GuardedAlloc;
@@ -100,6 +100,68 @@ fn transport_and_audition_never_touch_the_allocator() {
         caught, 0,
         "play, stop and audition touched the allocator {caught} time(s)"
     );
+}
+
+#[test]
+fn modulation_and_swapping_its_set_never_touch_the_allocator() {
+    // Every continuous parameter follows an LFO, and the set is swapped for a
+    // smaller one and back mid-stream, as adding and removing LFOs will. The
+    // sets are built out here, off the audio thread, which is the point.
+    let specs: Vec<LfoSpec> = (0..8u64)
+        .map(|i| LfoSpec {
+            id: i + 1,
+            rate_hz: 0.5 + i as f32 * 2.3,
+            shape: Shape::ALL[i as usize % Shape::ALL.len()],
+            phase: i as f32 * 0.13,
+        })
+        .collect();
+    let build = |lfos: &[LfoSpec]| {
+        let mut set = ModSet::new(lfos);
+        for (i, p) in PARAMS
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !matches!(p.taper, Taper::Stepped(_)))
+        {
+            let depth = if i % 2 == 0 { 0.7 } else { -0.7 };
+            set.link(p.id, lfos[i % lfos.len()].id, depth).unwrap();
+        }
+        set
+    };
+    let (first, smaller, bigger) = (build(&specs), build(&specs[..3]), build(&specs));
+
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(96_000));
+    let bank = ParamBank::new();
+    for id in ["grain.on", "ring.on", "crush.on"] {
+        bank.set_by_id(id, 1.0);
+    }
+    bank.set_by_id("grain.mix", 1.0);
+    e.set_playing(true);
+    drop(e.set_modulation(first));
+
+    let mut out = vec![0.0f32; 512];
+    let mut run = |e: &mut Engine, from: usize| {
+        let ((), caught) = no_alloc(|| {
+            for block in from..from + 300 {
+                sweep(&bank, block);
+                e.process_block(&mut out, &bank);
+            }
+        });
+        assert_eq!(
+            caught, 0,
+            "modulated blocks touched the allocator {caught} time(s)"
+        );
+    };
+
+    run(&mut e, 0);
+    let (old, caught) = no_alloc(|| e.set_modulation(smaller));
+    assert_eq!(caught, 0, "swapping in a smaller set touched the allocator");
+    drop(old);
+    run(&mut e, 300);
+    let (old, caught) = no_alloc(|| e.set_modulation(bigger));
+    assert_eq!(caught, 0, "swapping in a bigger set touched the allocator");
+    drop(old);
+    run(&mut e, 600);
 }
 
 #[test]

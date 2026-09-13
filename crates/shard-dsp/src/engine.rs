@@ -10,6 +10,7 @@ use crate::crush::{Crush, CrushParams};
 use crate::envelope::EnvParams;
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
+use crate::modulation::ModSet;
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::ringmod::{RingMod, RingModParams};
@@ -176,6 +177,9 @@ pub struct Engine {
     slots: Slots,
     smooth: Smoothers,
     fades: Fades,
+    /// LFOs and links. Swapped in whole by `set_modulation`; read through by
+    /// every parameter the engine uses.
+    mods: ModSet,
     sample_rate: f32,
     peak: f32,
     trimmed_play_position: f32,
@@ -239,6 +243,7 @@ impl Engine {
             slots,
             smooth,
             fades,
+            mods: ModSet::empty(),
             sample_rate,
             peak: 0.0,
             trimmed_play_position: 0.0,
@@ -258,6 +263,17 @@ impl Engine {
         self.auditioning = false;
         self.player.rewind();
         old
+    }
+
+    /// Swap in a new set of LFOs and links, and hand back the old one.
+    ///
+    /// The same contract as `set_source`: built on the command thread, swapped
+    /// at a block boundary, and the old set dropped anywhere but here. LFOs in
+    /// both sets keep running, matched by id, so adding an LFO or changing a
+    /// rate never restarts the others.
+    pub fn set_modulation(&mut self, mut next: ModSet) -> ModSet {
+        next.inherit(&self.mods);
+        std::mem::replace(&mut self.mods, next)
     }
 
     /// The spawn log, for whatever wants to draw it. Cloning the handle is the
@@ -322,6 +338,7 @@ impl Engine {
     /// modulator and the amplitude envelope: the question an audition answers
     /// is what the *grain* sounded like, not what the patch did to it.
     fn render_audition(&mut self, out: &mut [f32], bank: &ParamBank) {
+        // The grain as it was, so the hand's gain, unmodulated.
         let gain = bank.get(self.slots.gain);
         // Split the borrows by field so the grain pool can be advanced while
         // the source is read.
@@ -374,8 +391,8 @@ impl Engine {
         if n < 2 {
             return (0, n);
         }
-        let a = bank.get(self.slots.trim_start).clamp(0.0, 1.0);
-        let b = bank.get(self.slots.trim_end).clamp(0.0, 1.0);
+        let a = read(&self.mods, bank, self.slots.trim_start).clamp(0.0, 1.0);
+        let b = read(&self.mods, bank, self.slots.trim_end).clamp(0.0, 1.0);
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let lo = ((a * n as f32) as usize).min(n - 2);
         let hi = ((b * n as f32) as usize).clamp(lo + 2, n);
@@ -409,30 +426,35 @@ impl Engine {
 
     /// Render interleaved stereo into `out`, which must have an even length.
     pub fn process_block(&mut self, out: &mut [f32], bank: &ParamBank) {
+        // LFOs move with the transport, and once per block, before anything
+        // below reads a parameter through them.
+        if self.playing {
+            self.mods.advance(out.len() / 2, self.sample_rate);
+        }
         // Read the bank once per block, not once per sample. The smoothers
         // handle the step between blocks.
         let target = GrainParams {
-            position: bank.get(self.slots.position),
-            jitter: bank.get(self.slots.jitter),
-            size_ms: bank.get(self.slots.size),
-            density: bank.get(self.slots.density),
-            pitch: bank.get(self.slots.pitch),
-            pitch_spread: bank.get(self.slots.spread),
-            pan_spread: bank.get(self.slots.pan),
-            reverse: bank.get(self.slots.reverse),
-            window: window_from(bank.get(self.slots.window)),
-            gain: bank.get(self.slots.gain),
+            position: read(&self.mods, bank, self.slots.position),
+            jitter: read(&self.mods, bank, self.slots.jitter),
+            size_ms: read(&self.mods, bank, self.slots.size),
+            density: read(&self.mods, bank, self.slots.density),
+            pitch: read(&self.mods, bank, self.slots.pitch),
+            pitch_spread: read(&self.mods, bank, self.slots.spread),
+            pan_spread: read(&self.mods, bank, self.slots.pan),
+            reverse: read(&self.mods, bank, self.slots.reverse),
+            window: window_from(read(&self.mods, bank, self.slots.window)),
+            gain: read(&self.mods, bank, self.slots.gain),
             // Set per sample below; this is only the struct's starting shape.
             speed: 1.0,
         };
         let ring = RingModParams {
-            freq: bank.get(self.slots.ring_freq),
-            mix: bank.get(self.slots.ring_mix),
+            freq: read(&self.mods, bank, self.slots.ring_freq),
+            mix: read(&self.mods, bank, self.slots.ring_mix),
         };
         // Bits and rate are read once per block; the mix is rebuilt per sample
         // below, because the crush envelope moves it.
-        let crush_bits = bank.get(self.slots.crush_bits);
-        let crush_rate = bank.get(self.slots.crush_rate);
+        let crush_bits = read(&self.mods, bank, self.slots.crush_bits);
+        let crush_rate = read(&self.mods, bank, self.slots.crush_rate);
 
         if !self.playing {
             if self.auditioning {
@@ -443,7 +465,7 @@ impl Engine {
             return;
         }
 
-        let grain_mix_target = bank.get(self.slots.grain_mix);
+        let grain_mix_target = read(&self.mods, bank, self.slots.grain_mix);
         // Section switches, read as gates. Each one fades its section's mix
         // rather than cutting it.
         let gate = |slot: usize| if bank.get(slot) >= 0.5 { 1.0 } else { 0.0 };
@@ -452,18 +474,18 @@ impl Engine {
         let ring_on_target = gate(self.slots.ring_on);
         let env_on_target = gate(self.slots.env_on);
         let env = EnvParams {
-            amount: bank.get(self.slots.env_mix),
-            attack_ms: bank.get(self.slots.env_attack),
-            decay_ms: bank.get(self.slots.env_decay),
-            sustain: bank.get(self.slots.env_sustain),
-            release_ms: bank.get(self.slots.env_release),
+            amount: read(&self.mods, bank, self.slots.env_mix),
+            attack_ms: read(&self.mods, bank, self.slots.env_attack),
+            decay_ms: read(&self.mods, bank, self.slots.env_decay),
+            sustain: read(&self.mods, bank, self.slots.env_sustain),
+            release_ms: read(&self.mods, bank, self.slots.env_release),
         };
 
         // Trim is applied by slicing the source, so nothing downstream knows
         // it exists. `position` and the player both address the window, not
         // the file, which is what makes trimming a long sample feel like
         // loading a short one.
-        let crush_mix_target = bank.get(self.slots.crush_mix);
+        let crush_mix_target = read(&self.mods, bank, self.slots.crush_mix);
         // The crush envelope reads the same clock as the amplitude one, so the
         // two stay in step, but it means something different. The amplitude
         // envelope multiplies the *signal*, where one is transparent; this one
@@ -471,11 +493,11 @@ impl Engine {
         // An attack is therefore "starts clean, then crushes", and a release
         // is the same gesture backwards.
         let crush_env = EnvParams {
-            amount: bank.get(self.slots.crush_env_amount),
-            attack_ms: bank.get(self.slots.crush_env_attack),
-            decay_ms: bank.get(self.slots.crush_env_decay),
-            sustain: bank.get(self.slots.crush_env_sustain),
-            release_ms: bank.get(self.slots.crush_env_release),
+            amount: read(&self.mods, bank, self.slots.crush_env_amount),
+            attack_ms: read(&self.mods, bank, self.slots.crush_env_attack),
+            decay_ms: read(&self.mods, bank, self.slots.crush_env_decay),
+            sustain: read(&self.mods, bank, self.slots.crush_env_sustain),
+            release_ms: read(&self.mods, bank, self.slots.crush_env_release),
         };
 
         // The tape. Brake and reverse are two ways of asking for a speed, and
@@ -483,16 +505,17 @@ impl Engine {
         // climbs back the other way, exactly as a reel does. An instant flip
         // would be one branch here, and would not sound like tape.
         self.resolve_reverse(
-            bank.get(self.slots.tape_reverse) >= 0.5,
-            bank.get(self.slots.tape_flick).max(0.0) * 0.001 * self.sample_rate,
+            read(&self.mods, bank, self.slots.tape_reverse) >= 0.5,
+            read(&self.mods, bank, self.slots.tape_flick).max(0.0) * 0.001 * self.sample_rate,
             (out.len() / 2) as f32,
         );
         let direction = if self.reversing { -1.0 } else { 1.0 };
-        let brake = bank.get(self.slots.tape_brake).clamp(0.0, 1.0);
+        let brake = read(&self.mods, bank, self.slots.tape_brake).clamp(0.0, 1.0);
         let speed_target = direction * (1.0 - brake);
-        self.smooth
-            .speed
-            .set_time(bank.get(self.slots.tape_time).max(0.0), self.sample_rate);
+        self.smooth.speed.set_time(
+            read(&self.mods, bank, self.slots.tape_time).max(0.0),
+            self.sample_rate,
+        );
 
         // Octave is a pre-condition on the material, not a property of the
         // tape: it changes how fast the source is *read*, and nothing else.
@@ -504,7 +527,9 @@ impl Engine {
         // Varispeed, so an octave up also halves the pass. The envelopes run
         // on the player's position, so they follow the sample, not the clock:
         // an attack drawn over the first bar of the waveform stays there.
-        let octave = bank.get(self.slots.octave).round().clamp(-2.0, 2.0);
+        let octave = read(&self.mods, bank, self.slots.octave)
+            .round()
+            .clamp(-2.0, 2.0);
         let read_ratio = octave.exp2();
         let octave_semis = 12.0 * octave;
 
@@ -641,6 +666,13 @@ fn tape_gain(speed: f32) -> f32 {
     } else {
         s / TAPE_KNEE
     }
+}
+
+/// A parameter as the engine should hear it: the hand's value from the bank,
+/// bent by its link to an LFO if it has one. The bank itself is never written.
+#[inline]
+fn read(mods: &ModSet, bank: &ParamBank, slot: usize) -> f32 {
+    mods.apply(slot, bank.get(slot))
 }
 
 fn window_from(v: f32) -> Window {
@@ -1598,6 +1630,143 @@ mod tests {
                 "octave {octave}: every grain should read at ×{want}"
             );
         }
+    }
+
+    fn lfo(id: u64, rate_hz: f32, shape: crate::modulation::Shape) -> crate::modulation::LfoSpec {
+        crate::modulation::LfoSpec {
+            id,
+            rate_hz,
+            shape,
+            phase: 0.0,
+        }
+    }
+
+    #[test]
+    fn a_linked_parameter_moves_and_the_bank_keeps_the_hands_value() {
+        use crate::modulation::Shape;
+        // Watched through the grain log, which records each grain's length as
+        // it was asked for. Unlinked, every grain is the same length; linked to
+        // a square LFO, the lengths split between two sizes.
+        let lengths = |linked: bool| {
+            let mut e = Engine::new(48_000.0, 256);
+            e.set_source(tone(48_000));
+            let log = e.grain_log();
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "grain.on", 1.0);
+            set(&bank, "grain.mix", 1.0);
+            set(&bank, "grain.size", 100.0);
+            if linked {
+                let mut mods = ModSet::new(&[lfo(1, 2.0, Shape::Square)]);
+                mods.link("grain.size", 1, 0.3).unwrap();
+                drop(e.set_modulation(mods));
+            }
+            let mut out = vec![0.0; 512];
+            let mut spawns = Vec::new();
+            for block in 0..400 {
+                e.process_block(&mut out, &bank);
+                // Let the size smoother settle from its default before counting.
+                if block == 40 {
+                    log.drain(&mut spawns);
+                    spawns.clear();
+                }
+            }
+            log.drain(&mut spawns);
+            assert_eq!(
+                bank.get_by_id("grain.size"),
+                Some(100.0),
+                "modulation wrote the bank"
+            );
+            assert!(spawns.len() > 20, "expected a cloud, got {}", spawns.len());
+            let lo = spawns.iter().map(|g| g.len).fold(f32::MAX, f32::min);
+            let hi = spawns.iter().map(|g| g.len).fold(0.0f32, f32::max);
+            (lo, hi)
+        };
+        let (steady_lo, steady_hi) = lengths(false);
+        let (lo, hi) = lengths(true);
+        assert!(
+            // The smoother is still creeping towards 100 ms by a sample or so;
+            // one percent is "did not move" next to a fourfold split.
+            steady_hi - steady_lo < steady_lo * 0.01,
+            "unlinked grain size moved: {steady_lo}..{steady_hi} samples"
+        );
+        assert!(
+            hi > lo * 4.0,
+            "the link did not move grain size: {lo}..{hi} samples"
+        );
+    }
+
+    #[test]
+    fn an_unlinked_modulation_set_is_bit_exact_with_none() {
+        // LFOs that nothing follows must not change a single sample.
+        let render = |with_lfos: bool| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            for (id, v) in [
+                ("grain.on", 1.0),
+                ("grain.mix", 0.5),
+                ("ring.on", 1.0),
+                ("ring.mix", 0.3),
+            ] {
+                set(&bank, id, v);
+            }
+            if with_lfos {
+                let specs: Vec<_> = crate::modulation::Shape::ALL
+                    .iter()
+                    .enumerate()
+                    .map(|(i, s)| lfo(i as u64 + 1, 3.0, *s))
+                    .collect();
+                drop(e.set_modulation(ModSet::new(&specs)));
+            }
+            let mut out = vec![0.0; 512];
+            let mut all = Vec::new();
+            for _ in 0..200 {
+                e.process_block(&mut out, &bank);
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        assert!(render(false) == render(true));
+    }
+
+    #[test]
+    fn a_square_lfo_does_not_step_a_smoothed_parameter() {
+        // Modulation lands before smoothing, so even a square wave on the ring
+        // mix arrives as a glide. A mix that jumped would move the output by up
+        // to twice the signal each time the square flips.
+        let worst_step = |linked: bool| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "ring.on", 1.0);
+            set(&bank, "ring.mix", 0.5);
+            if linked {
+                let mut mods = ModSet::new(&[lfo(1, 5.0, crate::modulation::Shape::Square)]);
+                mods.link("ring.mix", 1, 0.5).unwrap();
+                drop(e.set_modulation(mods));
+            }
+            let mut out = vec![0.0; 256];
+            let (mut prev, mut worst) = (0.0f32, 0.0f32);
+            for block in 0..400 {
+                e.process_block(&mut out, &bank);
+                for s in out.iter().step_by(2) {
+                    if block > 20 {
+                        worst = worst.max((s - prev).abs());
+                    }
+                    prev = *s;
+                }
+            }
+            worst
+        };
+        let steady = worst_step(false);
+        let moving = worst_step(true);
+        assert!(
+            moving < steady * 2.0 + 0.02,
+            "a square LFO stepped the ring mix: {moving} against a steady {steady}"
+        );
     }
 
     #[test]
