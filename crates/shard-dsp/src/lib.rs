@@ -33,7 +33,7 @@ pub use engine::Engine;
 pub use envelope::EnvParams;
 pub use granular::{GrainParams, Granular, Window};
 pub use inspect::{GrainLog, GrainSpawn};
-pub use modulation::{LfoSpec, LinkError, ModSet, Shape};
+pub use modulation::{Curve, Ease, LfoSpec, LinkError, ModSet, Shape};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;
 pub use ringmod::{RingMod, RingModParams};

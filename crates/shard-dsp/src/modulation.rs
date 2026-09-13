@@ -34,16 +34,117 @@ pub enum Shape {
     /// A new random point once per cycle, eased into with a raised cosine, so
     /// it wanders without corners. The movement drift used to give.
     SmoothRandom,
+    /// Rises from -1 to 1 along an easing curve, then falls back along the
+    /// same curve: a triangle whose ramps have character. Continuous at both
+    /// turns, because every easing starts at 0 and ends at 1.
+    Eased(Curve, Ease),
 }
 
 impl Shape {
-    pub const ALL: [Shape; 5] = [
+    pub const ALL: [Shape; 20] = [
         Shape::Sine,
         Shape::Triangle,
         Shape::Saw,
         Shape::Square,
         Shape::SmoothRandom,
+        Shape::Eased(Curve::Quad, Ease::In),
+        Shape::Eased(Curve::Quad, Ease::Out),
+        Shape::Eased(Curve::Quad, Ease::InOut),
+        Shape::Eased(Curve::Cubic, Ease::In),
+        Shape::Eased(Curve::Cubic, Ease::Out),
+        Shape::Eased(Curve::Cubic, Ease::InOut),
+        Shape::Eased(Curve::Expo, Ease::In),
+        Shape::Eased(Curve::Expo, Ease::Out),
+        Shape::Eased(Curve::Expo, Ease::InOut),
+        Shape::Eased(Curve::Elastic, Ease::In),
+        Shape::Eased(Curve::Elastic, Ease::Out),
+        Shape::Eased(Curve::Elastic, Ease::InOut),
+        Shape::Eased(Curve::Bounce, Ease::In),
+        Shape::Eased(Curve::Bounce, Ease::Out),
+        Shape::Eased(Curve::Bounce, Ease::InOut),
     ];
+}
+
+/// An easing family, after Robert Penner's easing equations (BSD-licensed;
+/// reimplemented here from their definitions, which are only arithmetic).
+/// Georg, 2026-09-13: a handful, not the full set.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Curve {
+    Quad,
+    Cubic,
+    Expo,
+    /// Overshoots past both ends before settling. The LFO clamps it, so the
+    /// overshoot reads as a flattened wobble at the peaks.
+    Elastic,
+    Bounce,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ease {
+    In,
+    Out,
+    InOut,
+}
+
+/// Ease `t`, from 0 to 1, along a curve. Starts at 0 and ends at 1 for every
+/// curve and mode; elastic leaves that range in between.
+///
+/// Out and in-out are derived from in, rather than written out per family,
+/// so all fifteen combinations share one definition of each curve.
+pub fn ease(curve: Curve, mode: Ease, t: f32) -> f32 {
+    let t = t.clamp(0.0, 1.0);
+    match mode {
+        Ease::In => ease_in(curve, t),
+        Ease::Out => 1.0 - ease_in(curve, 1.0 - t),
+        Ease::InOut => {
+            if t < 0.5 {
+                0.5 * ease_in(curve, 2.0 * t)
+            } else {
+                1.0 - 0.5 * ease_in(curve, 2.0 - 2.0 * t)
+            }
+        }
+    }
+}
+
+fn ease_in(curve: Curve, t: f32) -> f32 {
+    match curve {
+        Curve::Quad => t * t,
+        Curve::Cubic => t * t * t,
+        // Penner's expo never quite reaches zero, so zero is pinned.
+        Curve::Expo => {
+            if t <= 0.0 {
+                0.0
+            } else {
+                2.0f32.powf(10.0 * (t - 1.0))
+            }
+        }
+        Curve::Elastic => {
+            if t <= 0.0 || t >= 1.0 {
+                t
+            } else {
+                let c4 = core::f32::consts::TAU / 3.0;
+                -(2.0f32.powf(10.0 * t - 10.0)) * ((10.0 * t - 10.75) * c4).sin()
+            }
+        }
+        Curve::Bounce => 1.0 - bounce_out(1.0 - t),
+    }
+}
+
+fn bounce_out(t: f32) -> f32 {
+    const N: f32 = 7.5625;
+    const D: f32 = 2.75;
+    if t < 1.0 / D {
+        N * t * t
+    } else if t < 2.0 / D {
+        let t = t - 1.5 / D;
+        N * t * t + 0.75
+    } else if t < 2.5 / D {
+        let t = t - 2.25 / D;
+        N * t * t + 0.9375
+    } else {
+        let t = t - 2.625 / D;
+        N * t * t + 0.984375
+    }
 }
 
 /// An LFO as the document describes it.
@@ -110,8 +211,16 @@ impl Lfo {
                 }
             }
             Shape::SmoothRandom => {
-                let ease = 0.5 - 0.5 * (core::f32::consts::PI * self.cycle).cos();
-                self.from + (self.to - self.from) * ease
+                let t = 0.5 - 0.5 * (core::f32::consts::PI * self.cycle).cos();
+                self.from + (self.to - self.from) * t
+            }
+            Shape::Eased(curve, mode) => {
+                let v = if p < 0.5 {
+                    -1.0 + 2.0 * ease(curve, mode, 2.0 * p)
+                } else {
+                    1.0 - 2.0 * ease(curve, mode, 2.0 * p - 1.0)
+                };
+                v.clamp(-1.0, 1.0)
             }
         }
     }
@@ -422,6 +531,66 @@ mod tests {
                 );
             }
             prev = Some(v);
+        }
+    }
+
+    #[test]
+    fn every_easing_starts_at_zero_and_ends_at_one() {
+        // What makes an eased LFO continuous at both turns.
+        for curve in [
+            Curve::Quad,
+            Curve::Cubic,
+            Curve::Expo,
+            Curve::Elastic,
+            Curve::Bounce,
+        ] {
+            for mode in [Ease::In, Ease::Out, Ease::InOut] {
+                let (start, end) = (ease(curve, mode, 0.0), ease(curve, mode, 1.0));
+                assert!(start.abs() < 1e-3, "{curve:?} {mode:?} starts at {start}");
+                assert!((end - 1.0).abs() < 1e-3, "{curve:?} {mode:?} ends at {end}");
+            }
+        }
+    }
+
+    #[test]
+    fn in_out_is_symmetric_about_its_middle() {
+        for curve in [
+            Curve::Quad,
+            Curve::Cubic,
+            Curve::Expo,
+            Curve::Elastic,
+            Curve::Bounce,
+        ] {
+            for i in 0..=20 {
+                let t = i as f32 / 20.0;
+                let sum = ease(curve, Ease::InOut, t) + ease(curve, Ease::InOut, 1.0 - t);
+                assert!((sum - 1.0).abs() < 1e-4, "{curve:?} at {t}: {sum}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_eased_lfo_turns_without_a_jump() {
+        // At the turn from rising to falling, and at the wrap, the eased
+        // triangle meets itself. A slow rate makes any jump stand out against
+        // the tiny per-block movement either side of it.
+        for curve in [Curve::Quad, Curve::Cubic, Curve::Bounce] {
+            for mode in [Ease::In, Ease::Out, Ease::InOut] {
+                let mut set = ModSet::new(&[spec(1, 0.5, Shape::Eased(curve, mode))]);
+                let mut prev: Option<f32> = None;
+                for _ in 0..(SR as usize * 8 / BLOCK) {
+                    set.advance(BLOCK, SR);
+                    let v = set.lfo_value(1).unwrap();
+                    if let Some(p) = prev {
+                        assert!(
+                            (v - p).abs() < 0.25,
+                            "{curve:?} {mode:?} jumped by {}",
+                            (v - p).abs()
+                        );
+                    }
+                    prev = Some(v);
+                }
+            }
         }
     }
 }
