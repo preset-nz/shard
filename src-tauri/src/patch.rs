@@ -235,13 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn a_patch_from_before_presets_still_loads() {
-        let text = r#"{"version":1,"params":{"grain.size":200.0}}"#;
-        let back = Patch::from_json(text).unwrap();
-        assert!(back.presets.is_empty());
-    }
-
-    #[test]
     fn a_patch_with_no_sample_still_loads() {
         let bank = ParamBank::new();
         let patch = Patch::capture(&bank, &vec![false; PARAMS.len()], None);

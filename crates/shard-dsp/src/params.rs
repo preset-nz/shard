@@ -156,8 +156,7 @@ pub const PARAMS: &[ParamDef] = &[
     //
     // Effects start off (Georg, 2026-09-13). Pressing play gives the sample as
     // it is, and switching a section on is the before and after. The envelope
-    // starts on, because its neutral shape is already transparent. A patch
-    // saved before the switches existed loads with its effects off.
+    // starts on, because its neutral shape is already transparent.
     ParamDef {
         id: "grain.on",
         name: "Granular",
