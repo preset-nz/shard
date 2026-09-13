@@ -45,7 +45,7 @@ struct Slots {
     env_on: usize,
     trim_start: usize,
     trim_end: usize,
-    env_amount: usize,
+    env_mix: usize,
     env_attack: usize,
     env_decay: usize,
     env_sustain: usize,
@@ -92,7 +92,7 @@ impl Slots {
             env_on: at("env.on"),
             trim_start: at("trim.start"),
             trim_end: at("trim.end"),
-            env_amount: at("env.amount"),
+            env_mix: at("env.mix"),
             env_attack: at("env.attack"),
             env_decay: at("env.decay"),
             env_sustain: at("env.sustain"),
@@ -452,7 +452,7 @@ impl Engine {
         let ring_on_target = gate(self.slots.ring_on);
         let env_on_target = gate(self.slots.env_on);
         let env = EnvParams {
-            amount: bank.get(self.slots.env_amount),
+            amount: bank.get(self.slots.env_mix),
             attack_ms: bank.get(self.slots.env_attack),
             decay_ms: bank.get(self.slots.env_decay),
             sustain: bank.get(self.slots.env_sustain),
@@ -938,7 +938,7 @@ mod tests {
                 &[
                     ("env.attack", 300.0),
                     ("env.sustain", 0.3),
-                    ("env.amount", 0.0),
+                    ("env.mix", 0.0),
                 ],
             ),
         ];

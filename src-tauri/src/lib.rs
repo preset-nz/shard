@@ -285,7 +285,7 @@ fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
     let (lo, hi) = state.trim_indices();
     let env = shard_dsp::EnvParams {
         // Switched off, the envelope draws flat, which is what it sounds like.
-        amount: state.bank.get_by_id("env.amount").unwrap_or(1.0)
+        amount: state.bank.get_by_id("env.mix").unwrap_or(1.0)
             * state.bank.get_by_id("env.on").unwrap_or(1.0),
         attack_ms: state.bank.get_by_id("env.attack").unwrap_or(0.0),
         decay_ms: state.bank.get_by_id("env.decay").unwrap_or(0.0),

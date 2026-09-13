@@ -187,7 +187,7 @@ export default function App() {
   // the drawn curve is the one Rust computes, not a copy of the maths.
   const envKey = [
     values['env.on'],
-    values['env.amount'],
+    values['env.mix'],
     values['env.attack'],
     values['env.decay'],
     values['env.sustain'],

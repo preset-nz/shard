@@ -108,6 +108,12 @@ impl ParamDef {
 /// shapes amplitude, where neutral means transparent. `crush.env.*` shapes the
 /// crush mix, where neutral means "leave the knob alone". Same maths, opposite
 /// reading of the same number — see `Engine::process_block`.
+///
+/// **Every effect follows one pattern** (Georg, 2026-09-13). Its switch is
+/// `<node>.on`, and the first row after it is `<node>.mix`, named "Mix". No
+/// row's name repeats its node's name, because the section header already
+/// says it: "Frequency", not "Ring freq". The panel draws rows in table order,
+/// so order here is layout. The tests at the bottom hold all of this.
 pub const PARAMS: &[ParamDef] = &[
     // Material pre-conditions: how the source is read before anything shapes
     // it. Varispeed, so an octave up is twice as fast as well as twice as
@@ -125,7 +131,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "trim.start",
-        name: "Trim start",
+        name: "Start",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -135,7 +141,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "trim.end",
-        name: "Trim end",
+        name: "End",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -163,11 +169,10 @@ pub const PARAMS: &[ParamDef] = &[
         smooth_ms: 0.0,
     },
     // Formerly `mix.dry`, inverted: granular is an effect like the others, and
-    // this is its mix. First in its section, because it is the first control
-    // you reach for after switching granular on.
+    // this is its mix.
     ParamDef {
         id: "grain.mix",
-        name: "Grain mix",
+        name: "Mix",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -276,23 +281,23 @@ pub const PARAMS: &[ParamDef] = &[
         smooth_ms: 0.0,
     },
     ParamDef {
-        id: "ring.freq",
-        name: "Ring freq",
-        min: 1.0,
-        max: 5000.0,
-        default: 140.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
         id: "ring.mix",
-        name: "Ring mix",
+        name: "Mix",
         min: 0.0,
         max: 1.0,
         default: 0.0,
         taper: Taper::Linear,
         unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "ring.freq",
+        name: "Frequency",
+        min: 1.0,
+        max: 5000.0,
+        default: 140.0,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
         smooth_ms: 20.0,
     },
     ParamDef {
@@ -305,9 +310,11 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // Formerly `env.amount`. It is the envelope's mix: how much of the shaped
+    // signal replaces the unshaped one, transparent at zero.
     ParamDef {
-        id: "env.amount",
-        name: "Env amount",
+        id: "env.mix",
+        name: "Mix",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -365,6 +372,18 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // Defaults to zero, like the ring modulator: loading a patch and pressing
+    // play gives you the material, not an effect you did not ask for.
+    ParamDef {
+        id: "crush.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "crush.bits",
         name: "Bits",
@@ -379,7 +398,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "crush.rate",
-        name: "Crush rate",
+        name: "Rate",
         min: 200.0,
         max: 48_000.0,
         default: 48_000.0,
@@ -387,24 +406,12 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Hz,
         smooth_ms: 20.0,
     },
-    // Defaults to zero, like the ring modulator: loading a patch and pressing
-    // play gives you the material, not an effect you did not ask for.
-    ParamDef {
-        id: "crush.mix",
-        name: "Crush mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
     // The crush envelope. Multiplies `crush.mix` rather than the signal, so
     // an attack is "starts clean, then crushes" and a release is the reverse.
     // Its neutral shape is a flat one, which leaves the knob untouched.
     ParamDef {
         id: "crush.env.amount",
-        name: "Crush env amount",
+        name: "Env amount",
         min: 0.0,
         max: 1.0,
         // Full depth, like the amplitude envelope. Harmless as a default
@@ -416,7 +423,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "crush.env.attack",
-        name: "Crush attack",
+        name: "Env attack",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -426,7 +433,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "crush.env.decay",
-        name: "Crush decay",
+        name: "Env decay",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -436,7 +443,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "crush.env.sustain",
-        name: "Crush sustain",
+        name: "Env sustain",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -446,7 +453,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "crush.env.release",
-        name: "Crush release",
+        name: "Env release",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -475,7 +482,7 @@ pub const PARAMS: &[ParamDef] = &[
     },
     ParamDef {
         id: "tape.time",
-        name: "Tape time",
+        name: "Time",
         min: 20.0,
         max: 3000.0,
         default: 400.0,
@@ -713,6 +720,45 @@ mod tests {
             0.0,
             "the default must survive a round trip"
         );
+    }
+
+    #[test]
+    fn every_effect_leads_with_its_mix() {
+        // One pattern for every switchable node: its switch, then its mix as
+        // the first row the panel draws. The panel draws in table order, so
+        // this is a test of the table's order as much as of its names.
+        let switches: Vec<_> = PARAMS.iter().filter(|p| p.id.ends_with(".on")).collect();
+        assert!(!switches.is_empty());
+        for switch in switches {
+            let node = switch.id.trim_end_matches(".on");
+            let prefix = format!("{node}.");
+            let first = PARAMS
+                .iter()
+                .find(|p| p.id.starts_with(&prefix) && p.id != switch.id)
+                .unwrap_or_else(|| panic!("{node} has a switch and nothing else"));
+            assert_eq!(
+                first.id,
+                format!("{node}.mix"),
+                "{node} must lead with its mix"
+            );
+            assert_eq!(first.name, "Mix", "{node}'s mix must be called Mix");
+        }
+    }
+
+    #[test]
+    fn no_parameter_repeats_its_node_name() {
+        // Every row sits under a section header that already names its node,
+        // so "Ring freq" says "ring" twice. Switches are exempt: their name is
+        // the section's own.
+        for p in PARAMS.iter().filter(|p| !p.id.ends_with(".on")) {
+            let node = p.id.split('.').next().unwrap();
+            assert!(
+                !p.name.to_lowercase().starts_with(node),
+                "{} repeats its node in the name {:?}",
+                p.id,
+                p.name
+            );
+        }
     }
 
     #[test]
