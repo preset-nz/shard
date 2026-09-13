@@ -287,6 +287,16 @@ impl Engine {
         std::mem::replace(&mut self.mods, next)
     }
 
+    /// Every parameter as the engine hears it, LFOs included, written into
+    /// `heard`, so the UI can draw where a linked control has been moved to.
+    /// The hand's `bank` is only read. Atomic stores only, so it is safe to
+    /// call from the audio callback once a block.
+    pub fn publish_heard(&self, bank: &ParamBank, heard: &ParamBank) {
+        for slot in 0..crate::params::PARAMS.len() {
+            heard.set(slot, read(&self.mods, bank, slot));
+        }
+    }
+
     /// The spawn log, for whatever wants to draw it. Cloning the handle is the
     /// only way out of the audio thread; nothing here hands out a `&mut`.
     pub fn grain_log(&self) -> Arc<GrainLog> {

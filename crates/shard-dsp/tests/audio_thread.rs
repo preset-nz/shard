@@ -140,11 +140,14 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
     drop(e.set_modulation(first));
 
     let mut out = vec![0.0f32; 512];
+    let heard = ParamBank::new();
     let mut run = |e: &mut Engine, from: usize| {
         let ((), caught) = no_alloc(|| {
             for block in from..from + 300 {
                 sweep(&bank, block);
                 e.process_block(&mut out, &bank);
+                // The app publishes what the engine heard after every block.
+                e.publish_heard(&bank, &heard);
             }
         });
         assert_eq!(

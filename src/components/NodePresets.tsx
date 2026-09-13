@@ -37,6 +37,7 @@ export function NodePresets({
   label,
   onError,
   onNote,
+  onApplied,
   children,
 }: {
   /** The section id, such as `grain`. */
@@ -44,6 +45,8 @@ export function NodePresets({
   label: string;
   onError: (message: string | null) => void;
   onNote: (message: string | null) => void;
+  /** After a preset applies, since it replaces the section's links too. */
+  onApplied?: () => void;
   children: ReactNode;
 }) {
   const [names, setNames] = useState<string[]>([]);
@@ -62,6 +65,7 @@ export function NodePresets({
   const apply = async (preset: string) => {
     try {
       const report = await applyPreset(node, preset);
+      onApplied?.();
       onError(null);
       const parts: string[] = [];
       if (report.unknown.length > 0) {

@@ -2,27 +2,40 @@ import { PropertyPanel } from '@preset.nz/facets';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
+  addLfo,
   auditionGrain,
   envelopeCurve,
   format,
   type GrainInfo,
+  getHeard,
   getParams,
   grainLog,
+  type LfoLimits,
+  lfoLimits,
+  linkParam,
   loadPatch,
   loadSample,
   type Meters,
+  type ModulationView,
   type ParamInfo,
   paramDefs,
   meters as readMeters,
+  modulation as readModulation,
+  removeLfo,
   type SourceInfo,
   savePatch,
+  setLfo,
   setParam,
   setPlaying,
   sourceInfo,
+  unlinkParam,
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
+import { LfoEditor } from '@/components/LfoEditor';
 import { Meter } from '@/components/Meter';
+import { ModulatorTree } from '@/components/ModulatorTree';
 import { NodePresets } from '@/components/NodePresets';
+import type { ParamRowContext } from '@/components/ParamRow';
 import { ParamSection } from '@/components/ParamSection';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
@@ -79,6 +92,12 @@ export default function App() {
   const [envelope, setEnvelope] = useState<number[] | null>(null);
   const [patchName, setPatchName] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
+  /** The open patch's LFOs and links, as Rust last answered with them. */
+  const [mod, setMod] = useState<ModulationView>({ lfos: [], links: {}, refused: [] });
+  const [limits, setLimits] = useState<LfoLimits | null>(null);
+  const [selectedLfo, setSelectedLfo] = useState<number | null>(null);
+  /** Each parameter as the engine last heard it, LFOs included. */
+  const [heard, setHeard] = useState<ParamValues>({});
   /**
    * The slowest audio block, held for two seconds. Rust already holds the
    * worst case between polls; this holds it long enough to read, because a
@@ -109,6 +128,8 @@ export default function App() {
         });
         setValues(next);
         setSource(await sourceInfo());
+        setMod(await readModulation());
+        setLimits(await lfoLimits());
       } catch (e) {
         setError(String(e));
       }
@@ -127,7 +148,12 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v, fresh] = await Promise.all([readMeters(), getParams(), grainLog()]);
+        const [m, v, fresh, h] = await Promise.all([
+          readMeters(),
+          getParams(),
+          grainLog(),
+          getHeard(),
+        ]);
         if (!alive) return;
         setMeter(m);
         const now = performance.now();
@@ -144,10 +170,13 @@ export default function App() {
         const d = defsRef.current;
         if (d) {
           const next: ParamValues = {};
+          const nextHeard: ParamValues = {};
           d.forEach((p, i) => {
             next[p.id] = v[i];
+            nextHeard[p.id] = h[i];
           });
           setValues(next);
+          setHeard(nextHeard);
         }
       } catch {
         // A dropped poll is not worth surfacing; the next one will land.
@@ -251,6 +280,8 @@ export default function App() {
       const report = await loadPatch(path);
       setPatchName(path.split('/').pop() ?? path);
       setSource(await sourceInfo());
+      setMod(await readModulation());
+      setSelectedLfo(null);
       setError(null);
 
       // A partial load must not look like a clean one.
@@ -284,6 +315,16 @@ export default function App() {
       // A trim from the previous sample means nothing against a new one.
       await setParam('trim.start', 0);
       await setParam('trim.end', 1);
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  /** Run one modulation command and draw the document Rust answers with. */
+  const editMod = useCallback(async (run: () => Promise<ModulationView>) => {
+    try {
+      setMod(await run());
       setError(null);
     } catch (e) {
       setError(String(e));
@@ -363,6 +404,23 @@ export default function App() {
       window.removeEventListener('keyup', onKeyUp);
     };
   }, [togglePlay, doSave, doLoad, setBrake, setReverse]);
+
+  // How many parameters follow each LFO, for the tree and the editor.
+  const linkedCounts = new Map<number, number>();
+  for (const link of Object.values(mod.links)) {
+    linkedCounts.set(link.lfo, (linkedCounts.get(link.lfo) ?? 0) + 1);
+  }
+  const selected = mod.lfos.find((l) => l.id === selectedLfo) ?? null;
+
+  // Links and what the engine heard reach the rows through the panel's
+  // context, which facets hands every renderer without rebuilding the schema.
+  const panelCtx: ParamRowContext = {
+    defs: defs ?? [],
+    mod,
+    heard,
+    onLink: (id, lfo, depth) => void editMod(() => linkParam(id, lfo, depth)),
+    onUnlink: (id) => void editMod(() => unlinkParam(id)),
+  };
 
   return (
     <div className="flex h-screen flex-col bg-background text-foreground">
@@ -460,6 +518,36 @@ export default function App() {
       )}
 
       <div className="flex min-h-0 flex-1">
+        <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
+          <ModulatorTree
+            lfos={mod.lfos}
+            selected={selectedLfo}
+            linked={linkedCounts}
+            onSelect={setSelectedLfo}
+            onAdd={() =>
+              void editMod(async () => {
+                const view = await addLfo();
+                // The new LFO is last; select it so it can be set up at once.
+                setSelectedLfo(view.lfos[view.lfos.length - 1]?.id ?? null);
+                return view;
+              })
+            }
+            onRemove={(id) =>
+              void editMod(async () => {
+                const view = await removeLfo(id);
+                setSelectedLfo((s) => (s === id ? null : s));
+                const orphaned = linkedCounts.get(id) ?? 0;
+                if (orphaned > 0) {
+                  setNote(
+                    `Removed the LFO. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
+                  );
+                }
+                return view;
+              })
+            }
+          />
+        </nav>
+
         <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
           <Waveform
             peaks={source?.peaks ?? []}
@@ -532,6 +620,17 @@ export default function App() {
         </main>
 
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
+          {selected && limits && (
+            <div className="border-b border-border">
+              <LfoEditor
+                key={selected.id}
+                lfo={selected}
+                limits={limits}
+                linked={linkedCounts.get(selected.id) ?? 0}
+                onChange={(next) => void editMod(() => setLfo(next))}
+              />
+            </div>
+          )}
           {defs ? (
             sections.map((s) => (
               <NodePresets
@@ -540,6 +639,7 @@ export default function App() {
                 label={s.label}
                 onError={setError}
                 onNote={setNote}
+                onApplied={() => void editMod(readModulation)}
               >
                 <ParamSection
                   label={s.label}
@@ -550,7 +650,7 @@ export default function App() {
                   <PropertyPanel
                     scopeKey={scopeKeyFor(s.id)}
                     selection={values}
-                    ctx={{ defs }}
+                    ctx={panelCtx}
                     emptyState={<p className="text-xs">No parameters.</p>}
                   />
                 </ParamSection>

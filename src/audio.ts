@@ -190,6 +190,53 @@ export const updatePreset = (node: string, name: string) =>
 export const applyPreset = (node: string, name: string) =>
   invoke<PresetReport>('apply_preset', { node, name });
 
+/** One LFO in the open patch. `id` is stable and never reused. */
+export interface LfoRecord {
+  id: number;
+  name: string;
+  /** Hz. */
+  rate: number;
+  /** One of `LfoLimits.shapes`, such as `smooth-random`. */
+  shape: string;
+  /** 0 to 1. */
+  phase: number;
+}
+
+export interface LinkRecord {
+  /** The id of the LFO the parameter follows. */
+  lfo: number;
+  /** −1 to 1, as a share of the parameter's whole range. */
+  depth: number;
+}
+
+/** The open patch's LFOs and links, and what in them the engine refused. */
+export interface ModulationView {
+  lfos: LfoRecord[];
+  /** By parameter id. */
+  links: Record<string, LinkRecord>;
+  refused: Refused[];
+}
+
+export interface LfoLimits {
+  shapes: string[];
+  min_rate: number;
+  max_rate: number;
+}
+
+// Every modulation edit answers with the whole document, so the UI draws
+// exactly what the engine now has.
+export const modulation = () => invoke<ModulationView>('modulation');
+export const lfoLimits = () => invoke<LfoLimits>('lfo_limits');
+export const addLfo = () => invoke<ModulationView>('add_lfo');
+export const removeLfo = (id: number) => invoke<ModulationView>('remove_lfo', { id });
+export const setLfo = (lfo: LfoRecord) => invoke<ModulationView>('set_lfo', { lfo });
+export const linkParam = (id: string, lfo: number, depth: number) =>
+  invoke<ModulationView>('link_param', { id, lfo, depth });
+export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param', { id });
+
+/** Every parameter as the engine last heard it, indexed as `getParams`. */
+export const getHeard = () => invoke<number[]>('get_heard');
+
 export const savePatch = (path: string) => invoke<void>('save_patch', { path });
 export const loadPatch = (path: string) => invoke<LoadReport>('load_patch', { path });
 

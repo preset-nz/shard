@@ -36,6 +36,9 @@ static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 /// Shared between the UI thread and the audio thread.
 pub struct Audio {
     bank: Arc<ParamBank>,
+    /// Every parameter as the engine last heard it, LFOs included. Written by
+    /// the audio thread once a block; the bank above stays the hand's.
+    heard: Arc<ParamBank>,
     /// Peak since the UI last asked, as f32 bits. Written by the audio thread.
     peak: Arc<AtomicU32>,
     /// Active grain count, for the UI. Written by the audio thread.
@@ -205,6 +208,13 @@ fn param_defs() -> Vec<ParamInfo> {
 #[tauri::command]
 fn get_params(state: tauri::State<'_, Audio>) -> Vec<f32> {
     (0..PARAMS.len()).map(|i| state.bank.get(i)).collect()
+}
+
+/// Every parameter as the engine last heard it, indexed as `get_params`. Differs
+/// from it only where a parameter follows an LFO.
+#[tauri::command]
+fn get_heard(state: tauri::State<'_, Audio>) -> Vec<f32> {
+    (0..PARAMS.len()).map(|i| state.heard.get(i)).collect()
 }
 
 #[tauri::command]
@@ -416,6 +426,24 @@ fn apply_preset(
     Ok(report)
 }
 
+/// What an LFO can be set to, so the UI offers exactly what this build reads.
+#[derive(Serialize)]
+pub struct LfoLimits {
+    /// Every shape name, in the engine's order. A wire format.
+    pub shapes: Vec<&'static str>,
+    pub min_rate: f32,
+    pub max_rate: f32,
+}
+
+#[tauri::command]
+fn lfo_limits() -> LfoLimits {
+    LfoLimits {
+        shapes: shard_dsp::Shape::NAMES.to_vec(),
+        min_rate: shard_dsp::modulation::MIN_RATE_HZ,
+        max_rate: shard_dsp::modulation::MAX_RATE_HZ,
+    }
+}
+
 // The modulation commands take only the modulation lock.
 
 /// The open patch's LFOs and links. Builds the set to find what is refused,
@@ -559,6 +587,7 @@ impl Audio {
 
 fn build_audio() -> Result<Audio, String> {
     let bank = Arc::new(ParamBank::new());
+    let heard = Arc::new(ParamBank::new());
     let peak = Arc::new(AtomicU32::new(0));
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
@@ -584,6 +613,7 @@ fn build_audio() -> Result<Audio, String> {
     drop(mod_retired.lock());
 
     let audio_bank = Arc::clone(&bank);
+    let audio_heard = Arc::clone(&heard);
     let audio_peak = Arc::clone(&peak);
     let audio_grains = Arc::clone(&grains);
     let audio_swap = Arc::clone(&swap);
@@ -700,6 +730,7 @@ fn build_audio() -> Result<Audio, String> {
                                     return;
                                 }
                                 engine.process_block(&mut scratch[..needed], &audio_bank);
+                                engine.publish_heard(&audio_bank, &audio_heard);
 
                                 for (i, frame) in out.chunks_mut(channels).enumerate() {
                                     let l = scratch[i * 2];
@@ -773,6 +804,7 @@ fn build_audio() -> Result<Audio, String> {
 
     Ok(Audio {
         bank,
+        heard,
         peak,
         grains,
         playing,
@@ -833,6 +865,8 @@ pub fn run() {
             set_lfo,
             link_param,
             unlink_param,
+            get_heard,
+            lfo_limits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -934,6 +968,11 @@ mod tests {
             .expect("ModulationView is serialisable");
         for key in ["lfos", "links", "refused"] {
             assert!(view.get(key).is_some(), "ModulationView lost `{key}`");
+        }
+
+        let limits = serde_json::to_value(lfo_limits()).expect("LfoLimits is serialisable");
+        for key in ["shapes", "min_rate", "max_rate"] {
+            assert!(limits.get(key).is_some(), "LfoLimits lost `{key}`");
         }
         for key in ["id", "name", "rate", "shape", "phase"] {
             assert!(view["lfos"][0].get(key).is_some(), "LfoRecord lost `{key}`");
