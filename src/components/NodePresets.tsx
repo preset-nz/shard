@@ -38,6 +38,7 @@ export function NodePresets({
   onError,
   onNote,
   onApplied,
+  className = 'border-b border-border last:border-b-0',
   children,
 }: {
   /** The section id, such as `grain`. */
@@ -47,6 +48,8 @@ export function NodePresets({
   onNote: (message: string | null) => void;
   /** After a preset applies, since it replaces the section's links too. */
   onApplied?: () => void;
+  /** For the wrapper the right-click lands on. */
+  className?: string;
   children: ReactNode;
 }) {
   const [names, setNames] = useState<string[]>([]);
@@ -108,7 +111,7 @@ export function NodePresets({
           the dialog instead of fighting the menu for it as it closes. */}
       <ContextMenu modal={false} onOpenChange={(open) => open && void refresh()}>
         <ContextMenuTrigger asChild>
-          <div className="border-b border-border last:border-b-0">{children}</div>
+          <div className={className}>{children}</div>
         </ContextMenuTrigger>
         <ContextMenuContent className="w-56">
           <ContextMenuLabel>{label} presets</ContextMenuLabel>

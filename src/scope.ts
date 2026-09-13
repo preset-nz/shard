@@ -11,62 +11,110 @@
  * selector rather than a slider, because interpolating between enum values
  * produces a number that means nothing.
  *
- * **One scope per section, not one for the panel.** Shard owns each section's
- * header — folding now, on/off next — and facets renders only the rows under
- * it. See `components/ParamSection.tsx`.
+ * **One scope per node.** A node is what the work area draws as a card and
+ * the inspector shows when it is selected. Most nodes are one table prefix.
+ * Material is split: its octave is how the material is read, and its switch
+ * and gain are the plain-playback generator. Ids do not change, being a wire
+ * format. See `guidance/projects/shard/design/panel-layout.md`.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import { denormalise, format, normalise, type ParamInfo, setParam, WINDOW_NAMES } from '@/audio';
 import { ParamRow } from '@/components/ParamRow';
 
-/** Which section a parameter belongs to, by id prefix. Order here is panel order. */
-const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
-  // How the source is read before anything shapes it. Trim belongs here in
-  // spirit, but its ids are a wire format, so it keeps its own section.
-  { id: 'material', label: 'Material', prefix: 'material.' },
-  { id: 'trim', label: 'Trim', prefix: 'trim.' },
-  { id: 'grain', label: 'Granular', prefix: 'grain.' },
-  { id: 'ring', label: 'Ring modulation', prefix: 'ring.' },
+/** Where a node's card sits in the work area. */
+export type Lane = 'pre' | 'process' | 'master';
+
+export const LANES: Array<{ id: Lane; label: string }> = [
+  { id: 'pre', label: 'Pre-process' },
+  { id: 'process', label: 'Process' },
+  { id: 'master', label: 'Master' },
+];
+
+export interface NodeInfo {
+  id: string;
+  label: string;
+  /** Null for a node with no card: Tape, which lives in Settings. */
+  lane: Lane | null;
+  /**
+   * The table prefix its switch, level and presets use, such as `grain`. Null
+   * when it has none of its own.
+   */
+  table: string | null;
+  /** Whether a parameter id is one of this node's rows. */
+  owns: (id: string) => boolean;
+}
+
+const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
+
+/** Every node, in work-area order: generators before effects, effects in signal order. */
+export const NODES: NodeInfo[] = [
+  { id: 'trim', label: 'Trim', lane: 'pre', table: 'trim', owns: under('trim') },
+  {
+    id: 'octave',
+    label: 'Octave',
+    lane: 'pre',
+    table: null,
+    owns: (id) => id === 'material.octave',
+  },
+  {
+    id: 'material',
+    label: 'Sample',
+    lane: 'process',
+    table: 'material',
+    owns: (id) => under('material')(id) && id !== 'material.octave',
+  },
+  { id: 'grain', label: 'Granular', lane: 'process', table: 'grain', owns: under('grain') },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
-  { id: 'crush', label: 'Crush', prefix: 'crush.' },
-  // The tape transport. Brake and reverse are driven from the header buttons
-  // during a performance; these rows are for setting the feel — above all
-  // `tape.time`, which is what the gesture actually sounds like.
-  { id: 'tape', label: 'Tape', prefix: 'tape.' },
-  { id: 'env', label: 'Envelope', prefix: 'env.' },
-  { id: 'amp', label: 'Output', prefix: 'amp.' },
+  { id: 'crush', label: 'Crush', lane: 'process', table: 'crush', owns: under('crush') },
+  { id: 'ring', label: 'Ring modulation', lane: 'process', table: 'ring', owns: under('ring') },
+  { id: 'env', label: 'Envelope', lane: 'process', table: 'env', owns: under('env') },
+  { id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
+  // The tape's feel, in Settings (Georg, 2026-09-14). Brake and reverse are
+  // played from the header, so they are not rows anywhere.
+  {
+    id: 'tape',
+    label: 'Tape',
+    lane: null,
+    table: null,
+    owns: (id) => under('tape')(id) && id !== 'tape.brake' && id !== 'tape.reverse',
+  },
 ];
 
 export interface ParamValues {
   [id: string]: number;
 }
 
-export interface ParamSectionInfo {
-  id: string;
-  label: string;
+export function nodeById(id: string): NodeInfo | null {
+  return NODES.find((n) => n.id === id) ?? null;
 }
 
-/** The facets scope key for one section. */
-export function scopeKeyFor(section: string): string {
-  return `shard.params.${section}`;
+/** The facets scope key for one node. */
+export function scopeKeyFor(node: string): string {
+  return `shard.params.${node}`;
 }
 
-/**
- * A section's bypass switch, when the table has one: `grain.on` for Granular.
- * Drawn in the section header rather than as a row.
- */
-export function sectionSwitchId(defs: ParamInfo[], section: string): string | null {
-  const id = `${section}.on`;
-  return defs.some((p) => p.id === id) ? id : null;
+/** A node's on/off switch, when the table gives it one: `grain.on`. */
+export function switchIdOf(defs: ParamInfo[], node: NodeInfo): string | null {
+  if (!node.table) return null;
+  const id = `${node.table}.on`;
+  return node.owns(id) && defs.some((p) => p.id === id) ? id : null;
 }
 
-/** The sections that actually have parameters, in panel order. */
-export function paramSections(defs: ParamInfo[]): ParamSectionInfo[] {
-  return GROUPS.filter((g) => defs.some((p) => p.id.startsWith(g.prefix))).map(({ id, label }) => ({
-    id,
-    label,
-  }));
+/** A node's level, per the parameter pattern: Gain for a generator, Mix for an effect. */
+export function levelIdOf(defs: ParamInfo[], node: NodeInfo): string | null {
+  if (!node.table) return null;
+  for (const suffix of ['gain', 'mix']) {
+    const id = `${node.table}.${suffix}`;
+    if (node.owns(id) && defs.some((p) => p.id === id)) return id;
+  }
+  return null;
+}
+
+/** The rows the inspector draws for a node: everything it owns but its switch. */
+export function rowsOf(defs: ParamInfo[], node: NodeInfo): ParamInfo[] {
+  const sw = switchIdOf(defs, node);
+  return defs.filter((p) => node.owns(p.id) && p.id !== sw);
 }
 
 function fieldFor(p: ParamInfo) {
@@ -89,9 +137,9 @@ function fieldFor(p: ParamInfo) {
     };
   }
 
-  // A custom kind, so the row can draw its value beside the label. facets
-  // looks renderers up by string and passes the whole field through, so the
-  // extra props ride along untouched.
+  // A custom kind, so the row can draw its value, its link and its moving
+  // mark. facets looks renderers up by string and passes the whole field
+  // through, so the extra props ride along untouched.
   return {
     ...base,
     kind: 'param' as const,
@@ -99,35 +147,25 @@ function fieldFor(p: ParamInfo) {
   };
 }
 
-/** The schema for one section. Untitled: the section header carries the name. */
-export function buildSchema(defs: ParamInfo[], section: string): PropertySchema {
-  const g = GROUPS.find((x) => x.id === section);
+/** The schema for one node. Untitled: the inspector's header carries the name. */
+export function buildSchema(defs: ParamInfo[], node: NodeInfo): PropertySchema {
   return {
     version: 1,
-    groups: g
-      ? [
-          {
-            id: g.id,
-            rows: defs
-              .filter((p) => p.id.startsWith(g.prefix) && p.id !== `${g.id}.on`)
-              .map((p) => fieldFor(p)),
-          },
-        ]
-      : [],
+    groups: [{ id: node.id, rows: rowsOf(defs, node).map((p) => fieldFor(p)) }],
   };
 }
 
 /**
- * Register every section's scope. `selection` is the current values object;
- * `ctx` carries the definitions so read and write can apply the right taper.
+ * Register every node's scope. `selection` is the current values object;
+ * `ctx` carries the definitions, links and heard values for the rows.
  */
 export function registerParamScope(defs: ParamInfo[]) {
   const byId = new Map(defs.map((d) => [d.id, d]));
   registerFieldRenderer('param', ParamRow);
 
-  for (const section of paramSections(defs)) {
-    registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(section.id), {
-      schema: buildSchema(defs, section.id),
+  for (const node of NODES) {
+    registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(node.id), {
+      schema: buildSchema(defs, node),
 
       read: (values) => {
         const out: Record<string, unknown> = {};

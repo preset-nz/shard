@@ -34,17 +34,25 @@ export function shapeLabel(name: string): string {
  *
  * The parent keys this by LFO id, so the name being typed never leaks into
  * another LFO.
+ *
+ * `compact` folds it to its name, rate and shape, for the Linked block under a
+ * node; the name opens the full editor.
  */
 export function LfoEditor({
   lfo,
   limits,
-  linked,
+  linked = 0,
+  compact = false,
+  onOpen,
   onChange,
 }: {
   lfo: LfoRecord;
   limits: LfoLimits;
   /** How many parameters follow this LFO. */
-  linked: number;
+  linked?: number;
+  compact?: boolean;
+  /** Compact only: open this LFO in the inspector. */
+  onOpen?: () => void;
   onChange: (next: LfoRecord) => void;
 }) {
   const [name, setName] = useState(lfo.name);
@@ -99,8 +107,44 @@ export function LfoEditor({
     </div>
   );
 
+  const shapeSelect = (
+    <div className="space-y-1">
+      <span className="text-xs">Shape</span>
+      <Select value={lfo.shape} onValueChange={(shape) => onChange({ ...lfo, shape })}>
+        <SelectTrigger className="h-7 w-full text-xs">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {limits.shapes.map((s) => (
+            <SelectItem key={s} value={s} className="text-xs">
+              {shapeLabel(s)}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+
+  if (compact) {
+    return (
+      <section className="space-y-3 px-3 pt-2 pb-3">
+        <button
+          type="button"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onOpen}
+          title="Open this LFO"
+          className="text-xs font-medium text-primary hover:underline"
+        >
+          ∿ {lfo.name}
+        </button>
+        {row(rate, lfo.rate, (v) => onChange({ ...lfo, rate: v }))}
+        {shapeSelect}
+      </section>
+    );
+  }
+
   return (
-    <section className="space-y-3 px-3 pt-2 pb-3">
+    <section className="space-y-3 px-3 pt-3 pb-3">
       <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
         LFO
       </div>
@@ -119,21 +163,7 @@ export function LfoEditor({
         className="h-7 text-xs"
       />
       {row(rate, lfo.rate, (v) => onChange({ ...lfo, rate: v }))}
-      <div className="space-y-1">
-        <span className="text-xs">Shape</span>
-        <Select value={lfo.shape} onValueChange={(shape) => onChange({ ...lfo, shape })}>
-          <SelectTrigger className="h-7 w-full text-xs">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {limits.shapes.map((s) => (
-              <SelectItem key={s} value={s} className="text-xs">
-                {shapeLabel(s)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {shapeSelect}
       {row(phase, lfo.phase, (v) => onChange({ ...lfo, phase: v }))}
       <p className="text-[11px] text-muted-foreground">
         {linked === 0

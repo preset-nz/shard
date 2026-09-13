@@ -1,6 +1,5 @@
-import { PropertyPanel } from '@preset.nz/facets';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   addLfo,
   auditionGrain,
@@ -31,21 +30,16 @@ import {
   unlinkParam,
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
-import { LfoEditor } from '@/components/LfoEditor';
+import { Inspector } from '@/components/Inspector';
 import { Meter } from '@/components/Meter';
 import { ModulatorTree } from '@/components/ModulatorTree';
-import { NodePresets } from '@/components/NodePresets';
+import { NodeCard } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
-import { ParamSection } from '@/components/ParamSection';
+import { SettingsDialog } from '@/components/SettingsDialog';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
-import {
-  type ParamValues,
-  paramSections,
-  registerParamScope,
-  scopeKeyFor,
-  sectionSwitchId,
-} from '@/scope';
+import { LANES, NODES, type ParamValues, registerParamScope } from '@/scope';
+import { useSelection } from '@/stores/selection';
 
 /**
  * How many spawns the inspector keeps.
@@ -95,7 +89,11 @@ export default function App() {
   /** The open patch's LFOs and links, as Rust last answered with them. */
   const [mod, setMod] = useState<ModulationView>({ lfos: [], links: {}, refused: [] });
   const [limits, setLimits] = useState<LfoLimits | null>(null);
-  const [selectedLfo, setSelectedLfo] = useState<number | null>(null);
+  const { selection, select, clear } = useSelection();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  // The grain inspector and the raw parameter list are for debugging, so they
+  // are hidden unless asked for, and the choice is remembered.
+  const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
   /**
@@ -105,10 +103,6 @@ export default function App() {
    */
   const [blockWorst, setBlockWorst] = useState(0);
   const worstRef = useRef({ us: 0, at: 0 });
-  // Which parameter sections are folded away. Per-viewer UI state, so
-  // localStorage and never the patch.
-  const [collapsed, setCollapsed] = usePersistedState<string[]>('shard.panel.collapsed', []);
-  const sections = useMemo(() => (defs ? paramSections(defs) : []), [defs]);
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -281,7 +275,7 @@ export default function App() {
       setPatchName(path.split('/').pop() ?? path);
       setSource(await sourceInfo());
       setMod(await readModulation());
-      setSelectedLfo(null);
+      useSelection.getState().clear();
       setError(null);
 
       // A partial load must not look like a clean one.
@@ -335,30 +329,6 @@ export default function App() {
     await setPlaying(!meter.playing);
   }, [meter.playing]);
 
-  /** Fold one section, or with `all`, every section to match it. */
-  const toggleSection = useCallback(
-    (id: string, all: boolean) => {
-      setCollapsed((prev) => {
-        const folding = !prev.includes(id);
-        if (all) return folding ? sections.map((s) => s.id) : [];
-        return folding ? [...prev, id] : prev.filter((x) => x !== id);
-      });
-    },
-    [sections, setCollapsed],
-  );
-
-  /** A section's bypass switch, if the table gives it one. */
-  const switchFor = (section: string) => {
-    const id = defs ? sectionSwitchId(defs, section) : null;
-    if (!id) return {};
-    return {
-      on: (values[id] ?? 1) >= 0.5,
-      onSwitch: (next: boolean) => {
-        void setParam(id, next ? 1 : 0);
-      },
-    };
-  };
-
   // Space for play/stop, the way every other audio tool does it. Ignored while
   // a control has focus, so arrow keys on a slider still work.
   useEffect(() => {
@@ -373,8 +343,24 @@ export default function App() {
         void doLoad();
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && e.key === ',') {
+        e.preventDefault();
+        setSettingsOpen(true);
+        return;
+      }
+      if ((e.metaKey || e.ctrlKey) && e.key === 'i') {
+        e.preventDefault();
+        setShowDebugger((v) => !v);
+        return;
+      }
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
+
+      // Deselect all. The inspector empties with it.
+      if (e.key === 'Escape') {
+        useSelection.getState().clear();
+        return;
+      }
 
       // Held, not toggled, so the keyboard feels like the button does. The
       // repeat guard matters: without it every auto-repeat rewrites the
@@ -403,14 +389,15 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, doSave, doLoad, setBrake, setReverse]);
+  }, [togglePlay, doSave, doLoad, setBrake, setReverse, setShowDebugger]);
 
   // How many parameters follow each LFO, for the tree and the editor.
   const linkedCounts = new Map<number, number>();
   for (const link of Object.values(mod.links)) {
     linkedCounts.set(link.lfo, (linkedCounts.get(link.lfo) ?? 0) + 1);
   }
-  const selected = mod.lfos.find((l) => l.id === selectedLfo) ?? null;
+  const selectedLfo = selection?.kind === 'lfo' ? selection.id : null;
+  const refreshMod = () => void editMod(readModulation);
 
   // Links and what the engine heard reach the rows through the panel's
   // context, which facets hands every renderer without rebuilding the schema.
@@ -484,6 +471,19 @@ export default function App() {
         <div className="flex-1" />
         <button
           type="button"
+          title="Show or hide the grain inspector and the raw parameter list (⌘I)"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => setShowDebugger((v) => !v)}
+          className={`rounded border px-2 py-1 text-xs ${
+            showDebugger
+              ? 'border-primary bg-primary/15 text-primary'
+              : 'border-border hover:bg-accent'
+          }`}
+        >
+          Debug
+        </button>
+        <button
+          type="button"
           onClick={doLoad}
           className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
         >
@@ -523,19 +523,21 @@ export default function App() {
             lfos={mod.lfos}
             selected={selectedLfo}
             linked={linkedCounts}
-            onSelect={setSelectedLfo}
+            onSelect={(id) => (id === null ? clear() : select({ kind: 'lfo', id }))}
             onAdd={() =>
               void editMod(async () => {
                 const view = await addLfo();
                 // The new LFO is last; select it so it can be set up at once.
-                setSelectedLfo(view.lfos[view.lfos.length - 1]?.id ?? null);
+                const added = view.lfos[view.lfos.length - 1];
+                if (added) select({ kind: 'lfo', id: added.id });
                 return view;
               })
             }
             onRemove={(id) =>
               void editMod(async () => {
                 const view = await removeLfo(id);
-                setSelectedLfo((s) => (s === id ? null : s));
+                const now = useSelection.getState().selection;
+                if (now?.kind === 'lfo' && now.id === id) clear();
                 const orphaned = linkedCounts.get(id) ?? 0;
                 if (orphaned > 0) {
                   setNote(
@@ -603,64 +605,79 @@ export default function App() {
             )}
           </div>
 
-          <GrainInspector
-            grains={grains}
-            frozen={frozen}
-            selected={picked}
-            playing={meter.playing}
-            auditioning={meter.auditioning}
-            sampleRate={source?.sample_rate ?? 48000}
-            onFreeze={setFrozen}
-            onClear={() => {
-              setGrains([]);
-              setPicked(null);
-            }}
-            onSelect={(g) => void doAudition(g)}
-          />
+          {/* The work area. A click anywhere but on a card deselects,
+              including a lane's empty space below its cards; Escape does the
+              same from the keyboard. */}
+          {defs && (
+            // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
+            // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
+            <div
+              className="grid min-h-0 flex-1 grid-cols-[1fr_1.6fr_1fr] content-start gap-4 overflow-y-auto"
+              onClick={(e) => {
+                if (!(e.target as Element).closest('[data-node-card]')) clear();
+              }}
+            >
+              {LANES.map((lane) => (
+                <section key={lane.id} className="flex min-w-0 flex-col gap-2">
+                  <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                    {lane.label}
+                  </h2>
+                  {NODES.filter((n) => n.lane === lane.id).map((node) => (
+                    <NodeCard
+                      key={node.id}
+                      node={node}
+                      defs={defs}
+                      values={values}
+                      selected={selection?.kind === 'node' && selection.id === node.id}
+                      onSelect={() => select({ kind: 'node', id: node.id })}
+                      onError={setError}
+                      onNote={setNote}
+                      onPresetApplied={refreshMod}
+                    />
+                  ))}
+                </section>
+              ))}
+            </div>
+          )}
+
+          {showDebugger && (
+            <GrainInspector
+              grains={grains}
+              frozen={frozen}
+              selected={picked}
+              playing={meter.playing}
+              auditioning={meter.auditioning}
+              sampleRate={source?.sample_rate ?? 48000}
+              onFreeze={setFrozen}
+              onClear={() => {
+                setGrains([]);
+                setPicked(null);
+              }}
+              onSelect={(g) => void doAudition(g)}
+            />
+          )}
         </main>
 
         <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
-          {selected && limits && (
-            <div className="border-b border-border">
-              <LfoEditor
-                key={selected.id}
-                lfo={selected}
-                limits={limits}
-                linked={linkedCounts.get(selected.id) ?? 0}
-                onChange={(next) => void editMod(() => setLfo(next))}
-              />
-            </div>
-          )}
           {defs ? (
-            sections.map((s) => (
-              <NodePresets
-                key={s.id}
-                node={s.id}
-                label={s.label}
-                onError={setError}
-                onNote={setNote}
-                onApplied={() => void editMod(readModulation)}
-              >
-                <ParamSection
-                  label={s.label}
-                  collapsed={collapsed.includes(s.id)}
-                  onToggle={(all) => toggleSection(s.id, all)}
-                  {...switchFor(s.id)}
-                >
-                  <PropertyPanel
-                    scopeKey={scopeKeyFor(s.id)}
-                    selection={values}
-                    ctx={panelCtx}
-                    emptyState={<p className="text-xs">No parameters.</p>}
-                  />
-                </ParamSection>
-              </NodePresets>
-            ))
+            <Inspector
+              selection={selection}
+              defs={defs}
+              values={values}
+              ctx={panelCtx}
+              limits={limits}
+              linkedCounts={linkedCounts}
+              onSelect={select}
+              onLfoChange={(next) => void editMod(() => setLfo(next))}
+              onError={setError}
+              onNote={setNote}
+              onPresetApplied={refreshMod}
+            />
           ) : (
             <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
           )}
 
-          {defs && (
+          {defs && showDebugger && (
             <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
               {defs.map((d) => (
                 <div
@@ -677,6 +694,13 @@ export default function App() {
           )}
         </aside>
       </div>
+
+      <SettingsDialog
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        values={values}
+        ctx={panelCtx}
+      />
     </div>
   );
 }
