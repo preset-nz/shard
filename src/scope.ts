@@ -1,5 +1,5 @@
 /**
- * The facets scope, built from the Rust parameter table at runtime.
+ * The facets scopes, built from the Rust parameter table at runtime.
  *
  * This is the payoff of keeping the parameter table as data. Nothing here
  * knows what a grain is. It reads the table, maps each taper to a control
@@ -10,14 +10,16 @@
  * value, and it says what the control should look like. Stepped becomes a
  * selector rather than a slider, because interpolating between enum values
  * produces a number that means nothing.
+ *
+ * **One scope per section, not one for the panel.** Shard owns each section's
+ * header — folding now, on/off next — and facets renders only the rows under
+ * it. See `components/ParamSection.tsx`.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import { denormalise, normalise, type ParamInfo, setParam, WINDOW_NAMES } from '@/audio';
 import { ParamRow } from '@/components/ParamRow';
 
-export const SCOPE_KEY = 'shard.params';
-
-/** Which group a parameter belongs to, by id prefix. */
+/** Which section a parameter belongs to, by id prefix. Order here is panel order. */
 const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
   { id: 'trim', label: 'Trim', prefix: 'trim.' },
   { id: 'mix', label: 'Blend', prefix: 'mix.' },
@@ -36,6 +38,24 @@ const GROUPS: Array<{ id: string; label: string; prefix: string }> = [
 
 export interface ParamValues {
   [id: string]: number;
+}
+
+export interface ParamSectionInfo {
+  id: string;
+  label: string;
+}
+
+/** The facets scope key for one section. */
+export function scopeKeyFor(section: string): string {
+  return `shard.params.${section}`;
+}
+
+/** The sections that actually have parameters, in panel order. */
+export function paramSections(defs: ParamInfo[]): ParamSectionInfo[] {
+  return GROUPS.filter((g) => defs.some((p) => p.id.startsWith(g.prefix))).map(({ id, label }) => ({
+    id,
+    label,
+  }));
 }
 
 function fieldFor(p: ParamInfo, drifting: Set<string>) {
@@ -69,20 +89,29 @@ function fieldFor(p: ParamInfo, drifting: Set<string>) {
 /** Set by `registerParamScope`, so the row component can reach the app. */
 let onDriftToggle: (id: string, on: boolean) => void = () => {};
 
-export function buildSchema(defs: ParamInfo[], drifting: Set<string>): PropertySchema {
+/** The schema for one section. Untitled: the section header carries the name. */
+export function buildSchema(
+  defs: ParamInfo[],
+  drifting: Set<string>,
+  section: string,
+): PropertySchema {
+  const g = GROUPS.find((x) => x.id === section);
   return {
     version: 1,
-    groups: GROUPS.map((g) => ({
-      id: g.id,
-      title: g.label,
-      rows: defs.filter((p) => p.id.startsWith(g.prefix)).map((p) => fieldFor(p, drifting)),
-    })).filter((g) => g.rows.length > 0),
+    groups: g
+      ? [
+          {
+            id: g.id,
+            rows: defs.filter((p) => p.id.startsWith(g.prefix)).map((p) => fieldFor(p, drifting)),
+          },
+        ]
+      : [],
   };
 }
 
 /**
- * Register the scope. `selection` is the current values object; `ctx` carries
- * the definitions so read and write can apply the right taper.
+ * Register every section's scope. `selection` is the current values object;
+ * `ctx` carries the definitions so read and write can apply the right taper.
  */
 export function registerParamScope(
   defs: ParamInfo[],
@@ -93,23 +122,25 @@ export function registerParamScope(
   onDriftToggle = toggle;
   registerFieldRenderer('param', ParamRow);
 
-  registerScope<ParamValues, Record<string, unknown>>(SCOPE_KEY, {
-    schema: buildSchema(defs, drifting),
+  for (const section of paramSections(defs)) {
+    registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(section.id), {
+      schema: buildSchema(defs, drifting, section.id),
 
-    read: (values) => {
-      const out: Record<string, unknown> = {};
-      for (const d of defs) {
-        const v = values[d.id] ?? d.default;
-        out[d.id] = d.taper === 'stepped' ? String(Math.round(v)) : normalise(d, v);
-      }
-      return out;
-    },
+      read: (values) => {
+        const out: Record<string, unknown> = {};
+        for (const d of defs) {
+          const v = values[d.id] ?? d.default;
+          out[d.id] = d.taper === 'stepped' ? String(Math.round(v)) : normalise(d, v);
+        }
+        return out;
+      },
 
-    write: (path, value) => {
-      const d = byId.get(path);
-      if (!d) return;
-      const real = d.taper === 'stepped' ? Number(value) : denormalise(d, Number(value));
-      void setParam(d.id, real);
-    },
-  });
+      write: (path, value) => {
+        const d = byId.get(path);
+        if (!d) return;
+        const real = d.taper === 'stepped' ? Number(value) : denormalise(d, Number(value));
+        void setParam(d.id, real);
+      },
+    });
+  }
 }

@@ -1,6 +1,6 @@
 import { PropertyPanel } from '@preset.nz/facets';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   auditionGrain,
   envelopeCurve,
@@ -24,8 +24,10 @@ import {
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Meter } from '@/components/Meter';
+import { ParamSection } from '@/components/ParamSection';
 import { Waveform } from '@/components/Waveform';
-import { type ParamValues, registerParamScope, SCOPE_KEY } from '@/scope';
+import { usePersistedState } from '@/lib/persisted';
+import { type ParamValues, paramSections, registerParamScope, scopeKeyFor } from '@/scope';
 
 /**
  * How many spawns the inspector keeps.
@@ -86,6 +88,10 @@ export default function App() {
    */
   const [blockWorst, setBlockWorst] = useState(0);
   const worstRef = useRef({ us: 0, at: 0 });
+  // Which parameter sections are folded away. Per-viewer UI state, so
+  // localStorage and never the patch.
+  const [collapsed, setCollapsed] = usePersistedState<string[]>('shard.panel.collapsed', []);
+  const sections = useMemo(() => (defs ? paramSections(defs) : []), [defs]);
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -303,6 +309,18 @@ export default function App() {
   const togglePlay = useCallback(async () => {
     await setPlaying(!meter.playing);
   }, [meter.playing]);
+
+  /** Fold one section, or with `all`, every section to match it. */
+  const toggleSection = useCallback(
+    (id: string, all: boolean) => {
+      setCollapsed((prev) => {
+        const folding = !prev.includes(id);
+        if (all) return folding ? sections.map((s) => s.id) : [];
+        return folding ? [...prev, id] : prev.filter((x) => x !== id);
+      });
+    },
+    [sections, setCollapsed],
+  );
 
   // Space for play/stop, the way every other audio tool does it. Ignored while
   // a control has focus, so arrow keys on a slider still work.
@@ -534,21 +552,30 @@ export default function App() {
           />
         </main>
 
-        <aside className="w-80 shrink-0 overflow-y-auto border-l border-border p-3">
+        <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
           {defs ? (
-            <PropertyPanel
-              key={schemaVersion}
-              scopeKey={SCOPE_KEY}
-              selection={values}
-              ctx={{ defs }}
-              emptyState={<p className="text-xs">No parameters.</p>}
-            />
+            sections.map((s) => (
+              <ParamSection
+                key={s.id}
+                label={s.label}
+                collapsed={collapsed.includes(s.id)}
+                onToggle={(all) => toggleSection(s.id, all)}
+              >
+                <PropertyPanel
+                  key={schemaVersion}
+                  scopeKey={scopeKeyFor(s.id)}
+                  selection={values}
+                  ctx={{ defs }}
+                  emptyState={<p className="text-xs">No parameters.</p>}
+                />
+              </ParamSection>
+            ))
           ) : (
-            <p className="text-xs text-muted-foreground">Loading parameters…</p>
+            <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
           )}
 
           {defs && (
-            <div className="mt-4 space-y-1 border-t border-border pt-3">
+            <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
               {defs.map((d) => (
                 <div
                   key={d.id}
