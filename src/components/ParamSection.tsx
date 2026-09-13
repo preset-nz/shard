@@ -68,7 +68,9 @@ export function ParamSection({
         )}
       </div>
       {/* Dimmed when off, but still editable: set it up, then switch it in. */}
-      {!collapsed && <div className={isOn ? undefined : 'opacity-50'}>{children}</div>}
+      {/* Bottom padding so a slider's thumb on the last row clears the
+          divider to the next section. */}
+      {!collapsed && <div className={`pb-3 ${isOn ? '' : 'opacity-50'}`}>{children}</div>}
     </section>
   );
 }
