@@ -351,7 +351,12 @@ export default function App() {
       // The document's tracker replaces the one on screen, and no answer to
       // an edit made before the load may put the old one back.
       trackerSeq.current++;
-      setTrackerView(await getTracker());
+      const loaded = await getTracker();
+      setTrackerView(loaded);
+      // The document's switch picks the mode it opens in. Correcting the
+      // switch to the mode instead would overwrite what the file saved, and
+      // the next Save would keep the damage.
+      setMode(loaded.tracks[0]?.on ? 'tracker' : 'soundscape');
       useSelection.getState().clear();
       setError(null);
 
@@ -376,7 +381,7 @@ export default function App() {
     } catch (e) {
       setError(String(e));
     }
-  }, []);
+  }, [setMode]);
 
   const pickFile = useCallback(async () => {
     try {
