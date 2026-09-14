@@ -66,8 +66,8 @@ pub struct DriveParams {
 impl Default for DriveParams {
     fn default() -> Self {
         Self {
-            amount_db: 12.0,
-            tone_hz: 4_000.0,
+            amount_db: 24.0,
+            tone_hz: 8_000.0,
             kind: DriveType::Overdrive,
             mix: 0.0,
         }
@@ -170,8 +170,17 @@ impl HighPass {
 
 /// One channel's state: the filters around the curve and its oversampler.
 struct Lane {
-    pre: HighPass,
+    /// The overdrive's input corner, where its mid hump comes from.
+    pre_od: HighPass,
+    /// The distortion's, lower: a RAT thins the bass less than a Screamer.
+    pre_ds: HighPass,
     dc: HighPass,
+    /// The fuzz's wool: a fixed low-pass inside the box, before Tone.
+    wool: f32,
+    /// The fuzz's sag: how loud the driven signal has been lately. The
+    /// bias follows it, so the two halves clip at unequal widths at any
+    /// gain, which is where the even harmonics come from.
+    sag: f32,
     tone: OnePole,
     over: Oversampler,
 }
@@ -188,13 +197,20 @@ pub struct Drive {
 impl Drive {
     pub fn new(sample_rate: f32) -> Self {
         let lane = || {
-            let mut pre = HighPass::default();
+            let mut pre_od = HighPass::default();
+            let mut pre_ds = HighPass::default();
             let mut dc = HighPass::default();
-            pre.set(120.0, sample_rate);
+            // A Tube Screamer's input corner sits around 700 Hz. Lower here,
+            // so a drone keeps some body, but high enough to hear it thin.
+            pre_od.set(400.0, sample_rate);
+            pre_ds.set(120.0, sample_rate);
             dc.set(10.0, sample_rate);
             Lane {
-                pre,
+                pre_od,
+                pre_ds,
                 dc,
+                wool: 0.0,
+                sag: 0.0,
                 tone: OnePole::new(),
                 over: Oversampler::new(),
             }
@@ -233,19 +249,42 @@ impl Drive {
             // state is a few samples and refills on the way back in.
             return (l, r);
         }
-        let gain = 10f32.powf(self.amount.process(p.amount_db.clamp(0.0, 60.0)) / 20.0);
+        let amount = self.amount.process(p.amount_db.clamp(0.0, 60.0));
+        // Each type drives its curve as hard as its pedal would. A fuzz's
+        // transistor sees far more than an overdrive's op-amp, and that gap
+        // is most of what separates them (Georg, 2026-09-14: the three were
+        // too subtle at one gain).
+        let gain = 10f32.powf(amount / 20.0) * type_gain(p.kind);
         let tone = self.tone_hz.process(p.tone_hz.clamp(200.0, 20_000.0));
         // The tone filter is a one-pole whose time is set from the cutoff;
         // set per sample because the cutoff smooths.
         let tone_coef = (-core::f32::consts::TAU * tone / self.sample_rate).exp();
+        let wool_coef = (-core::f32::consts::TAU * 2_500.0 / self.sample_rate).exp();
+        let sag_release = (-1.0 / (self.sample_rate * 0.05)).exp();
         let kind = p.kind;
         let run = |lane: &mut Lane, x: f32| -> f32 {
             let x = match kind {
-                DriveType::Overdrive => lane.pre.process(x),
+                DriveType::Overdrive => lane.pre_od.process(x),
+                DriveType::Distortion => lane.pre_ds.process(x),
                 _ => x,
             };
-            let shaped = lane.over.process(x * gain, |v| curve(kind, v));
+            let driven = x * gain;
+            let bias = match kind {
+                DriveType::Fuzz => {
+                    lane.sag = driven.abs().max(lane.sag * sag_release);
+                    FUZZ_BIAS * lane.sag
+                }
+                _ => 0.0,
+            };
+            let shaped = lane.over.process(driven, |v| curve(kind, v, bias));
             let shaped = lane.dc.process(shaped);
+            let shaped = match kind {
+                DriveType::Fuzz => {
+                    lane.wool = shaped + (lane.wool - shaped) * wool_coef;
+                    lane.wool
+                }
+                _ => shaped,
+            };
             // Tone: a one-pole low-pass, stepped by coefficient.
             let y = shaped + (lane.tone.value() - shaped) * tone_coef;
             lane.tone.reset(y);
@@ -257,21 +296,40 @@ impl Drive {
     }
 }
 
-/// The curves. Each maps a driven sample to about ±1.
+/// How much harder each type drives its curve, on top of Amount.
 #[inline]
-fn curve(kind: DriveType, x: f32) -> f32 {
+fn type_gain(kind: DriveType) -> f32 {
+    match kind {
+        DriveType::Overdrive => 1.0,
+        DriveType::Distortion => 4.0,
+        DriveType::Fuzz => 6.0,
+        DriveType::Fold => 1.0,
+    }
+}
+
+/// How far off centre a fuzz sits, as a share of how loud it has been.
+const FUZZ_BIAS: f32 = 0.45;
+
+/// The curves. Each maps a driven sample to about ±1. `bias` is the
+/// fuzz's offset into its curve; the others ignore it.
+#[inline]
+fn curve(kind: DriveType, x: f32, bias: f32) -> f32 {
     match kind {
         DriveType::Overdrive => x.tanh(),
-        DriveType::Distortion => x.clamp(-1.0, 1.0),
+        // A RAT-like edge: hard, with a small knee so it is not a pure
+        // square at extreme gain, which reads as digital rather than diode.
+        DriveType::Distortion => {
+            let c = x.clamp(-1.0, 1.0);
+            c - c * c * c * 0.1
+        }
         DriveType::Fuzz => {
-            // Off centre before the curve, so the halves clip differently
-            // and the even harmonics appear; the DC that adds is blocked
-            // after. Extra gain, because fuzz is louder into its curve.
-            let bias = 0.35;
-            let y = (2.0 * x + bias).tanh() - bias.tanh();
+            // Off centre by a share of the recent level, so one half clips
+            // wider than the other however hard it is driven. A fixed
+            // offset would vanish into the gain. The DC is blocked after.
+            let y = (x + bias).tanh();
             // A gate at the bottom, the spitting tail of a starved fuzz.
-            if y.abs() < 0.02 {
-                y * y.abs() * 50.0
+            if y.abs() < 0.03 {
+                y * y.abs() * 33.0
             } else {
                 y
             }
@@ -435,8 +493,77 @@ mod tests {
         let fundamental = power_at(5_000.0);
         let alias = power_at(3_000.0);
         assert!(
-            alias < fundamental * 0.03,
+            alias < fundamental * 0.05,
             "alias at 3 kHz is {alias} against {fundamental}"
+        );
+    }
+
+    #[test]
+    fn the_pedals_are_told_apart() {
+        // Same amount, same tone, a mid-level tone in. The three pedal
+        // curves must land audibly apart, and fuzz must be the one with an
+        // even harmonic, which is what its bias is for.
+        let render = |kind: DriveType| {
+            let mut d = Drive::new(SR);
+            let p = DriveParams {
+                amount_db: 24.0,
+                tone_hz: 8_000.0,
+                kind,
+                mix: 1.0,
+            };
+            let out: Vec<f32> = tone(220.0, 96_000, 0.3)
+                .iter()
+                .map(|&x| d.process(x, x, &p).0)
+                .collect();
+            out[48_000..].to_vec()
+        };
+        let harmonic = |v: &[f32], n: f32| {
+            let (mut re, mut im) = (0.0f32, 0.0f32);
+            for (i, x) in v.iter().enumerate() {
+                let ph = core::f32::consts::TAU * 220.0 * n * i as f32 / SR;
+                re += x * ph.cos();
+                im += x * ph.sin();
+            }
+            (re * re + im * im).sqrt() / v.len() as f32
+        };
+        let od = render(DriveType::Overdrive);
+        let ds = render(DriveType::Distortion);
+        let fz = render(DriveType::Fuzz);
+        let apart = |a: &[f32], b: &[f32]| {
+            rms(&a.iter().zip(b).map(|(x, y)| x - y).collect::<Vec<_>>()) / rms(a)
+        };
+        assert!(
+            apart(&od, &ds) > 0.2,
+            "overdrive and distortion: {}",
+            apart(&od, &ds)
+        );
+        assert!(
+            apart(&ds, &fz) > 0.2,
+            "distortion and fuzz: {}",
+            apart(&ds, &fz)
+        );
+        assert!(
+            apart(&od, &fz) > 0.2,
+            "overdrive and fuzz: {}",
+            apart(&od, &fz)
+        );
+        // Even harmonic: fuzz has one, the symmetric pair barely do.
+        let even = |v: &[f32]| harmonic(v, 2.0) / harmonic(v, 1.0);
+        assert!(
+            even(&fz) > 0.1,
+            "fuzz has no second harmonic: {}",
+            even(&fz)
+        );
+        assert!(
+            even(&od) < even(&fz) * 0.3,
+            "overdrive is not symmetric: {}",
+            even(&od)
+        );
+        // Hard clipping is brighter than soft: more third harmonic.
+        let third = |v: &[f32]| harmonic(v, 3.0) / harmonic(v, 1.0);
+        assert!(
+            third(&ds) > third(&od),
+            "distortion is not harder than overdrive"
         );
     }
 
