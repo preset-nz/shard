@@ -607,6 +607,28 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
+    // The limiter, last of all (Georg, 2026-09-14). On by default; off leaves
+    // the hard clip as the only guard, for whoever wants that edge.
+    ParamDef {
+        id: "amp.limit",
+        name: "Limit",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "amp.ceiling",
+        name: "Ceiling",
+        min: 0.5,
+        max: 1.0,
+        default: 0.95,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 0.0,
+    },
 ];
 
 /// The switchable nodes that make sound rather than shape it. They lead with

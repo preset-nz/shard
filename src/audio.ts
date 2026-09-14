@@ -27,6 +27,8 @@ export interface ParamInfo {
 
 export interface Meters {
   peak: number;
+  /** The limiter's lowest gain since the last poll; one means it did nothing. */
+  reduction: number;
   grains: number;
   playing: boolean;
   /** Where plain playback has reached, 0 to 1. */

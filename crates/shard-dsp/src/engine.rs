@@ -1,4 +1,4 @@
-//! The engine: source buffer, granular cloud, crusher, ring modulator, filter, out.
+//! The engine: source, granular cloud, crusher, ring modulator, filter, limiter, out.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
 //! logging, no file access. The only thing crossing in from outside is the
@@ -11,6 +11,7 @@ use crate::envelope::EnvParams;
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
+use crate::limiter::{Limiter, LimiterParams};
 use crate::modulation::ModSet;
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
@@ -51,6 +52,8 @@ struct Slots {
     filter_cutoff: usize,
     filter_resonance: usize,
     filter_type: usize,
+    limit: usize,
+    ceiling: usize,
     env_on: usize,
     trim_start: usize,
     trim_end: usize,
@@ -105,6 +108,8 @@ impl Slots {
             filter_cutoff: at("filter.cutoff"),
             filter_resonance: at("filter.resonance"),
             filter_type: at("filter.type"),
+            limit: at("amp.limit"),
+            ceiling: at("amp.ceiling"),
             env_on: at("env.on"),
             trim_start: at("trim.start"),
             trim_end: at("trim.end"),
@@ -195,6 +200,7 @@ pub struct Engine {
     crush: Crush,
     ringmod: RingMod,
     filter: Filter,
+    limiter: Limiter,
     slots: Slots,
     smooth: Smoothers,
     fades: Fades,
@@ -266,6 +272,7 @@ impl Engine {
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             filter: Filter::new(sample_rate),
+            limiter: Limiter::new(sample_rate),
             slots,
             smooth,
             fades,
@@ -461,6 +468,17 @@ impl Engine {
         core::mem::take(&mut self.peak)
     }
 
+    /// How late the output is, in frames: the limiter's look-ahead.
+    pub fn latency(&self) -> usize {
+        self.limiter.latency()
+    }
+
+    /// The lowest gain the limiter applied since the last call, one meaning
+    /// none. For the meter.
+    pub fn take_reduction(&mut self) -> f32 {
+        self.limiter.take_reduction()
+    }
+
     /// Render interleaved stereo into `out`, which must have an even length.
     pub fn process_block(&mut self, out: &mut [f32], bank: &ParamBank) {
         // LFOs move with the transport, and once per block, before anything
@@ -514,6 +532,10 @@ impl Engine {
         let ring_on_target = gate(self.slots.ring_on);
         let env_on_target = gate(self.slots.env_on);
         let filter_on_target = gate(self.slots.filter_on);
+        let limiter = LimiterParams {
+            ceiling: bank.get(self.slots.ceiling),
+            on: bank.get(self.slots.limit) >= 0.5,
+        };
         let filter = FilterParams {
             cutoff_hz: read(&self.mods, bank, self.slots.filter_cutoff),
             resonance: read(&self.mods, bank, self.slots.filter_resonance),
@@ -680,9 +702,10 @@ impl Engine {
             let g = self.smooth.gain.process(master_gain_target);
             let (l, r) = (l * g, r * g);
 
-            // A safety clip, not a limiter. Dense clouds sum above unity and
-            // a hard clip is preferable to handing the device something that
-            // wraps. If this engages often, lower the gain.
+            // The limiter holds peaks under the ceiling, a millisecond late.
+            // The clip after it is a safety net for when it is switched off:
+            // a hard clip beats handing the device something that wraps.
+            let (l, r) = self.limiter.process(l, r, &limiter);
             let l = l.clamp(-1.0, 1.0);
             let r = r.clamp(-1.0, 1.0);
 
@@ -921,15 +944,21 @@ mod tests {
         let bank = ParamBank::new();
         bank.set_by_id("grain.on", 0.0);
         bank.set_by_id("amp.gain", 1.0);
+        // A full-scale tone sits above the limiter's ceiling; this test is
+        // about the path, not the limiter, so hold it off.
+        bank.set_by_id("amp.limit", 0.0);
 
         let mut player = crate::player::Player::new(48_000.0);
         let mut out = vec![0.0; 512];
         let mut worst = 0.0f32;
+        // The output runs a look-ahead late; the expectation waits with it.
+        let mut expected = std::collections::VecDeque::from(vec![0.0; e.latency()]);
         for _ in 0..90 {
             e.process_block(&mut out, &bank);
             for frame in out.chunks(2) {
-                let expected = player.process(&src, 1.0);
-                worst = worst.max((frame[0] - expected).abs());
+                expected.push_back(player.process(&src, 1.0));
+                let want = expected.pop_front().unwrap();
+                worst = worst.max((frame[0] - want).abs());
             }
         }
         assert!(worst < 0.02, "dry path diverged from playback by {worst}");
@@ -945,6 +974,8 @@ mod tests {
             e.set_playing(true);
             let bank = ParamBank::new();
             set(&bank, "amp.gain", gain);
+            // Linearity is the point here, and the limiter is not linear.
+            set(&bank, "amp.limit", 0.0);
             let mut out = vec![0.0; 512];
             let mut tail = Vec::new();
             for block in 0..200 {
@@ -980,6 +1011,7 @@ mod tests {
             let bank = ParamBank::new();
             set(&bank, "material.on", if material { 1.0 } else { 0.0 });
             set(&bank, "grain.on", if grains { 1.0 } else { 0.0 });
+            set(&bank, "amp.limit", 0.0);
             set(&bank, "grain.gain", 0.5);
             let mut out = vec![0.0; 512];
             let mut tail = Vec::new();

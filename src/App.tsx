@@ -66,6 +66,7 @@ export default function App() {
   const [source, setSource] = useState<SourceInfo | null>(null);
   const [meter, setMeter] = useState<Meters>({
     peak: 0,
+    reduction: 1,
     grains: 0,
     playing: false,
     playhead: 0,
@@ -625,7 +626,7 @@ export default function App() {
           />
 
           <div className="flex items-center gap-6 text-xs text-muted-foreground">
-            <Meter peak={meter.peak} />
+            <Meter peak={meter.peak} reduction={meter.reduction} />
             <span title="Concurrent grains. Roughly density x grain length.">
               {meter.grains} grains
             </span>

@@ -46,6 +46,8 @@ pub struct Audio {
     heard: Arc<ParamBank>,
     /// Peak since the UI last asked, as f32 bits. Written by the audio thread.
     peak: Arc<AtomicU32>,
+    /// The lowest limiter gain since the UI last asked, as f32 bits.
+    reduction: Arc<AtomicU32>,
     /// Active grain count, for the UI. Written by the audio thread.
     grains: Arc<AtomicU32>,
     /// Transport, mirrored out of the audio thread for the UI.
@@ -108,6 +110,9 @@ pub struct ParamInfo {
 #[derive(Serialize)]
 pub struct Meters {
     pub peak: f32,
+    /// The limiter's lowest gain since the last poll, one meaning it did
+    /// nothing. Under one, it is holding peaks down.
+    pub reduction: f32,
     pub grains: u32,
     pub playing: bool,
     /// Where plain playback has reached, 0 to 1.
@@ -256,6 +261,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         block_budget_us: state.timer.budget_us(),
         audio_allocs,
         peak: f32::from_bits(state.peak.swap(0, Ordering::Relaxed)),
+        reduction: f32::from_bits(state.reduction.swap(1.0f32.to_bits(), Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
         playing: state.playing.load(Ordering::Relaxed),
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
@@ -979,6 +985,7 @@ fn build_audio() -> Result<Audio, String> {
     let bank = Arc::new(ParamBank::new());
     let heard = Arc::new(ParamBank::new());
     let peak = Arc::new(AtomicU32::new(0));
+    let reduction = Arc::new(AtomicU32::new(1.0f32.to_bits()));
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
     let playhead = Arc::new(AtomicU32::new(0));
@@ -1005,6 +1012,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_bank = Arc::clone(&bank);
     let audio_heard = Arc::clone(&heard);
     let audio_peak = Arc::clone(&peak);
+    let audio_reduction = Arc::clone(&reduction);
     let audio_grains = Arc::clone(&grains);
     let audio_swap = Arc::clone(&swap);
     let audio_playing = Arc::clone(&playing);
@@ -1143,6 +1151,10 @@ fn build_audio() -> Result<Audio, String> {
                                 let block_peak = engine.take_peak();
                                 let prev = f32::from_bits(audio_peak.load(Ordering::Relaxed));
                                 audio_peak.store(block_peak.max(prev).to_bits(), Ordering::Relaxed);
+                                let block_red = engine.take_reduction();
+                                let prev = f32::from_bits(audio_reduction.load(Ordering::Relaxed));
+                                audio_reduction
+                                    .store(block_red.min(prev).to_bits(), Ordering::Relaxed);
                                 audio_grains
                                     .store(engine.active_grains() as u32, Ordering::Relaxed);
                                 audio_playhead
@@ -1196,6 +1208,7 @@ fn build_audio() -> Result<Audio, String> {
         bank,
         heard,
         peak,
+        reduction,
         grains,
         playing,
         grain_log,
@@ -1327,6 +1340,7 @@ mod tests {
 
         let meters = serde_json::to_value(Meters {
             peak: 0.0,
+            reduction: 1.0,
             grains: 0,
             playing: false,
             playhead: 0.0,
@@ -1339,6 +1353,7 @@ mod tests {
         .expect("Meters is serialisable");
         for key in [
             "peak",
+            "reduction",
             "grains",
             "playing",
             "playhead",
