@@ -551,6 +551,27 @@ export default function App() {
         </nav>
 
         <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
+          {/* The material's title selects it: trim and octave, which every
+              generator reads. The waveform itself stays the trim and grain
+              control. */}
+          <div className="-mb-2 flex items-baseline gap-2">
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => select({ kind: 'node', id: 'source' })}
+              title="Show the material's trim and octave"
+              className={`text-[11px] font-semibold uppercase tracking-wider ${
+                selection?.kind === 'node' && selection.id === 'source'
+                  ? 'text-primary'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              Material
+            </button>
+            <span className="truncate text-xs text-muted-foreground">
+              {source ? `${source.name} · ${source.seconds.toFixed(1)}s` : ''}
+            </span>
+          </div>
           <Waveform
             peaks={source?.peaks ?? []}
             position={values['grain.position'] ?? 0}
@@ -612,7 +633,7 @@ export default function App() {
             // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
             // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
             <div
-              className="grid min-h-0 flex-1 grid-cols-4 content-start gap-4 overflow-y-auto"
+              className="grid min-h-0 flex-1 grid-cols-3 content-start gap-4 overflow-y-auto"
               onClick={(e) => {
                 if (!(e.target as Element).closest('[data-node-card]')) clear();
               }}

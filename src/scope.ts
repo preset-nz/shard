@@ -13,23 +13,25 @@
  *
  * **One scope per node.** A node is what the work area draws as a card and
  * the inspector shows when it is selected. Most nodes are one table prefix.
- * Material is split: its octave is how the material is read, and its switch
- * and gain are the plain-playback generator. Ids do not change, being a wire
- * format. See `guidance/projects/shard/design/panel-layout.md`.
+ * Material is split: trim and octave are the material every generator reads,
+ * and its switch and gain are Sample, the plain-playback generator. Ids do not
+ * change, being a wire format. See
+ * `guidance/projects/shard/design/panel-layout.md`.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import { denormalise, format, normalise, type ParamInfo, setParam, WINDOW_NAMES } from '@/audio';
 import { ParamRow } from '@/components/ParamRow';
 
 /** Where a node's card sits in the work area. */
-export type Lane = 'pre' | 'generate' | 'process' | 'master';
+export type Lane = 'generate' | 'process' | 'master';
 
 /**
  * In signal order. Generators make sound and are summed; processes shape it
  * (Georg, 2026-09-14: generators are not processes, so they get their own).
+ * There is no pre-process lane: trim and octave belong to the material every
+ * generator reads, and are selected from the sample above the lanes.
  */
 export const LANES: Array<{ id: Lane; label: string }> = [
-  { id: 'pre', label: 'Pre-process' },
   { id: 'generate', label: 'Generators' },
   { id: 'process', label: 'Process' },
   { id: 'master', label: 'Master' },
@@ -38,7 +40,10 @@ export const LANES: Array<{ id: Lane; label: string }> = [
 export interface NodeInfo {
   id: string;
   label: string;
-  /** Null for a node with no card: Tape, which lives in Settings. */
+  /**
+   * Null for a node with no card: the material, selected from the sample, and
+   * Tape, which lives in Settings.
+   */
   lane: Lane | null;
   /**
    * The table prefix its switch, level and presets use, such as `grain`. Null
@@ -53,13 +58,15 @@ const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
 
 /** Every node, in work-area order: each lane's cards in signal order. */
 export const NODES: NodeInfo[] = [
-  { id: 'trim', label: 'Trim', lane: 'pre', table: 'trim', owns: under('trim') },
+  // The material itself: how much of it is read, and at what octave. Both
+  // generators read through these, so they are not Sample's own. Selected by
+  // clicking the sample's title above the lanes.
   {
-    id: 'octave',
-    label: 'Octave',
-    lane: 'pre',
+    id: 'source',
+    label: 'Material',
+    lane: null,
     table: null,
-    owns: (id) => id === 'material.octave',
+    owns: (id) => under('trim')(id) || id === 'material.octave',
   },
   {
     id: 'material',
