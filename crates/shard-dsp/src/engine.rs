@@ -1,4 +1,4 @@
-//! The engine: source buffer, granular cloud, crusher, ring modulator, out.
+//! The engine: source buffer, granular cloud, crusher, ring modulator, filter, out.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
 //! logging, no file access. The only thing crossing in from outside is the
@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::crush::{Crush, CrushParams};
 use crate::envelope::EnvParams;
+use crate::filter::{Filter, FilterParams, FilterType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::modulation::ModSet;
@@ -45,6 +46,11 @@ struct Slots {
     grain_on: usize,
     crush_on: usize,
     ring_on: usize,
+    filter_on: usize,
+    filter_mix: usize,
+    filter_cutoff: usize,
+    filter_resonance: usize,
+    filter_type: usize,
     env_on: usize,
     trim_start: usize,
     trim_end: usize,
@@ -94,6 +100,11 @@ impl Slots {
             grain_on: at("grain.on"),
             crush_on: at("crush.on"),
             ring_on: at("ring.on"),
+            filter_on: at("filter.on"),
+            filter_mix: at("filter.mix"),
+            filter_cutoff: at("filter.cutoff"),
+            filter_resonance: at("filter.resonance"),
+            filter_type: at("filter.type"),
             env_on: at("env.on"),
             trim_start: at("trim.start"),
             trim_end: at("trim.end"),
@@ -142,6 +153,7 @@ struct Fades {
     crush: Ramp,
     ring: Ramp,
     env: Ramp,
+    filter: Ramp,
 }
 
 impl Fades {
@@ -160,6 +172,7 @@ impl Fades {
             crush: ramp(slots.crush_on),
             ring: ramp(slots.ring_on),
             env: ramp(slots.env_on),
+            filter: ramp(slots.filter_on),
         }
     }
 }
@@ -181,6 +194,7 @@ pub struct Engine {
     reverse_age: f32,
     crush: Crush,
     ringmod: RingMod,
+    filter: Filter,
     slots: Slots,
     smooth: Smoothers,
     fades: Fades,
@@ -251,6 +265,7 @@ impl Engine {
             reverse_age: 0.0,
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
+            filter: Filter::new(sample_rate),
             slots,
             smooth,
             fades,
@@ -498,6 +513,13 @@ impl Engine {
         let crush_on_target = gate(self.slots.crush_on);
         let ring_on_target = gate(self.slots.ring_on);
         let env_on_target = gate(self.slots.env_on);
+        let filter_on_target = gate(self.slots.filter_on);
+        let filter = FilterParams {
+            cutoff_hz: read(&self.mods, bank, self.slots.filter_cutoff),
+            resonance: read(&self.mods, bank, self.slots.filter_resonance),
+            kind: FilterType::from_value(bank.get(self.slots.filter_type)),
+            mix: read(&self.mods, bank, self.slots.filter_mix),
+        };
         let env = EnvParams {
             amount: read(&self.mods, bank, self.slots.env_mix),
             attack_ms: read(&self.mods, bank, self.slots.env_attack),
@@ -643,6 +665,15 @@ impl Engine {
             };
             let e = faded_env.gain_at(elapsed, window_len, self.sample_rate);
             let (l, r) = (l * e, r * e);
+
+            // The filter, on the master: after every generator and effect,
+            // before the gain. Switched off, its mix lands on an exact zero.
+            let filter_on = self.fades.filter.process(filter_on_target);
+            let faded_filter = FilterParams {
+                mix: filter.mix * filter_on,
+                ..filter
+            };
+            let (l, r) = self.filter.process(l, r, &faded_filter);
 
             // The master gain, after every generator and effect. Unity is
             // exact, since the smoother starts and rests on it.

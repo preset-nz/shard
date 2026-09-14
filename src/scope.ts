@@ -19,7 +19,15 @@
  * `guidance/projects/shard/design/panel-layout.md`.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
-import { denormalise, format, normalise, type ParamInfo, setParam, WINDOW_NAMES } from '@/audio';
+import {
+  denormalise,
+  FILTER_TYPES,
+  format,
+  normalise,
+  type ParamInfo,
+  setParam,
+  WINDOW_NAMES,
+} from '@/audio';
 import { ParamRow } from '@/components/ParamRow';
 
 /** Where a node's card sits in the work area. */
@@ -81,6 +89,9 @@ export const NODES: NodeInfo[] = [
   { id: 'crush', label: 'Crush', lane: 'process', table: 'crush', owns: under('crush') },
   { id: 'ring', label: 'Ring modulation', lane: 'process', table: 'ring', owns: under('ring') },
   { id: 'env', label: 'Envelope', lane: 'process', table: 'env', owns: under('env') },
+  // On the master, after every effect (Georg, 2026-09-14): what takes away
+  // the harmonics crush and ring add. An EQ, if one comes, sits here too.
+  { id: 'filter', label: 'Filter', lane: 'master', table: 'filter', owns: under('filter') },
   { id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
   // The tape's feel, in Settings (Georg, 2026-09-14). Brake and reverse are
   // played from the header, so they are not rows anywhere.
@@ -134,7 +145,8 @@ function fieldFor(p: ParamInfo) {
 
   if (p.taper === 'stepped') {
     const n = Math.max(1, p.steps ?? 1);
-    const names = p.id === 'grain.window' ? WINDOW_NAMES : null;
+    const names =
+      p.id === 'grain.window' ? WINDOW_NAMES : p.id === 'filter.type' ? FILTER_TYPES : null;
     return {
       ...base,
       kind: 'select' as const,

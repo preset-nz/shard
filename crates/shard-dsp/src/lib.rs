@@ -18,6 +18,7 @@
 pub mod crush;
 pub mod engine;
 pub mod envelope;
+pub mod filter;
 pub mod granular;
 pub mod inspect;
 pub mod modulation;
@@ -31,6 +32,7 @@ pub mod smooth;
 pub use crush::{Crush, CrushParams};
 pub use engine::Engine;
 pub use envelope::EnvParams;
+pub use filter::{Filter, FilterParams, FilterType};
 pub use granular::{GrainParams, Granular, Window};
 pub use inspect::{GrainLog, GrainSpawn};
 pub use modulation::{Curve, Ease, LfoSpec, LinkError, ModSet, Shape};

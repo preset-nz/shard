@@ -254,6 +254,8 @@ export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { pl
 
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
+/** `FilterType::NAMES`, in stepped order. */
+export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {
