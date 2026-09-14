@@ -22,10 +22,15 @@ import { denormalise, format, normalise, type ParamInfo, setParam, WINDOW_NAMES 
 import { ParamRow } from '@/components/ParamRow';
 
 /** Where a node's card sits in the work area. */
-export type Lane = 'pre' | 'process' | 'master';
+export type Lane = 'pre' | 'generate' | 'process' | 'master';
 
+/**
+ * In signal order. Generators make sound and are summed; processes shape it
+ * (Georg, 2026-09-14: generators are not processes, so they get their own).
+ */
 export const LANES: Array<{ id: Lane; label: string }> = [
   { id: 'pre', label: 'Pre-process' },
+  { id: 'generate', label: 'Generators' },
   { id: 'process', label: 'Process' },
   { id: 'master', label: 'Master' },
 ];
@@ -46,7 +51,7 @@ export interface NodeInfo {
 
 const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
 
-/** Every node, in work-area order: generators before effects, effects in signal order. */
+/** Every node, in work-area order: each lane's cards in signal order. */
 export const NODES: NodeInfo[] = [
   { id: 'trim', label: 'Trim', lane: 'pre', table: 'trim', owns: under('trim') },
   {
@@ -59,11 +64,11 @@ export const NODES: NodeInfo[] = [
   {
     id: 'material',
     label: 'Sample',
-    lane: 'process',
+    lane: 'generate',
     table: 'material',
     owns: (id) => under('material')(id) && id !== 'material.octave',
   },
-  { id: 'grain', label: 'Granular', lane: 'process', table: 'grain', owns: under('grain') },
+  { id: 'grain', label: 'Granular', lane: 'generate', table: 'grain', owns: under('grain') },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
   { id: 'crush', label: 'Crush', lane: 'process', table: 'crush', owns: under('crush') },

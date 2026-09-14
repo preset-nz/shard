@@ -612,7 +612,7 @@ export default function App() {
             // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
             // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
             <div
-              className="grid min-h-0 flex-1 grid-cols-[1fr_1.6fr_1fr] content-start gap-4 overflow-y-auto"
+              className="grid min-h-0 flex-1 grid-cols-4 content-start gap-4 overflow-y-auto"
               onClick={(e) => {
                 if (!(e.target as Element).closest('[data-node-card]')) clear();
               }}
