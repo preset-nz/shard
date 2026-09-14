@@ -15,12 +15,16 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use tauri::Manager;
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 use shard_dsp::params::{Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
 
+mod controllers;
+mod midi;
 mod modulation;
 mod patch;
 mod presets;
@@ -538,6 +542,151 @@ fn load_sample(state: tauri::State<'_, Audio>, path: String) -> Result<SourceInf
 /// state. Instead a dedicated thread builds it, plays it, and then parks
 /// forever holding it — dropping the stream would stop the device. Only the
 /// atomics and queues cross back, and those are all `Send`.
+/// A device as Settings → Controllers lists it.
+#[derive(Serialize)]
+pub struct DeviceView {
+    pub port: String,
+    pub name: String,
+    pub connected: bool,
+}
+
+/// A control as Settings → Controllers lists it, with its activity.
+#[derive(Serialize)]
+pub struct ControlView {
+    pub id: u64,
+    pub device: String,
+    pub channel: u8,
+    /// "cc" | "note"
+    pub kind: &'static str,
+    pub number: u8,
+    /// "knob" | "pad"
+    pub role: &'static str,
+    pub name: String,
+    /// Moved within the last quarter second.
+    pub active: bool,
+    /// The last value it sent, 0 to 127, once it has sent one.
+    pub last: Option<u8>,
+}
+
+#[derive(Serialize)]
+pub struct ControllersView {
+    pub devices: Vec<DeviceView>,
+    pub controls: Vec<ControlView>,
+    pub roles: &'static [&'static str],
+}
+
+impl ControllersView {
+    fn of(c: &midi::Controllers) -> Self {
+        let registry = c.registry.lock().expect("registry poisoned");
+        let activity = c.activity.lock().expect("activity poisoned");
+        let connected = c.connected.lock().expect("connected poisoned");
+        let now = Instant::now();
+        ControllersView {
+            devices: registry
+                .devices
+                .iter()
+                .map(|d| DeviceView {
+                    port: d.port.clone(),
+                    name: d.name.clone(),
+                    connected: connected.contains(&d.port),
+                })
+                .collect(),
+            controls: registry
+                .controls
+                .iter()
+                .map(|k| {
+                    let (active, last) = activity.of(k.id, now);
+                    ControlView {
+                        id: k.id,
+                        device: k.address.device.clone(),
+                        channel: k.address.channel,
+                        kind: match k.address.kind {
+                            controllers::Kind::Cc => "cc",
+                            controllers::Kind::Note => "note",
+                        },
+                        number: k.address.number,
+                        role: match k.role {
+                            controllers::Role::Knob => "knob",
+                            controllers::Role::Pad => "pad",
+                        },
+                        name: k.name.clone(),
+                        active,
+                        last,
+                    }
+                })
+                .collect(),
+            roles: &controllers::Role::NAMES,
+        }
+    }
+}
+
+/// Every device and control learned so far, with what moved just now. Polled
+/// while Settings is open.
+#[tauri::command]
+fn controllers(state: tauri::State<'_, Arc<midi::Controllers>>) -> ControllersView {
+    ControllersView::of(&state)
+}
+
+/// Apply one edit to the registry, save it, and answer with the new view.
+fn edit_controllers(
+    c: &midi::Controllers,
+    edit: impl FnOnce(&mut controllers::Registry) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut registry = c.registry.lock().expect("registry poisoned");
+    edit(&mut registry)?;
+    c.save(&registry)
+}
+
+#[tauri::command]
+fn rename_control(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+    name: String,
+) -> Result<ControllersView, String> {
+    edit_controllers(&state, |r| r.rename_control(id, &name))?;
+    Ok(ControllersView::of(&state))
+}
+
+#[tauri::command]
+fn set_control_role(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+    role: String,
+) -> Result<ControllersView, String> {
+    let role = controllers::Role::parse(&role).ok_or_else(|| format!("unknown role: {role}"))?;
+    edit_controllers(&state, |r| r.set_role(id, role))?;
+    Ok(ControllersView::of(&state))
+}
+
+#[tauri::command]
+fn forget_control(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+) -> Result<ControllersView, String> {
+    edit_controllers(&state, |r| r.forget_control(id))?;
+    state.activity.lock().expect("activity poisoned").forget(id);
+    Ok(ControllersView::of(&state))
+}
+
+#[tauri::command]
+fn rename_device(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    port: String,
+    name: String,
+) -> Result<ControllersView, String> {
+    edit_controllers(&state, |r| r.rename_device(&port, &name))?;
+    Ok(ControllersView::of(&state))
+}
+
+#[tauri::command]
+fn forget_device(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    port: String,
+) -> Result<ControllersView, String> {
+    edit_controllers(&state, |r| r.forget_device(&port))?;
+    Ok(ControllersView::of(&state))
+}
+
 impl Audio {
     /// Build the engine's modulation set from `doc` here, on the command
     /// thread, and leave it for the audio thread to take at a block boundary.
@@ -842,6 +991,19 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(audio)
+        .setup(|app| {
+            // Controllers belong to this machine, so they live in the app's
+            // config directory rather than in any patch.
+            let path = app
+                .path()
+                .app_config_dir()
+                .map_err(|e| e.to_string())?
+                .join("controllers.json");
+            let shared = Arc::new(midi::Controllers::load(path));
+            midi::start(Arc::clone(&shared));
+            app.manage(shared);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             param_defs,
             get_params,
@@ -867,6 +1029,12 @@ pub fn run() {
             unlink_param,
             get_heard,
             lfo_limits,
+            controllers,
+            rename_control,
+            set_control_role,
+            forget_control,
+            rename_device,
+            forget_device,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -968,6 +1136,44 @@ mod tests {
             .expect("ModulationView is serialisable");
         for key in ["lfos", "links", "refused"] {
             assert!(view.get(key).is_some(), "ModulationView lost `{key}`");
+        }
+
+        let cv = serde_json::to_value(ControllersView {
+            devices: vec![DeviceView {
+                port: "LPD8".into(),
+                name: "LPD8".into(),
+                connected: true,
+            }],
+            controls: vec![ControlView {
+                id: 1,
+                device: "LPD8".into(),
+                channel: 0,
+                kind: "cc",
+                number: 1,
+                role: "knob",
+                name: "K1".into(),
+                active: false,
+                last: None,
+            }],
+            roles: &controllers::Role::NAMES,
+        })
+        .expect("ControllersView is serialisable");
+        for key in ["devices", "controls", "roles"] {
+            assert!(cv.get(key).is_some(), "ControllersView lost `{key}`");
+        }
+        for key in ["port", "name", "connected"] {
+            assert!(
+                cv["devices"][0].get(key).is_some(),
+                "DeviceView lost `{key}`"
+            );
+        }
+        for key in [
+            "id", "device", "channel", "kind", "number", "role", "name", "active", "last",
+        ] {
+            assert!(
+                cv["controls"][0].get(key).is_some(),
+                "ControlView lost `{key}`"
+            );
         }
 
         let limits = serde_json::to_value(lfo_limits()).expect("LfoLimits is serialisable");

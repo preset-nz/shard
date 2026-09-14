@@ -248,3 +248,42 @@ export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { pl
 
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
+
+/** A MIDI device as Settings → Controllers lists it. */
+export interface DeviceView {
+  /** The port name CoreMIDI gives it. Identity; the name is yours to edit. */
+  port: string;
+  name: string;
+  connected: boolean;
+}
+
+/** One knob or pad, learned the first time it was touched. */
+export interface ControlView {
+  id: number;
+  device: string;
+  channel: number;
+  kind: 'cc' | 'note';
+  number: number;
+  role: 'knob' | 'pad';
+  name: string;
+  /** Moved within the last quarter second. */
+  active: boolean;
+  /** The last value it sent, 0 to 127. */
+  last: number | null;
+}
+
+export interface ControllersView {
+  devices: DeviceView[];
+  controls: ControlView[];
+  roles: string[];
+}
+
+export const controllers = () => invoke<ControllersView>('controllers');
+export const renameControl = (id: number, name: string) =>
+  invoke<ControllersView>('rename_control', { id, name });
+export const setControlRole = (id: number, role: string) =>
+  invoke<ControllersView>('set_control_role', { id, role });
+export const forgetControl = (id: number) => invoke<ControllersView>('forget_control', { id });
+export const renameDevice = (port: string, name: string) =>
+  invoke<ControllersView>('rename_device', { port, name });
+export const forgetDevice = (port: string) => invoke<ControllersView>('forget_device', { port });

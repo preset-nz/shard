@@ -1,4 +1,5 @@
 import { PropertyPanel } from '@preset.nz/facets';
+import { ControllersPanel } from '@/components/ControllersPanel';
 import type { ParamRowContext } from '@/components/ParamRow';
 import {
   Dialog,
@@ -16,17 +17,22 @@ import { type ParamValues, scopeKeyFor } from '@/scope';
  *
  * The values are still the patch's own. Roadmap row 4 makes them app-wide
  * defaults a patch can override, once the shared preferences store exists.
+ *
+ * Controllers are app-wide already: the MIDI devices seen and the controls
+ * learned from them, in `controllers.json`.
  */
 export function SettingsDialog({
   open,
   onOpenChange,
   values,
   ctx,
+  onError,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   values: ParamValues;
   ctx: ParamRowContext;
+  onError: (message: string) => void;
 }) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -34,7 +40,7 @@ export function SettingsDialog({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            How the tape feels under the brake and reverse. Saved with the patch for now.
+            Tape feel is saved with the patch for now. Controllers belong to this Mac.
           </DialogDescription>
         </DialogHeader>
         <div className="-mx-3">
@@ -42,6 +48,12 @@ export function SettingsDialog({
             Tape
           </div>
           <PropertyPanel scopeKey={scopeKeyFor('tape')} selection={values} ctx={ctx} />
+          <div className="mt-4 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Controllers
+          </div>
+          <div className="mt-1">
+            <ControllersPanel open={open} onError={onError} />
+          </div>
         </div>
       </DialogContent>
     </Dialog>

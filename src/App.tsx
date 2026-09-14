@@ -721,6 +721,7 @@ export default function App() {
         onOpenChange={setSettingsOpen}
         values={values}
         ctx={panelCtx}
+        onError={setError}
       />
     </div>
   );
