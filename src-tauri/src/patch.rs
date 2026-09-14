@@ -327,6 +327,7 @@ mod tests {
                 on: true,
                 length: 16,
                 pattern: 43_690,
+                pitches: [0, 0, 0, -5, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, -24],
             }],
             ..Tracker::default()
         };

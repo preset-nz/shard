@@ -263,6 +263,8 @@ export interface Track {
   length: number;
   /** One bit per step, step one first. */
   pattern: number;
+  /** Sixteen pitches in semitones, −24 to 24, step one first. */
+  pitches: number[];
 }
 
 /**

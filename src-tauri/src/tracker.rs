@@ -15,6 +15,7 @@
 //! Saved in the same `.shard` file as the patch, above it. See `patch.rs`.
 
 use serde::{Deserialize, Serialize};
+use shard_dsp::steps::{PITCH_RANGE, STEPS};
 use shard_dsp::StepParams;
 
 pub const TEMPO_MIN: f32 = 40.0;
@@ -47,6 +48,9 @@ pub struct Track {
     /// One bit per step, step one first. A whole number in the file, never a
     /// float, so it reads back exactly.
     pub pattern: u32,
+    /// Each step's pitch in semitones, step one first, up to `PITCH_RANGE`
+    /// either way. Kept for every step, set or not, like the pattern.
+    pub pitches: [i8; STEPS],
 }
 
 impl Default for Tracker {
@@ -67,6 +71,7 @@ impl Default for Track {
             on: p.on,
             length: p.length,
             pattern: p.pattern,
+            pitches: p.pitches,
         }
     }
 }
@@ -98,6 +103,9 @@ impl Tracker {
                 .min_by_key(|n| n.abs_diff(t.length))
                 .unwrap_or(16);
             t.pattern &= PATTERN_MASK;
+            for p in &mut t.pitches {
+                *p = (*p).clamp(-PITCH_RANGE, PITCH_RANGE);
+            }
         }
         self
     }
@@ -111,7 +119,7 @@ impl Tracker {
             length: t.length,
             swing: self.swing,
             pattern: t.pattern,
-            pitches: [0; shard_dsp::steps::STEPS],
+            pitches: t.pitches,
         }
     }
 }
@@ -129,6 +137,7 @@ mod tests {
                 on: true,
                 length: 11,
                 pattern: 0x1_2345,
+                pitches: [99; STEPS],
             }],
         }
         .sanitised();
@@ -136,6 +145,10 @@ mod tests {
         assert_eq!(t.swing, SWING_MAX);
         assert_eq!(t.tracks[0].length, 8, "11 is nearest to 8");
         assert_eq!(t.tracks[0].pattern, 0x2345, "sixteen steps at most");
+        assert_eq!(
+            t.tracks[0].pitches, [PITCH_RANGE; STEPS],
+            "two octaves up at most"
+        );
         let fast = Tracker {
             tempo: 500.0,
             ..Tracker::default()
@@ -160,6 +173,7 @@ mod tests {
                 on: true,
                 length: 4,
                 pattern: 0b1000_0000_0001,
+                pitches: [0; STEPS],
             }],
             ..Tracker::default()
         }
@@ -179,6 +193,7 @@ mod tests {
                 on: true,
                 length: 3,
                 pattern: 0xF_FFFF,
+                pitches: [-100; STEPS],
             }],
         };
         let kept = sent.sanitised();
@@ -192,7 +207,7 @@ mod tests {
                 length: 4,
                 swing: 0.0,
                 pattern: 0xFFFF,
-                pitches: [0; shard_dsp::steps::STEPS],
+                pitches: [-PITCH_RANGE; STEPS],
             }
         );
     }
@@ -207,11 +222,13 @@ mod tests {
                     on: true,
                     length: 8,
                     pattern: 0b1001,
+                    pitches: [7; STEPS],
                 },
                 Track {
                     on: false,
                     length: 4,
                     pattern: 0b1,
+                    pitches: [0; STEPS],
                 },
             ],
         };
@@ -223,7 +240,7 @@ mod tests {
                 length: 8,
                 swing: 0.12,
                 pattern: 0b1001,
-                pitches: [0; shard_dsp::steps::STEPS],
+                pitches: [7; STEPS],
             }
         );
     }

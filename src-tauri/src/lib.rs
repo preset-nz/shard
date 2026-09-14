@@ -1429,7 +1429,7 @@ mod tests {
         for key in ["tempo", "swing", "tracks"] {
             assert!(tracker.get(key).is_some(), "Tracker lost `{key}`");
         }
-        for key in ["on", "length", "pattern"] {
+        for key in ["on", "length", "pattern", "pitches"] {
             assert!(
                 tracker["tracks"][0].get(key).is_some(),
                 "Track lost `{key}`"
