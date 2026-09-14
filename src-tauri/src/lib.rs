@@ -24,6 +24,7 @@ use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
 
 mod controllers;
+mod mapping;
 mod midi;
 mod modulation;
 mod patch;
@@ -336,7 +337,11 @@ fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
 /// JSON: parameter values by id, LFOs and links, presets, and where the sample
 /// was.
 #[tauri::command]
-fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String> {
+fn save_patch(
+    state: tauri::State<'_, Audio>,
+    ctl: tauri::State<'_, Arc<midi::Controllers>>,
+    path: String,
+) -> Result<(), String> {
     let sample = {
         let s = state.source.lock().expect("source poisoned");
         s.path.clone()
@@ -348,6 +353,17 @@ fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String
         .lock()
         .expect("modulation poisoned")
         .clone();
+    // The patch records the map it was played with, so loading it brings
+    // the same knobs back.
+    p.controller_map = ctl
+        .registry
+        .lock()
+        .expect("registry poisoned")
+        .active_map()
+        .map(|m| mapping::MapRef {
+            id: m.id,
+            name: m.name.clone(),
+        });
     std::fs::write(&path, p.to_json()?).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -355,10 +371,27 @@ fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String
 /// still there, and says so plainly when it is not rather than loading half
 /// the patch and looking fine.
 #[tauri::command]
-fn load_patch(state: tauri::State<'_, Audio>, path: String) -> Result<patch::LoadReport, String> {
+fn load_patch(
+    state: tauri::State<'_, Audio>,
+    ctl: tauri::State<'_, Arc<midi::Controllers>>,
+    path: String,
+) -> Result<patch::LoadReport, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
     let p = patch::Patch::from_json(&text)?;
     let mut report = p.apply(&state.bank);
+    // A patch names its map. One this Mac does not have leaves the active
+    // map alone and is reported, like an unknown id.
+    if let Some(want) = &p.controller_map {
+        let mut registry = ctl.registry.lock().expect("registry poisoned");
+        if registry.set_active(want.id) {
+            ctl.pickup.lock().expect("pickup poisoned").rearm_all();
+            if let Err(e) = ctl.save(&registry) {
+                eprintln!("shard: could not save controllers: {e}");
+            }
+        } else {
+            report.map_missing = Some(want.name.clone());
+        }
+    }
     // Presets belong to the patch, so the loaded patch's set replaces the old.
     *state.presets.lock().expect("presets poisoned") = p.presets.clone();
     // So do LFOs and links. Anything the engine cannot use stays in the
@@ -687,6 +720,163 @@ fn forget_device(
     Ok(ControllersView::of(&state))
 }
 
+/// One mapped parameter as its row draws it.
+#[derive(Serialize)]
+pub struct MappingView {
+    pub control: u64,
+    pub control_name: String,
+    /// Waiting for the knob to pass through the value.
+    pub armed: bool,
+    /// Where the knob physically is, 0 to 1, once it has said.
+    pub knob: Option<f32>,
+}
+
+#[derive(Serialize)]
+pub struct MapInfo {
+    pub id: u64,
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct MappingsView {
+    pub active: Option<MapInfo>,
+    pub maps: Vec<MapInfo>,
+    /// By parameter id, in the active map.
+    pub mappings: std::collections::BTreeMap<String, MappingView>,
+    /// The parameter waiting for a control to move.
+    pub learning: Option<String>,
+    pub report: Option<LearnReport>,
+}
+
+#[derive(Serialize)]
+pub struct LearnReport {
+    pub seq: u64,
+    pub ok: bool,
+    pub text: String,
+}
+
+impl MappingsView {
+    fn of(c: &midi::Controllers) -> Self {
+        let registry = c.registry.lock().expect("registry poisoned");
+        let pickup = c.pickup.lock().expect("pickup poisoned");
+        let learn = c.learn.lock().expect("learn poisoned");
+        let active = registry.active_map();
+        let mut mappings = std::collections::BTreeMap::new();
+        if let Some(map) = active {
+            for (control, target) in &map.mappings {
+                let mapping::Target::Param(id) = target;
+                let Some(index) = shard_dsp::params::index_of(id) else {
+                    continue;
+                };
+                let name = registry
+                    .control(*control)
+                    .map(|k| k.name.clone())
+                    .unwrap_or_default();
+                let (armed, knob) = pickup.state(*control, &PARAMS[index], c.bank.get(index));
+                mappings.insert(
+                    id.clone(),
+                    MappingView {
+                        control: *control,
+                        control_name: name,
+                        armed,
+                        knob,
+                    },
+                );
+            }
+        }
+        MappingsView {
+            active: active.map(|m| MapInfo {
+                id: m.id,
+                name: m.name.clone(),
+            }),
+            maps: registry
+                .maps
+                .iter()
+                .map(|m| MapInfo {
+                    id: m.id,
+                    name: m.name.clone(),
+                })
+                .collect(),
+            mappings,
+            learning: learn.waiting.as_ref().map(|t| t.describe()),
+            report: learn.report.as_ref().map(|(seq, r)| LearnReport {
+                seq: *seq,
+                ok: r.is_ok(),
+                text: match r {
+                    Ok(t) | Err(t) => t.clone(),
+                },
+            }),
+        }
+    }
+}
+
+/// The active map as the rows draw it. Polled with the parameters.
+#[tauri::command]
+fn mappings(state: tauri::State<'_, Arc<midi::Controllers>>) -> MappingsView {
+    MappingsView::of(&state)
+}
+
+/// Wait for the next control to move and bind it to `id`.
+#[tauri::command]
+fn learn_midi(state: tauri::State<'_, Arc<midi::Controllers>>, id: String) -> Result<(), String> {
+    if shard_dsp::params::index_of(&id).is_none() {
+        return Err(format!("unknown parameter: {id}"));
+    }
+    state.learn.lock().expect("learn poisoned").waiting = Some(mapping::Target::Param(id));
+    Ok(())
+}
+
+#[tauri::command]
+fn cancel_learn(state: tauri::State<'_, Arc<midi::Controllers>>) {
+    state.learn.lock().expect("learn poisoned").waiting = None;
+}
+
+/// Take `id` off its control in the active map.
+#[tauri::command]
+fn forget_midi(state: tauri::State<'_, Arc<midi::Controllers>>, id: String) -> Result<(), String> {
+    edit_controllers(&state, |r| r.unlearn(&mapping::Target::Param(id)))
+}
+
+#[tauri::command]
+fn set_active_map(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+) -> Result<MappingsView, String> {
+    edit_controllers(&state, |r| {
+        if r.set_active(id) {
+            Ok(())
+        } else {
+            Err(format!("no map {id}"))
+        }
+    })?;
+    state.pickup.lock().expect("pickup poisoned").rearm_all();
+    Ok(MappingsView::of(&state))
+}
+
+#[tauri::command]
+fn add_map(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    name: String,
+) -> Result<MappingsView, String> {
+    edit_controllers(&state, |r| {
+        let id = r.add_map(&name)?;
+        r.set_active(id);
+        Ok(())
+    })?;
+    state.pickup.lock().expect("pickup poisoned").rearm_all();
+    Ok(MappingsView::of(&state))
+}
+
+#[tauri::command]
+fn rename_map(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+    name: String,
+) -> Result<MappingsView, String> {
+    edit_controllers(&state, |r| r.rename_map(id, &name))?;
+    Ok(MappingsView::of(&state))
+}
+
 impl Audio {
     /// Build the engine's modulation set from `doc` here, on the command
     /// thread, and leave it for the audio thread to take at a block boundary.
@@ -999,7 +1189,8 @@ pub fn run() {
                 .app_config_dir()
                 .map_err(|e| e.to_string())?
                 .join("controllers.json");
-            let shared = Arc::new(midi::Controllers::load(path));
+            let bank = Arc::clone(&app.state::<Audio>().bank);
+            let shared = Arc::new(midi::Controllers::load(path, bank));
             midi::start(Arc::clone(&shared));
             app.manage(shared);
             Ok(())
@@ -1035,6 +1226,13 @@ pub fn run() {
             forget_control,
             rename_device,
             forget_device,
+            mappings,
+            learn_midi,
+            cancel_learn,
+            forget_midi,
+            set_active_map,
+            add_map,
+            rename_map,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
@@ -1116,6 +1314,7 @@ mod tests {
             "sample_path",
             "sample_missing",
             "refused",
+            "map_missing",
         ] {
             assert!(load.get(key).is_some(), "LoadReport lost `{key}`");
         }
@@ -1174,6 +1373,43 @@ mod tests {
                 cv["controls"][0].get(key).is_some(),
                 "ControlView lost `{key}`"
             );
+        }
+
+        let mv = serde_json::to_value(MappingsView {
+            active: Some(MapInfo {
+                id: 1,
+                name: "live".into(),
+            }),
+            maps: Vec::new(),
+            mappings: [(
+                "grain.size".to_string(),
+                MappingView {
+                    control: 1,
+                    control_name: "K1".into(),
+                    armed: true,
+                    knob: None,
+                },
+            )]
+            .into(),
+            learning: None,
+            report: Some(LearnReport {
+                seq: 1,
+                ok: true,
+                text: "x".into(),
+            }),
+        })
+        .expect("MappingsView is serialisable");
+        for key in ["active", "maps", "mappings", "learning", "report"] {
+            assert!(mv.get(key).is_some(), "MappingsView lost `{key}`");
+        }
+        for key in ["control", "control_name", "armed", "knob"] {
+            assert!(
+                mv["mappings"]["grain.size"].get(key).is_some(),
+                "MappingView lost `{key}`"
+            );
+        }
+        for key in ["seq", "ok", "text"] {
+            assert!(mv["report"].get(key).is_some(), "LearnReport lost `{key}`");
         }
 
         let limits = serde_json::to_value(lfo_limits()).expect("LfoLimits is serialisable");

@@ -3,21 +3,27 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   addLfo,
   auditionGrain,
+  cancelLearn,
+  EMPTY_MAPPINGS,
   envelopeCurve,
+  forgetMidi,
   format,
   type GrainInfo,
   getHeard,
   getParams,
   grainLog,
   type LfoLimits,
+  learnMidi,
   lfoLimits,
   linkParam,
   loadPatch,
   loadSample,
+  type MappingsView,
   type Meters,
   type ModulationView,
   type ParamInfo,
   paramDefs,
+  mappings as readMappings,
   meters as readMeters,
   modulation as readModulation,
   removeLfo,
@@ -96,6 +102,9 @@ export default function App() {
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
+  /** The active controller map, as the rows draw it. */
+  const [midi, setMidi] = useState<MappingsView>(EMPTY_MAPPINGS);
+  const learnSeen = useRef(0);
   /**
    * The slowest audio block, held for two seconds. Rust already holds the
    * worst case between polls; this holds it long enough to read, because a
@@ -142,14 +151,22 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v, fresh, h] = await Promise.all([
+        const [m, v, fresh, h, mm] = await Promise.all([
           readMeters(),
           getParams(),
           grainLog(),
           getHeard(),
+          readMappings(),
         ]);
         if (!alive) return;
         setMeter(m);
+        setMidi(mm);
+        // Learning answers once, through the poll. Say it once.
+        if (mm.report && mm.report.seq !== learnSeen.current) {
+          learnSeen.current = mm.report.seq;
+          if (mm.report.ok) setNote(mm.report.text);
+          else setError(mm.report.text);
+        }
         const now = performance.now();
         if (m.block_us >= worstRef.current.us || now - worstRef.current.at > 2000) {
           worstRef.current = { us: m.block_us, at: now };
@@ -292,6 +309,9 @@ export default function App() {
       if (report.refused.length > 0) {
         parts.push(`${report.refused.length} LFO or link(s) could not be used`);
       }
+      if (report.map_missing) {
+        parts.push(`controller map "${report.map_missing}" not on this Mac`);
+      }
       setNote(parts.length > 0 ? parts.join(' · ') : null);
     } catch (e) {
       setError(String(e));
@@ -356,9 +376,11 @@ export default function App() {
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
 
-      // Deselect all. The inspector empties with it.
+      // Deselect all. The inspector empties with it. A row waiting for a
+      // MIDI control stops waiting.
       if (e.key === 'Escape') {
         useSelection.getState().clear();
+        void cancelLearn();
         return;
       }
 
@@ -405,8 +427,11 @@ export default function App() {
     defs: defs ?? [],
     mod,
     heard,
+    midi,
     onLink: (id, lfo, depth) => void editMod(() => linkParam(id, lfo, depth)),
     onUnlink: (id) => void editMod(() => unlinkParam(id)),
+    onLearn: (id) => void learnMidi(id).catch((e) => setError(String(e))),
+    onForgetMidi: (id) => void forgetMidi(id).catch((e) => setError(String(e))),
   };
 
   return (
@@ -721,6 +746,7 @@ export default function App() {
         onOpenChange={setSettingsOpen}
         values={values}
         ctx={panelCtx}
+        midi={midi}
         onError={setError}
       />
     </div>

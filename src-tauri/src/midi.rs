@@ -6,8 +6,10 @@
 //! are re-scanned once a second, which is how plugging in and pulling out are
 //! noticed; CoreMIDI has notifications, midir does not expose them.
 //!
-//! Story 2 puts the map and pickup on this same thread: an event resolved
-//! here becomes the same `set_param` the UI makes.
+//! The map and pickup live on this thread too: a knob that has caught its
+//! value makes the same bank write the UI's `set_param` makes, and the audio
+//! thread learns nothing new. Learning is a slot the UI arms; the next control
+//! to move is bound and the slot answers with a sentence.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -16,24 +18,49 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use midir::{Ignore, MidiInput, MidiInputConnection};
+use shard_dsp::params::{index_of, PARAMS};
+use shard_dsp::ParamBank;
 
-use crate::controllers::{Activity, Registry};
+use crate::controllers::{Activity, Registry, Role};
+use crate::mapping::{Pickup, Target, Turn};
 
 const RESCAN_EVERY: Duration = Duration::from_secs(1);
 
-/// Shared with the Tauri commands. Lock order: `registry`, then `activity`.
+/// Learning: what the UI is waiting to bind, and what the last bind said.
+#[derive(Debug, Default)]
+pub struct Learn {
+    /// The target waiting for a control to move.
+    pub waiting: Option<Target>,
+    /// The last thing learning said, numbered so the UI can tell a new one.
+    pub report: Option<(u64, Result<String, String>)>,
+    pub reports: u64,
+}
+
+impl Learn {
+    pub fn say(&mut self, r: Result<String, String>) {
+        self.reports += 1;
+        self.report = Some((self.reports, r));
+    }
+}
+
+/// Shared with the Tauri commands. Lock order: `registry`, `pickup`,
+/// `learn`, `activity`.
 pub struct Controllers {
     pub registry: Mutex<Registry>,
+    pub pickup: Mutex<Pickup>,
+    pub learn: Mutex<Learn>,
     pub activity: Mutex<Activity>,
     /// Ports open right now, by name. Written by the MIDI thread.
     pub connected: Mutex<Vec<String>>,
     pub path: PathBuf,
+    /// The hand's values. A caught knob writes here, like the UI does.
+    pub bank: Arc<ParamBank>,
 }
 
 impl Controllers {
     /// Load the registry from `path`, or start empty. An unreadable file is
     /// reported and left alone rather than overwritten.
-    pub fn load(path: PathBuf) -> Controllers {
+    pub fn load(path: PathBuf, bank: Arc<ParamBank>) -> Controllers {
         let registry = match std::fs::read_to_string(&path) {
             Ok(text) => match Registry::parse(&text) {
                 Ok(r) => r,
@@ -49,9 +76,12 @@ impl Controllers {
         };
         Controllers {
             registry: Mutex::new(registry),
+            pickup: Mutex::new(Pickup::default()),
+            learn: Mutex::new(Learn::default()),
             activity: Mutex::new(Activity::default()),
             connected: Mutex::new(Vec::new()),
             path,
+            bank,
         }
     }
 
@@ -104,12 +134,66 @@ fn handle(shared: &Controllers, m: &Message) {
             eprintln!("shard: could not save controllers: {e}");
         }
     }
-    if let Some(ev) = event {
-        shared
-            .activity
-            .lock()
-            .expect("activity poisoned")
-            .note(&ev, Instant::now());
+    let Some(ev) = event else {
+        return;
+    };
+
+    // Learning takes the message rather than playing it.
+    let mut learn = shared.learn.lock().expect("learn poisoned");
+    if let Some(target) = learn.waiting.take() {
+        let result = registry.learn(ev.control, target);
+        if result.is_ok() {
+            shared
+                .pickup
+                .lock()
+                .expect("pickup poisoned")
+                .forget(ev.control);
+            if let Err(e) = shared.save(&registry) {
+                eprintln!("shard: could not save controllers: {e}");
+            }
+        }
+        learn.say(result);
+    } else {
+        drop(learn);
+        play(shared, &registry, ev.control, ev.value);
+    }
+
+    shared
+        .activity
+        .lock()
+        .expect("activity poisoned")
+        .note(&ev, Instant::now());
+}
+
+/// Resolve one control movement through the active map and apply it.
+fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
+    let Some(map) = registry.active_map() else {
+        return;
+    };
+    let Some(target) = map.mappings.get(&control) else {
+        return;
+    };
+    let Some(role) = registry.control(control).map(|c| c.role) else {
+        return;
+    };
+    match (target, role) {
+        (Target::Param(id), Role::Knob) => {
+            let Some(index) = index_of(id) else {
+                return;
+            };
+            let def = &PARAMS[index];
+            let base = shared.bank.get(index);
+            let turn = shared
+                .pickup
+                .lock()
+                .expect("pickup poisoned")
+                .turn(control, value, def, base);
+            if let Turn::Write(v) = turn {
+                shared.bank.set(index, v);
+            }
+        }
+        // Pads reach nothing until story 3.
+        (Target::Param(_), Role::Pad) => {}
     }
 }
 

@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 use shard_dsp::params::PARAMS;
 use shard_dsp::ParamBank;
 
+use crate::mapping::MapRef;
 use crate::modulation::{Modulation, Refused};
 use crate::presets::Presets;
 
@@ -40,6 +41,10 @@ pub struct Patch {
     /// with the patch. See `presets.rs`.
     #[serde(default, skip_serializing_if = "Presets::is_empty")]
     pub presets: Presets,
+    /// The controller map this patch plays with, by stable id. App-wide
+    /// data referred to, never copied in. Absent leaves the active map alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_map: Option<MapRef>,
     /// The LFOs, and which parameter follows which, as top-level `lfos` and
     /// `links`. Document data beside the values, never mixed into them: the
     /// values stay the hand's. See `modulation.rs`.
@@ -61,6 +66,9 @@ pub struct LoadReport {
     pub sample_missing: bool,
     /// LFOs and links the engine could not use. They stay in the document.
     pub refused: Vec<Refused>,
+    /// The name of a controller map the patch wanted and this Mac does not
+    /// have. The active map is left alone.
+    pub map_missing: Option<String>,
 }
 
 impl Patch {
@@ -74,6 +82,7 @@ impl Patch {
                 .collect(),
             sample_path,
             presets: Presets::default(),
+            controller_map: None,
             modulation: Modulation::default(),
         }
     }

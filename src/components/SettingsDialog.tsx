@@ -1,4 +1,5 @@
 import { PropertyPanel } from '@preset.nz/facets';
+import type { MappingsView } from '@/audio';
 import { ControllersPanel } from '@/components/ControllersPanel';
 import type { ParamRowContext } from '@/components/ParamRow';
 import {
@@ -26,12 +27,14 @@ export function SettingsDialog({
   onOpenChange,
   values,
   ctx,
+  midi,
   onError,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   values: ParamValues;
   ctx: ParamRowContext;
+  midi: MappingsView;
   onError: (message: string) => void;
 }) {
   return (
@@ -52,7 +55,7 @@ export function SettingsDialog({
             Controllers
           </div>
           <div className="mt-1">
-            <ControllersPanel open={open} onError={onError} />
+            <ControllersPanel open={open} midi={midi} onError={onError} />
           </div>
         </div>
       </DialogContent>

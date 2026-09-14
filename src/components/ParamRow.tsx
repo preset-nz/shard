@@ -1,5 +1,12 @@
 import type { FieldRendererProps } from '@preset.nz/facets';
-import { denormalise, format, type ModulationView, normalise, type ParamInfo } from '@/audio';
+import {
+  denormalise,
+  format,
+  type MappingsView,
+  type ModulationView,
+  normalise,
+  type ParamInfo,
+} from '@/audio';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -25,6 +32,10 @@ import { Slider } from '@/components/ui/slider';
  * Right-click links or unlinks. A linked row shows the LFO it follows, a depth
  * control, and a mark on the slider where the engine has moved the value to.
  * The slider itself stays the hand's.
+ *
+ * Right-click also learns a MIDI control. A mapped row names its control, and
+ * while the knob is armed, waiting to pass through the value, a hollow mark
+ * shows where the knob physically is so you can see which way to turn.
  */
 export interface ParamFieldExtras {
   def: ParamInfo;
@@ -36,8 +47,12 @@ export interface ParamRowContext {
   mod: ModulationView;
   /** Each parameter as the engine last heard it, by id. */
   heard: Record<string, number>;
+  /** The active controller map. */
+  midi: MappingsView;
   onLink: (id: string, lfo: number, depth: number) => void;
   onUnlink: (id: string) => void;
+  onLearn: (id: string) => void;
+  onForgetMidi: (id: string) => void;
 }
 
 /** Where a new link starts: enough to hear, not so much it lurches. */
@@ -54,6 +69,8 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
   const source = link ? c.mod.lfos.find((l) => l.id === link.lfo) : undefined;
   const heard = c.heard[def.id];
   const mark = source && heard !== undefined ? normalise(def, heard) : null;
+  const mapped = c.midi.mappings[def.id];
+  const learning = c.midi.learning === def.id;
 
   return (
     <ContextMenu modal={false}>
@@ -61,6 +78,25 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         <div className="space-y-1">
           <div className="flex items-baseline gap-2">
             <span className="flex-1 truncate text-xs">{f.label ?? def.name}</span>
+            {learning && (
+              <span className="shrink-0 animate-pulse text-[10px] text-primary">
+                touch a control
+              </span>
+            )}
+            {mapped && !learning && (
+              <span
+                className={`max-w-16 shrink truncate text-[10px] ${
+                  mapped.armed ? 'text-muted-foreground' : 'text-primary'
+                }`}
+                title={
+                  mapped.armed
+                    ? `${mapped.control_name} is waiting: turn it past the value.`
+                    : `${mapped.control_name} sets this. Right-click to forget.`
+                }
+              >
+                ⦿ {mapped.control_name}
+              </span>
+            )}
             {link && (
               <span
                 className={`max-w-24 shrink truncate text-[10px] ${
@@ -92,6 +128,13 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
                 aria-hidden
                 className="pointer-events-none absolute top-1/2 h-3.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded bg-primary"
                 style={{ left: `${mark * 100}%` }}
+              />
+            )}
+            {mapped?.armed && mapped.knob !== null && (
+              <div
+                aria-hidden
+                className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-muted-foreground"
+                style={{ left: `${mapped.knob * 100}%` }}
               />
             )}
           </div>
@@ -138,6 +181,11 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
             Add an LFO under Modulators first.
           </ContextMenuLabel>
         )}
+        <ContextMenuSeparator />
+        <ContextMenuItem onSelect={() => c.onLearn(def.id)}>Learn MIDI</ContextMenuItem>
+        <ContextMenuItem disabled={!mapped} onSelect={() => c.onForgetMidi(def.id)}>
+          Forget MIDI
+        </ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
   );

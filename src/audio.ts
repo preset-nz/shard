@@ -162,6 +162,8 @@ export interface LoadReport {
   sample_path: string | null;
   /** The patch named a sample that is no longer where it said it was. */
   sample_missing: boolean;
+  /** A controller map the patch wanted and this Mac does not have. */
+  map_missing: string | null;
   /** LFOs and links the engine could not use. They stay in the patch. */
   refused: Refused[];
 }
@@ -287,3 +289,52 @@ export const forgetControl = (id: number) => invoke<ControllersView>('forget_con
 export const renameDevice = (port: string, name: string) =>
   invoke<ControllersView>('rename_device', { port, name });
 export const forgetDevice = (port: string) => invoke<ControllersView>('forget_device', { port });
+
+/** One mapped parameter, as its row draws it. */
+export interface MappingView {
+  control: number;
+  control_name: string;
+  /** Waiting for the knob to pass through the value. */
+  armed: boolean;
+  /** Where the knob physically is, 0 to 1, once it has said. */
+  knob: number | null;
+}
+
+export interface MapInfo {
+  id: number;
+  name: string;
+}
+
+export interface LearnReport {
+  seq: number;
+  ok: boolean;
+  text: string;
+}
+
+/** The active controller map, polled beside the parameters. */
+export interface MappingsView {
+  active: MapInfo | null;
+  maps: MapInfo[];
+  /** By parameter id. */
+  mappings: Record<string, MappingView>;
+  /** The parameter waiting for a control to move. */
+  learning: string | null;
+  report: LearnReport | null;
+}
+
+export const EMPTY_MAPPINGS: MappingsView = {
+  active: null,
+  maps: [],
+  mappings: {},
+  learning: null,
+  report: null,
+};
+
+export const mappings = () => invoke<MappingsView>('mappings');
+export const learnMidi = (id: string) => invoke<void>('learn_midi', { id });
+export const cancelLearn = () => invoke<void>('cancel_learn');
+export const forgetMidi = (id: string) => invoke<void>('forget_midi', { id });
+export const setActiveMap = (id: number) => invoke<MappingsView>('set_active_map', { id });
+export const addMap = (name: string) => invoke<MappingsView>('add_map', { name });
+export const renameMap = (id: number, name: string) =>
+  invoke<MappingsView>('rename_map', { id, name });

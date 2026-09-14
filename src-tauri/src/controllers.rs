@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::mapping::{valid_map_name, Map, Target};
+
 /// Bumped when the file's shape changes. There are no old files to migrate.
 pub const VERSION: u32 = 1;
 
@@ -92,6 +94,17 @@ pub struct Registry {
     /// Ids are never reused, like LFO ids. Renaming and forgetting must not
     /// make a later map point at the wrong knob.
     pub next_control_id: u64,
+    /// Named maps, app-wide. A patch names the one it wants.
+    #[serde(default)]
+    pub maps: Vec<Map>,
+    #[serde(default = "one")]
+    pub next_map_id: u64,
+    #[serde(default)]
+    pub active: Option<u64>,
+}
+
+fn one() -> u64 {
+    1
 }
 
 impl Default for Registry {
@@ -101,6 +114,9 @@ impl Default for Registry {
             devices: Vec::new(),
             controls: Vec::new(),
             next_control_id: 1,
+            maps: Vec::new(),
+            next_map_id: 1,
+            active: None,
         }
     }
 }
@@ -127,6 +143,10 @@ impl Registry {
         let max = r.controls.iter().map(|c| c.id).max().unwrap_or(0);
         if r.next_control_id <= max {
             return Err("controllers.json reuses a control id".into());
+        }
+        let max = r.maps.iter().map(|m| m.id).max().unwrap_or(0);
+        if r.next_map_id <= max {
+            return Err("controllers.json reuses a map id".into());
         }
         Ok(r)
     }
@@ -219,6 +239,9 @@ impl Registry {
         if self.controls.len() == n {
             return Err(format!("no control {id}"));
         }
+        for m in &mut self.maps {
+            m.mappings.remove(&id);
+        }
         Ok(())
     }
 
@@ -243,8 +266,106 @@ impl Registry {
         if self.devices.len() == n {
             return Err(format!("no device {port:?}"));
         }
+        let gone: Vec<u64> = self
+            .controls
+            .iter()
+            .filter(|c| c.address.device == port)
+            .map(|c| c.id)
+            .collect();
         self.controls.retain(|c| c.address.device != port);
+        for m in &mut self.maps {
+            m.mappings.retain(|c, _| !gone.contains(c));
+        }
         Ok(())
+    }
+
+    pub fn control(&self, id: u64) -> Option<&Control> {
+        self.controls.iter().find(|c| c.id == id)
+    }
+
+    pub fn active_map(&self) -> Option<&Map> {
+        let id = self.active?;
+        self.maps.iter().find(|m| m.id == id)
+    }
+
+    /// The active map, made if there is none yet. The first map is "live".
+    pub fn active_map_mut(&mut self) -> &mut Map {
+        if self.active_map().is_none() {
+            let id = match self.maps.first() {
+                Some(m) => m.id,
+                None => self.add_map("live").expect("a valid name"),
+            };
+            self.active = Some(id);
+        }
+        let id = self.active.expect("just set");
+        self.maps
+            .iter_mut()
+            .find(|m| m.id == id)
+            .expect("active map exists")
+    }
+
+    pub fn add_map(&mut self, name: &str) -> Result<u64, String> {
+        let name = valid_map_name(name)?;
+        let id = self.next_map_id;
+        self.next_map_id += 1;
+        self.maps.push(Map {
+            id,
+            name,
+            mappings: BTreeMap::new(),
+        });
+        Ok(id)
+    }
+
+    pub fn rename_map(&mut self, id: u64, name: &str) -> Result<(), String> {
+        let name = valid_map_name(name)?;
+        let m = self
+            .maps
+            .iter_mut()
+            .find(|m| m.id == id)
+            .ok_or_else(|| format!("no map {id}"))?;
+        m.name = name;
+        Ok(())
+    }
+
+    /// Switch maps. True if the map exists; false leaves the active one.
+    pub fn set_active(&mut self, id: u64) -> bool {
+        if self.maps.iter().any(|m| m.id == id) {
+            self.active = Some(id);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Point `control` at `target` in the active map. Refuses a role that
+    /// does not fit: only knobs reach parameters until story 3. Answers with
+    /// a sentence for the UI.
+    pub fn learn(&mut self, control: u64, target: Target) -> Result<String, String> {
+        let c = self
+            .control(control)
+            .ok_or_else(|| format!("no control {control}"))?;
+        if c.role != Role::Knob {
+            return Err(format!(
+                "{} is a pad; pads reach switches and gates in a later story",
+                c.name
+            ));
+        }
+        let name = c.name.clone();
+        let what = target.describe();
+        let replaced = self.active_map_mut().bind(control, target);
+        Ok(match replaced.and_then(|r| self.control(r)) {
+            Some(prev) => format!("{name} now sets {what}, taking it from {}", prev.name),
+            None => format!("{name} now sets {what}"),
+        })
+    }
+
+    /// Take `target` off its control in the active map.
+    pub fn unlearn(&mut self, target: &Target) -> Result<(), String> {
+        if self.active_map_mut().unbind(target) {
+            Ok(())
+        } else {
+            Err(format!("{} has no control", target.describe()))
+        }
     }
 
     fn control_mut(&mut self, id: u64) -> Result<&mut Control, String> {
@@ -457,6 +578,54 @@ mod tests {
         assert!(r.rename_control(1, &"x".repeat(41)).is_err());
         assert!(r.rename_control(1, "K1").is_ok());
         assert!(r.rename_control(7, "K1").is_err());
+    }
+
+    #[test]
+    fn learning_makes_the_first_map_and_pads_are_refused() {
+        let mut r = Registry::default();
+        r.observe("LPD8", &cc(0, 1, 40));
+        r.observe("LPD8", &on(9, 36, 100));
+        let t = Target::Param("grain.size".into());
+        assert!(r.learn(2, t.clone()).is_err());
+        assert!(r.active_map().is_none());
+        let msg = r.learn(1, t.clone()).unwrap();
+        assert!(msg.contains("grain.size"), "{msg}");
+        assert_eq!(r.active_map().unwrap().name, "live");
+        assert_eq!(r.active_map().unwrap().control_for(&t), Some(1));
+        r.unlearn(&t).unwrap();
+        assert!(r.unlearn(&t).is_err());
+    }
+
+    #[test]
+    fn forgetting_a_control_or_device_takes_its_mappings() {
+        let mut r = Registry::default();
+        r.observe("LPD8", &cc(0, 1, 40));
+        r.observe("LPD8", &cc(0, 2, 40));
+        r.learn(1, Target::Param("grain.size".into())).unwrap();
+        r.learn(2, Target::Param("grain.density".into())).unwrap();
+        r.forget_control(1).unwrap();
+        assert_eq!(r.active_map().unwrap().mappings.len(), 1);
+        r.forget_device("LPD8").unwrap();
+        assert!(r.active_map().unwrap().mappings.is_empty());
+    }
+
+    #[test]
+    fn maps_round_trip_and_ids_hold() {
+        let mut r = Registry::default();
+        r.observe("LPD8", &cc(0, 1, 40));
+        r.learn(1, Target::Param("grain.size".into())).unwrap();
+        let second = r.add_map("sound design").unwrap();
+        assert!(r.set_active(second));
+        assert!(!r.set_active(99));
+        r.rename_map(second, "design").unwrap();
+        let back = Registry::parse(&r.to_json()).unwrap();
+        assert_eq!(back.active, Some(second));
+        assert_eq!(back.maps[1].name, "design");
+        assert_eq!(
+            back.maps[0].mappings[&1],
+            Target::Param("grain.size".into())
+        );
+        assert_eq!(back.next_map_id, 3);
     }
 
     #[test]
