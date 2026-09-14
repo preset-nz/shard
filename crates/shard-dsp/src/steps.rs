@@ -32,8 +32,9 @@ pub struct StepParams {
     pub tempo_bpm: f32,
     /// 4, 8 or 16.
     pub length: u32,
-    /// 0 to 0.75 of a step, applied to the even-numbered steps (the second,
-    /// fourth and so on).
+    /// 0 to 0.5 of a step, applied to the even-numbered steps (the second,
+    /// fourth and so on). Drum machines count the same thing from 50 % to
+    /// 75 %; the UI converts.
     pub swing: f32,
     /// One bit per step, bit 0 first.
     pub pattern: u32,
@@ -165,7 +166,7 @@ impl StepClock {
         let step_len = self.step_len(p);
         let length = p.length.clamp(1, 32);
         let total = length as f32 * step_len;
-        let swing = p.swing.clamp(0.0, 0.75);
+        let swing = p.swing.clamp(0.0, 0.5);
         // Which step contains `pos`: the last whose onset is at or before it.
         let mut k = ((self.pos / step_len) as u32).min(length - 1);
         while k > 0 && self.onset(k, step_len, swing) > self.pos {
@@ -271,7 +272,7 @@ mod tests {
             on: true,
             tempo_bpm: 87.5,
             length: 8,
-            swing: 0.56,
+            swing: 0.12,
             pattern: 0b1010_1010_1010_1010,
         };
         let bank = StepBank::default();

@@ -19,9 +19,10 @@ use shard_dsp::StepParams;
 
 pub const TEMPO_MIN: f32 = 40.0;
 pub const TEMPO_MAX: f32 = 240.0;
-/// Of a sixteenth. Past about 62 % it stops being a pocket and becomes a
-/// shuffle (`design/drum-programming.md`); the range allows going there.
-pub const SWING_MAX: f32 = 0.75;
+/// Of a sixteenth, the delay of every second one. The UI shows swing the
+/// drum-machine way, 50 % straight to 75 % heavy, which is this value times
+/// 50 plus 50: the pocket at 56 % is 0.12 (`design/drum-programming.md`).
+pub const SWING_MAX: f32 = 0.5;
 /// The lengths a track can have, in sixteenths.
 pub const LENGTHS: [u32; 3] = [4, 8, 16];
 /// Steps a pattern can hold. Bits past a track's length are kept, so
@@ -198,7 +199,7 @@ mod tests {
     fn the_engine_plays_the_first_track_at_the_songs_tempo() {
         let t = Tracker {
             tempo: 82.0,
-            swing: 0.56,
+            swing: 0.12,
             tracks: vec![
                 Track {
                     on: true,
@@ -218,7 +219,7 @@ mod tests {
                 on: true,
                 tempo_bpm: 82.0,
                 length: 8,
-                swing: 0.56,
+                swing: 0.12,
                 pattern: 0b1001,
             }
         );

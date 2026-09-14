@@ -6,7 +6,13 @@ import { Slider } from '@/components/ui/slider';
 const LENGTHS = [4, 8, 16];
 const TEMPO_MIN = 40;
 const TEMPO_MAX = 240;
-const SWING_MAX = 0.75;
+/**
+ * Swing is stored as the delay of every second sixteenth, 0 to 0.5 of one,
+ * and shown the drum-machine way, 50 % straight to 75 % heavy, so the 56 % in
+ * `design/drum-programming.md` means what it says.
+ */
+const toPercent = (swing: number) => 50 + swing * 50;
+const fromPercent = (percent: number) => (percent - 50) / 50;
 
 /**
  * The tracker: the level above the patch (Georg, 2026-09-14).
@@ -89,16 +95,16 @@ export function StepStrip({
       <div className="flex items-center gap-2">
         <span>Swing</span>
         <Slider
-          min={0}
-          max={SWING_MAX}
-          step={0.01}
-          value={[tracker.swing]}
-          onValueChange={([swing]) => onChange({ ...tracker, swing })}
+          min={50}
+          max={75}
+          step={1}
+          value={[toPercent(tracker.swing)]}
+          onValueChange={([percent]) => onChange({ ...tracker, swing: fromPercent(percent) })}
           aria-label="Swing"
           className="w-20"
         />
         <span className="w-8 font-mono text-[11px] tabular-nums">
-          {Math.round(tracker.swing * 100)}%
+          {Math.round(toPercent(tracker.swing))}%
         </span>
       </div>
 
