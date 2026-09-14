@@ -132,7 +132,7 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(96_000));
     let bank = ParamBank::new();
-    for id in ["grain.on", "ring.on", "crush.on", "filter.on"] {
+    for id in ["grain.on", "ring.on", "crush.on", "filter.on", "drive.on"] {
         bank.set_by_id(id, 1.0);
     }
     bank.set_by_id("grain.gain", 1.0);

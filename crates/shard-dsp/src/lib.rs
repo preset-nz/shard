@@ -16,6 +16,7 @@
 //! it.
 
 pub mod crush;
+pub mod drive;
 pub mod engine;
 pub mod envelope;
 pub mod filter;
@@ -31,6 +32,7 @@ pub mod rt;
 pub mod smooth;
 
 pub use crush::{Crush, CrushParams};
+pub use drive::{Drive, DriveParams, DriveType};
 pub use engine::Engine;
 pub use envelope::EnvParams;
 pub use filter::{Filter, FilterParams, FilterType};

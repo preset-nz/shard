@@ -20,6 +20,7 @@
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import {
+  DRIVE_TYPES,
   denormalise,
   FILTER_TYPES,
   format,
@@ -86,6 +87,7 @@ export const NODES: NodeInfo[] = [
   { id: 'grain', label: 'Granular', lane: 'generate', table: 'grain', owns: under('grain') },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
+  { id: 'drive', label: 'Drive', lane: 'process', table: 'drive', owns: under('drive') },
   { id: 'crush', label: 'Crush', lane: 'process', table: 'crush', owns: under('crush') },
   { id: 'ring', label: 'Ring modulation', lane: 'process', table: 'ring', owns: under('ring') },
   { id: 'env', label: 'Envelope', lane: 'process', table: 'env', owns: under('env') },
@@ -145,6 +147,13 @@ export function isSwitch(p: ParamInfo): boolean {
   return p.taper === 'stepped' && p.steps === 2 && p.min === 0 && p.max === 1;
 }
 
+/** Names for the stepped rows whose steps are choices rather than numbers. */
+const STEP_NAMES: Record<string, string[]> = {
+  'grain.window': WINDOW_NAMES,
+  'filter.type': FILTER_TYPES,
+  'drive.type': DRIVE_TYPES,
+};
+
 function fieldFor(p: ParamInfo) {
   const base = { id: p.id, path: p.id, label: p.name };
 
@@ -154,8 +163,7 @@ function fieldFor(p: ParamInfo) {
 
   if (p.taper === 'stepped') {
     const n = Math.max(1, p.steps ?? 1);
-    const names =
-      p.id === 'grain.window' ? WINDOW_NAMES : p.id === 'filter.type' ? FILTER_TYPES : null;
+    const names = STEP_NAMES[p.id] ?? null;
     return {
       ...base,
       kind: 'select' as const,

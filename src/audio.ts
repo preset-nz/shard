@@ -258,6 +258,8 @@ export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { pl
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
 /** `FilterType::NAMES`, in stepped order. */
 export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
+/** `DriveType::NAMES`, in stepped order. */
+export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {

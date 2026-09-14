@@ -1,4 +1,4 @@
-//! The engine: source, granular cloud, crusher, ring modulator, filter, limiter, out.
+//! The engine: source, cloud, drive, crusher, ring modulator, filter, limiter, out.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
 //! logging, no file access. The only thing crossing in from outside is the
@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::crush::{Crush, CrushParams};
+use crate::drive::{Drive, DriveParams, DriveType};
 use crate::envelope::EnvParams;
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::granular::{GrainParams, Granular, Window};
@@ -47,6 +48,11 @@ struct Slots {
     grain_on: usize,
     crush_on: usize,
     ring_on: usize,
+    drive_on: usize,
+    drive_mix: usize,
+    drive_amount: usize,
+    drive_tone: usize,
+    drive_type: usize,
     filter_on: usize,
     filter_mix: usize,
     filter_cutoff: usize,
@@ -103,6 +109,11 @@ impl Slots {
             grain_on: at("grain.on"),
             crush_on: at("crush.on"),
             ring_on: at("ring.on"),
+            drive_on: at("drive.on"),
+            drive_mix: at("drive.mix"),
+            drive_amount: at("drive.amount"),
+            drive_tone: at("drive.tone"),
+            drive_type: at("drive.type"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -159,6 +170,7 @@ struct Fades {
     ring: Ramp,
     env: Ramp,
     filter: Ramp,
+    drive: Ramp,
 }
 
 impl Fades {
@@ -178,6 +190,7 @@ impl Fades {
             ring: ramp(slots.ring_on),
             env: ramp(slots.env_on),
             filter: ramp(slots.filter_on),
+            drive: ramp(slots.drive_on),
         }
     }
 }
@@ -197,6 +210,7 @@ pub struct Engine {
     reversing: bool,
     /// Samples since reverse engaged, for the flick's minimum on-time.
     reverse_age: f32,
+    drive: Drive,
     crush: Crush,
     ringmod: RingMod,
     filter: Filter,
@@ -269,6 +283,7 @@ impl Engine {
             auditioning: false,
             reversing: false,
             reverse_age: 0.0,
+            drive: Drive::new(sample_rate),
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             filter: Filter::new(sample_rate),
@@ -532,6 +547,13 @@ impl Engine {
         let ring_on_target = gate(self.slots.ring_on);
         let env_on_target = gate(self.slots.env_on);
         let filter_on_target = gate(self.slots.filter_on);
+        let drive_on_target = gate(self.slots.drive_on);
+        let drive = DriveParams {
+            amount_db: read(&self.mods, bank, self.slots.drive_amount),
+            tone_hz: read(&self.mods, bank, self.slots.drive_tone),
+            kind: DriveType::from_value(bank.get(self.slots.drive_type)),
+            mix: read(&self.mods, bank, self.slots.drive_mix),
+        };
         let limiter = LimiterParams {
             ceiling: bank.get(self.slots.ceiling),
             on: bank.get(self.slots.limit) >= 0.5,
@@ -647,9 +669,18 @@ impl Engine {
             let l = material + gl;
             let r = material + gr;
 
+            // Driven first, so the crusher and the ring modulator get the
+            // harmonics the curve added. Order stops being fixed the day the
+            // modifier stack lands.
+            let drive_on = self.fades.drive.process(drive_on_target);
+            let faded_drive = DriveParams {
+                mix: drive.mix * drive_on,
+                ..drive
+            };
+            let (l, r) = self.drive.process(l, r, &faded_drive);
+
             // Crushed before the ring modulator, so the modulator has the
             // extra partials the crusher just generated to fold against.
-            // Order stops being fixed the day the modifier stack lands.
             let elapsed = self.player.elapsed();
             let crush = CrushParams {
                 bits: crush_bits,
