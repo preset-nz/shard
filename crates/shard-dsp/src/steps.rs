@@ -26,7 +26,7 @@
 //! loop, so a trigger lands on the frame it is due, not at a block edge.
 //! Swing delays every second step by a share of a step.
 
-use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StepParams {
@@ -41,7 +41,16 @@ pub struct StepParams {
     pub swing: f32,
     /// One bit per step, bit 0 first.
     pub pattern: u32,
+    /// Each step's pitch in semitones, step one first. Varispeed, as the
+    /// octave is (Georg, 2026-09-14): up is faster and shorter, and grains
+    /// are transposed with it. Read up to `PITCH_RANGE` either way.
+    pub pitches: [i8; STEPS],
 }
+
+/// The steps a pattern holds.
+pub const STEPS: usize = 16;
+/// Semitones a step can be pitched, either way.
+pub const PITCH_RANGE: i8 = 24;
 
 impl Default for StepParams {
     /// Off, and four on the floor, so switching on does something.
@@ -52,13 +61,23 @@ impl Default for StepParams {
             length: 16,
             swing: 0.0,
             pattern: 0b0001_0001_0001_0001,
+            pitches: [0; STEPS],
         }
+    }
+}
+
+impl StepParams {
+    /// Step `k`'s pitch as a read ratio and in semitones, in range.
+    #[inline]
+    pub fn pitch_of(&self, k: u32) -> (f32, f32) {
+        let semis = self.pitches[k as usize % STEPS].clamp(-PITCH_RANGE, PITCH_RANGE) as f32;
+        ((semis / 12.0).exp2(), semis)
     }
 }
 
 /// The steps, shared between whatever edits the tracker and the audio thread.
 ///
-/// The same idea as `ParamBank`, for five numbers that are not parameters.
+/// The same idea as `ParamBank`, for numbers that are not parameters.
 /// Stored whole, read whole once a block. A read that lands between two
 /// fields of a store plays one block with half the old tracker, which nobody
 /// can hear and the next block corrects.
@@ -68,6 +87,16 @@ pub struct StepBank {
     length: AtomicU32,
     swing: AtomicU32,
     pattern: AtomicU32,
+    /// The pitches, a byte a step: steps one to eight, then nine to sixteen.
+    pitches: [AtomicU64; 2],
+}
+
+/// Eight pitches into a word, step one in the low byte.
+fn pack(pitches: &[i8]) -> u64 {
+    pitches
+        .iter()
+        .enumerate()
+        .fold(0, |w, (i, p)| w | (u64::from(*p as u8) << (i * 8)))
 }
 
 impl StepBank {
@@ -78,6 +107,10 @@ impl StepBank {
             length: AtomicU32::new(p.length),
             swing: AtomicU32::new(p.swing.to_bits()),
             pattern: AtomicU32::new(p.pattern),
+            pitches: [
+                AtomicU64::new(pack(&p.pitches[..8])),
+                AtomicU64::new(pack(&p.pitches[8..])),
+            ],
         }
     }
 
@@ -88,16 +121,24 @@ impl StepBank {
         self.length.store(p.length, Ordering::Relaxed);
         self.swing.store(p.swing.to_bits(), Ordering::Relaxed);
         self.pattern.store(p.pattern, Ordering::Relaxed);
+        self.pitches[0].store(pack(&p.pitches[..8]), Ordering::Relaxed);
+        self.pitches[1].store(pack(&p.pitches[8..]), Ordering::Relaxed);
     }
 
     #[inline]
     pub fn load(&self) -> StepParams {
+        let mut pitches = [0i8; STEPS];
+        for (i, p) in pitches.iter_mut().enumerate() {
+            let word = self.pitches[i / 8].load(Ordering::Relaxed);
+            *p = (word >> ((i % 8) * 8)) as u8 as i8;
+        }
         StepParams {
             on: self.on.load(Ordering::Relaxed),
             tempo_bpm: f32::from_bits(self.tempo_bpm.load(Ordering::Relaxed)),
             length: self.length.load(Ordering::Relaxed),
             swing: f32::from_bits(self.swing.load(Ordering::Relaxed)),
             pattern: self.pattern.load(Ordering::Relaxed),
+            pitches,
         }
     }
 }
@@ -160,11 +201,11 @@ impl StepClock {
         k as f32 * step_len + late
     }
 
-    /// One frame on. True when a step that is on begins on this frame.
+    /// One frame on. The step, when a step that is on begins on this frame.
     #[inline]
-    pub fn tick(&mut self, p: &StepParams) -> bool {
+    pub fn tick(&mut self, p: &StepParams) -> Option<u32> {
         if !self.running {
-            return false;
+            return None;
         }
         let step_len = self.step_len(p);
         let length = p.length.clamp(1, 32);
@@ -181,7 +222,7 @@ impl StepClock {
         if self.pos >= total {
             self.pos -= total;
         }
-        entered && (p.pattern >> k) & 1 == 1
+        (entered && (p.pattern >> k) & 1 == 1).then_some(k)
     }
 }
 
@@ -194,7 +235,7 @@ mod tests {
     fn triggers(p: &StepParams, frames: usize) -> Vec<usize> {
         let mut c = StepClock::new(SR);
         c.set_running(true);
-        (0..frames).filter(|_| c.tick(p)).collect()
+        (0..frames).filter(|_| c.tick(p).is_some()).collect()
     }
 
     #[test]
@@ -205,6 +246,7 @@ mod tests {
             length: 16,
             swing: 0.0,
             pattern: 0b0001_0001_0001_0001,
+            pitches: [0; STEPS],
         };
         let t = triggers(&p, SR as usize * 4);
         // Steps 0, 4, 8, 12 of a 16-step bar at 120: every 0.5 s, 8 in 4 s.
@@ -222,6 +264,7 @@ mod tests {
             length: 4,
             swing: 0.0,
             pattern: 0b0001,
+            pitches: [0; STEPS],
         };
         let t = triggers(&p, SR as usize);
         // Four sixteenths at 120 is half a second; step one fires twice.
@@ -236,6 +279,7 @@ mod tests {
             length: 4,
             swing: 0.0,
             pattern: 0b1111,
+            pitches: [0; STEPS],
         };
         let swung = StepParams {
             swing: 0.5,
@@ -256,7 +300,7 @@ mod tests {
             ..Default::default()
         };
         let mut c = StepClock::new(SR);
-        assert!(!c.tick(&p));
+        assert_eq!(c.tick(&p), None);
         assert_eq!(c.current(), None);
         c.set_running(true);
         for _ in 0..1_000 {
@@ -266,17 +310,46 @@ mod tests {
         c.set_running(false);
         assert_eq!(c.current(), None);
         c.set_running(true);
-        assert!(c.tick(&p), "restarting fires step one again");
+        assert_eq!(c.tick(&p), Some(0), "restarting fires step one again");
+    }
+
+    #[test]
+    fn a_trigger_says_which_step_fired() {
+        let p = StepParams {
+            on: true,
+            length: 4,
+            pattern: 0b1010,
+            ..Default::default()
+        };
+        let mut c = StepClock::new(SR);
+        c.set_running(true);
+        let fired: Vec<u32> = (0..24_000).filter_map(|_| c.tick(&p)).collect();
+        assert_eq!(fired, vec![1, 3]);
+    }
+
+    #[test]
+    fn a_pitch_out_of_range_is_read_at_the_end_of_it() {
+        let mut p = StepParams::default();
+        p.pitches[0] = 12;
+        p.pitches[1] = i8::MIN;
+        assert_eq!(p.pitch_of(0), (2.0, 12.0));
+        assert_eq!(p.pitch_of(1).1, -f32::from(PITCH_RANGE));
     }
 
     #[test]
     fn the_bank_hands_back_exactly_what_it_was_given() {
+        let mut pitches = [0i8; STEPS];
+        for (i, p) in pitches.iter_mut().enumerate() {
+            *p = (i as i8 - 8) * 3;
+        }
+        pitches[15] = -24;
         let p = StepParams {
             on: true,
             tempo_bpm: 87.5,
             length: 8,
             swing: 0.12,
             pattern: 0b1010_1010_1010_1010,
+            pitches,
         };
         let bank = StepBank::default();
         assert_eq!(bank.load(), StepParams::default());

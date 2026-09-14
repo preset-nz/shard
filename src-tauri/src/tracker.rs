@@ -111,6 +111,7 @@ impl Tracker {
             length: t.length,
             swing: self.swing,
             pattern: t.pattern,
+            pitches: [0; shard_dsp::steps::STEPS],
         }
     }
 }
@@ -191,6 +192,7 @@ mod tests {
                 length: 4,
                 swing: 0.0,
                 pattern: 0xFFFF,
+                pitches: [0; shard_dsp::steps::STEPS],
             }
         );
     }
@@ -221,6 +223,7 @@ mod tests {
                 length: 8,
                 swing: 0.12,
                 pattern: 0b1001,
+                pitches: [0; shard_dsp::steps::STEPS],
             }
         );
     }

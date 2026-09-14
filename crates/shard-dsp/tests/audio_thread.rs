@@ -193,9 +193,15 @@ fn one_shot_steps_never_touch_the_allocator() {
         for block in 0..1_000 {
             let reverse = if block % 400 < 200 { 0.0 } else { 1.0 };
             bank.set_by_id("tape.reverse", reverse);
+            // Pitched to both ends of the range, so each pass reads at a
+            // different ratio from the tail it hands over.
+            let mut pitches = [0; shard_dsp::steps::STEPS];
+            pitches[0] = 24;
+            pitches[2] = -24;
             e.set_steps(StepParams {
                 on: block % 100 >= 20,
                 pattern: 0b0101,
+                pitches,
                 ..Default::default()
             });
             e.process_block(&mut out, &bank);

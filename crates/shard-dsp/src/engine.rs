@@ -218,6 +218,13 @@ pub struct Engine {
     tail: Player,
     /// Samples of that fade still to run; zero when there is no tail.
     tail_left: f32,
+    /// The pass's read ratio from its step's pitch, and the same pitch in
+    /// semitones for the grains. Unity and zero while the steps are off.
+    pass_ratio: f32,
+    pass_semis: f32,
+    /// The ratio the tail was read at, so a pitch change fades out at the
+    /// old pitch rather than jumping to the new one.
+    tail_ratio: f32,
     drive: Drive,
     crush: Crush,
     ringmod: RingMod,
@@ -295,6 +302,9 @@ impl Engine {
             step_params: StepParams::default(),
             tail: Player::new(sample_rate),
             tail_left: 0.0,
+            pass_ratio: 1.0,
+            pass_semis: 0.0,
+            tail_ratio: 1.0,
             drive: Drive::new(sample_rate),
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
@@ -591,12 +601,17 @@ impl Engine {
         if steps.on && !self.steps.running() && self.player.sounding() {
             self.tail = self.player;
             self.tail_left = self.player.seam_samples();
+            self.tail_ratio = self.pass_ratio;
             self.player.finish();
         }
         self.steps.set_running(steps.on);
         // Under the steps a pass plays once (Georg, 2026-09-14); without them
-        // it loops.
+        // it loops, and no step's pitch outlives them.
         let looping = !steps.on;
+        if looping {
+            self.pass_ratio = 1.0;
+            self.pass_semis = 0.0;
+        }
         let drive = DriveParams {
             amount_db: read(&self.mods, bank, self.slots.drive_amount),
             tone_hz: read(&self.mods, bank, self.slots.drive_tone),
@@ -694,13 +709,15 @@ impl Engine {
             // pass's clock from this frame, so a shaped envelope (anything
             // but flat, which is the default) still puts an edge on the tail
             // and on the cloud. Open, roadmap row 4.
-            if self.steps.tick(&steps) {
+            if let Some(k) = self.steps.tick(&steps) {
                 // A pass that has played out has nothing to fade, and must
                 // not replace a tail that is still fading.
                 if self.player.sounding() {
                     self.tail = self.player;
                     self.tail_left = self.player.seam_samples();
+                    self.tail_ratio = self.pass_ratio;
                 }
+                (self.pass_ratio, self.pass_semis) = steps.pitch_of(k);
                 // A reel running backwards starts its pass from the far end,
                 // or it would leave the window on its first sample.
                 if self.smooth.speed.value() < 0.0 {
@@ -714,7 +731,8 @@ impl Engine {
             p.size_ms = self.smooth.size.process(target.size_ms);
             p.density = self.smooth.density.process(target.density);
             // Added after smoothing: the octave is stepped and lands at once.
-            p.pitch = self.smooth.pitch.process(target.pitch) + octave_semis;
+            // So is the step's pitch, which belongs to the pass.
+            p.pitch = self.smooth.pitch.process(target.pitch) + octave_semis + self.pass_semis;
             p.pitch_spread = self.smooth.spread.process(target.pitch_spread);
             p.pan_spread = self.smooth.pan.process(target.pan_spread);
             p.speed = self.smooth.speed.process(speed_target);
@@ -733,10 +751,15 @@ impl Engine {
             // reads speed alone, and an octave down must not sound like a reel
             // slowing to a stop.
             let read_speed = p.speed * read_ratio;
-            let mut dry = self.player.process(source, read_speed, looping);
+            let mut dry = self
+                .player
+                .process(source, read_speed * self.pass_ratio, looping);
             if self.tail_left > 0.0 {
                 let fade = (self.tail_left / self.player.seam_samples()).sqrt();
-                dry += self.tail.process(source, read_speed, looping) * fade;
+                dry += self
+                    .tail
+                    .process(source, read_speed * self.tail_ratio, looping)
+                    * fade;
                 self.tail_left -= 1.0;
             }
             let material = dry * material_level;
@@ -1370,6 +1393,39 @@ mod tests {
             stepped < steady * 2.0 + 0.02,
             "retriggering jumped by {stepped} against a steady {steady}"
         );
+    }
+
+    #[test]
+    fn a_step_an_octave_up_plays_its_pass_twice_as_fast() {
+        // Varispeed, as the octave is: a quarter of a second into a pass,
+        // the step an octave up has read twice as far.
+        let run = |semis: i8| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(96_000));
+            let mut pitches = [0; crate::steps::STEPS];
+            pitches[0] = semis;
+            e.set_steps(StepParams {
+                on: true,
+                pattern: 1,
+                pitches,
+                ..Default::default()
+            });
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            let mut out = vec![0.0; 480];
+            for _ in 0..50 {
+                e.process_block(&mut out, &bank);
+            }
+            e.play_position()
+        };
+        let (flat, up) = (run(0), run(12));
+        let ratio = up / flat;
+        assert!(
+            (1.95..2.05).contains(&ratio),
+            "an octave up read {ratio}x as far"
+        );
+        // A quarter of a second of 96,000 samples is an eighth, unpitched.
+        assert!(flat > 0.12, "the flat pass read {flat}");
     }
 
     #[test]
