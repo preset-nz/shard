@@ -140,8 +140,17 @@ export function rowsOf(defs: ParamInfo[], node: NodeInfo): ParamInfo[] {
   return defs.filter((p) => node.owns(p.id) && p.id !== sw);
 }
 
+/** A two-step row from 0 to 1 is a yes or no, not a choice of two. */
+export function isSwitch(p: ParamInfo): boolean {
+  return p.taper === 'stepped' && p.steps === 2 && p.min === 0 && p.max === 1;
+}
+
 function fieldFor(p: ParamInfo) {
   const base = { id: p.id, path: p.id, label: p.name };
+
+  if (isSwitch(p)) {
+    return { ...base, kind: 'checkbox' as const };
+  }
 
   if (p.taper === 'stepped') {
     const n = Math.max(1, p.steps ?? 1);
@@ -195,7 +204,11 @@ export function registerParamScope(defs: ParamInfo[]) {
         const out: Record<string, unknown> = {};
         for (const d of defs) {
           const v = values[d.id] ?? d.default;
-          out[d.id] = d.taper === 'stepped' ? String(Math.round(v)) : normalise(d, v);
+          out[d.id] = isSwitch(d)
+            ? v >= 0.5
+            : d.taper === 'stepped'
+              ? String(Math.round(v))
+              : normalise(d, v);
         }
         return out;
       },
@@ -203,7 +216,13 @@ export function registerParamScope(defs: ParamInfo[]) {
       write: (path, value) => {
         const d = byId.get(path);
         if (!d) return;
-        const real = d.taper === 'stepped' ? Number(value) : denormalise(d, Number(value));
+        const real = isSwitch(d)
+          ? value
+            ? 1
+            : 0
+          : d.taper === 'stepped'
+            ? Number(value)
+            : denormalise(d, Number(value));
         void setParam(d.id, real);
       },
     });
