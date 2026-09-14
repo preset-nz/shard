@@ -1,5 +1,5 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   addLfo,
   auditionGrain,
@@ -378,10 +378,12 @@ export default function App() {
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
 
       // Deselect all. The inspector empties with it. A row waiting for a
-      // MIDI control stops waiting.
+      // MIDI control stops waiting, and a banner goes away.
       if (e.key === 'Escape') {
         useSelection.getState().clear();
         void cancelLearn();
+        setError(null);
+        setNote(null);
         return;
       }
 
@@ -533,15 +535,15 @@ export default function App() {
       </header>
 
       {note && !error && (
-        <div className="border-b border-border bg-muted/40 px-4 py-2 text-xs text-muted-foreground">
+        <Banner tone="note" onDismiss={() => setNote(null)}>
           {note}
-        </div>
+        </Banner>
       )}
 
       {error && (
-        <div className="border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive">
+        <Banner tone="error" onDismiss={() => setError(null)}>
           {error}
-        </div>
+        </Banner>
       )}
 
       <div className="flex min-h-0 flex-1">
@@ -751,6 +753,37 @@ export default function App() {
         midi={midi}
         onError={setError}
       />
+    </div>
+  );
+}
+
+/** A line under the header: what just happened, or what went wrong. Escape
+ * or the cross dismisses it. */
+function Banner({
+  tone,
+  onDismiss,
+  children,
+}: {
+  tone: 'note' | 'error';
+  onDismiss: () => void;
+  children: ReactNode;
+}) {
+  const look =
+    tone === 'error'
+      ? 'border-destructive/40 bg-destructive/10 text-destructive'
+      : 'border-border bg-muted/40 text-muted-foreground';
+  return (
+    <div className={`flex items-center gap-3 border-b px-4 py-2 text-xs ${look}`}>
+      <span className="flex-1">{children}</span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="rounded px-1 opacity-70 hover:opacity-100"
+        title="Dismiss (Escape)"
+        aria-label="Dismiss"
+      >
+        ×
+      </button>
     </div>
   );
 }
