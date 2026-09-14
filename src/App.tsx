@@ -21,6 +21,7 @@ import {
   type MappingsView,
   type Meters,
   type ModulationView,
+  mapMidi,
   type ParamInfo,
   paramDefs,
   mappings as readMappings,
@@ -431,6 +432,7 @@ export default function App() {
     onLink: (id, lfo, depth) => void editMod(() => linkParam(id, lfo, depth)),
     onUnlink: (id) => void editMod(() => unlinkParam(id)),
     onLearn: (id) => void learnMidi(id).catch((e) => setError(String(e))),
+    onMapMidi: (id, control) => void mapMidi(id, control).catch((e) => setError(String(e))),
     onForgetMidi: (id) => void forgetMidi(id).catch((e) => setError(String(e))),
   };
 

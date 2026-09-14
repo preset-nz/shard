@@ -33,9 +33,11 @@ import { Slider } from '@/components/ui/slider';
  * control, and a mark on the slider where the engine has moved the value to.
  * The slider itself stays the hand's.
  *
- * Right-click also learns a MIDI control. A mapped row names its control, and
- * while the knob is armed, waiting to pass through the value, a hollow mark
- * shows where the knob physically is so you can see which way to turn.
+ * Right-click also picks a MIDI knob, from the ones Settings knows, or learns
+ * one by touch (Georg, 2026-09-14: picking is the main path). A mapped row
+ * names its control, and while the knob is armed, waiting to pass through
+ * the value, a hollow mark shows where the knob physically is so you can see
+ * which way to turn.
  */
 export interface ParamFieldExtras {
   def: ParamInfo;
@@ -52,6 +54,7 @@ export interface ParamRowContext {
   onLink: (id: string, lfo: number, depth: number) => void;
   onUnlink: (id: string) => void;
   onLearn: (id: string) => void;
+  onMapMidi: (id: string, control: number) => void;
   onForgetMidi: (id: string) => void;
 }
 
@@ -182,10 +185,27 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
           </ContextMenuLabel>
         )}
         <ContextMenuSeparator />
-        <ContextMenuItem onSelect={() => c.onLearn(def.id)}>Learn MIDI</ContextMenuItem>
-        <ContextMenuItem disabled={!mapped} onSelect={() => c.onForgetMidi(def.id)}>
-          Forget MIDI
-        </ContextMenuItem>
+        <ContextMenuSub>
+          <ContextMenuSubTrigger>Control</ContextMenuSubTrigger>
+          <ContextMenuSubContent className="max-h-80 overflow-y-auto">
+            {c.midi.knobs.map((k) => (
+              <ContextMenuItem key={k.id} onSelect={() => c.onMapMidi(def.id, k.id)}>
+                {k.name}
+                {mapped?.control === k.id ? ' ✓' : ''}
+              </ContextMenuItem>
+            ))}
+            {c.midi.knobs.length === 0 && (
+              <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                No knobs known yet. Turn one, or name them in Settings.
+              </ContextMenuLabel>
+            )}
+            <ContextMenuSeparator />
+            <ContextMenuItem onSelect={() => c.onLearn(def.id)}>Learn by touch</ContextMenuItem>
+            <ContextMenuItem disabled={!mapped} onSelect={() => c.onForgetMidi(def.id)}>
+              None
+            </ContextMenuItem>
+          </ContextMenuSubContent>
+        </ContextMenuSub>
       </ContextMenuContent>
     </ContextMenu>
   );

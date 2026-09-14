@@ -305,6 +305,13 @@ export interface MapInfo {
   name: string;
 }
 
+/** A knob a row can pick from its menu. */
+export interface KnobInfo {
+  id: number;
+  name: string;
+  device: string;
+}
+
 export interface LearnReport {
   seq: number;
   ok: boolean;
@@ -315,6 +322,8 @@ export interface LearnReport {
 export interface MappingsView {
   active: MapInfo | null;
   maps: MapInfo[];
+  /** Every knob known, so a row can choose one rather than learn it. */
+  knobs: KnobInfo[];
   /** By parameter id. */
   mappings: Record<string, MappingView>;
   /** The parameter waiting for a control to move. */
@@ -325,6 +334,7 @@ export interface MappingsView {
 export const EMPTY_MAPPINGS: MappingsView = {
   active: null,
   maps: [],
+  knobs: [],
   mappings: {},
   learning: null,
   report: null,
@@ -332,6 +342,7 @@ export const EMPTY_MAPPINGS: MappingsView = {
 
 export const mappings = () => invoke<MappingsView>('mappings');
 export const learnMidi = (id: string) => invoke<void>('learn_midi', { id });
+export const mapMidi = (id: string, control: number) => invoke<void>('map_midi', { id, control });
 export const cancelLearn = () => invoke<void>('cancel_learn');
 export const forgetMidi = (id: string) => invoke<void>('forget_midi', { id });
 export const setActiveMap = (id: number) => invoke<MappingsView>('set_active_map', { id });

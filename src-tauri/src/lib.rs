@@ -737,10 +737,20 @@ pub struct MapInfo {
     pub name: String,
 }
 
+/// A control a row can pick from its menu.
+#[derive(Serialize)]
+pub struct KnobInfo {
+    pub id: u64,
+    pub name: String,
+    pub device: String,
+}
+
 #[derive(Serialize)]
 pub struct MappingsView {
     pub active: Option<MapInfo>,
     pub maps: Vec<MapInfo>,
+    /// Every knob known, so a row can choose one rather than learn it.
+    pub knobs: Vec<KnobInfo>,
     /// By parameter id, in the active map.
     pub mappings: std::collections::BTreeMap<String, MappingView>,
     /// The parameter waiting for a control to move.
@@ -797,6 +807,21 @@ impl MappingsView {
                     name: m.name.clone(),
                 })
                 .collect(),
+            knobs: registry
+                .controls
+                .iter()
+                .filter(|k| k.role == controllers::Role::Knob)
+                .map(|k| KnobInfo {
+                    id: k.id,
+                    name: k.name.clone(),
+                    device: registry
+                        .devices
+                        .iter()
+                        .find(|d| d.port == k.address.device)
+                        .map(|d| d.name.clone())
+                        .unwrap_or_else(|| k.address.device.clone()),
+                })
+                .collect(),
             mappings,
             learning: learn.waiting.as_ref().map(|t| t.describe()),
             report: learn.report.as_ref().map(|(seq, r)| LearnReport {
@@ -823,6 +848,31 @@ fn learn_midi(state: tauri::State<'_, Arc<midi::Controllers>>, id: String) -> Re
         return Err(format!("unknown parameter: {id}"));
     }
     state.learn.lock().expect("learn poisoned").waiting = Some(mapping::Target::Param(id));
+    Ok(())
+}
+
+/// Point a control you already know at `id`, no touching needed.
+#[tauri::command]
+fn map_midi(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: String,
+    control: u64,
+) -> Result<(), String> {
+    if shard_dsp::params::index_of(&id).is_none() {
+        return Err(format!("unknown parameter: {id}"));
+    }
+    let said = {
+        let mut registry = state.registry.lock().expect("registry poisoned");
+        let said = registry.learn(control, mapping::Target::Param(id))?;
+        state.save(&registry)?;
+        said
+    };
+    state
+        .pickup
+        .lock()
+        .expect("pickup poisoned")
+        .forget(control);
+    state.learn.lock().expect("learn poisoned").say(Ok(said));
     Ok(())
 }
 
@@ -1228,6 +1278,7 @@ pub fn run() {
             forget_device,
             mappings,
             learn_midi,
+            map_midi,
             cancel_learn,
             forget_midi,
             set_active_map,
@@ -1381,6 +1432,11 @@ mod tests {
                 name: "live".into(),
             }),
             maps: Vec::new(),
+            knobs: vec![KnobInfo {
+                id: 1,
+                name: "K1".into(),
+                device: "LPD8".into(),
+            }],
             mappings: [(
                 "grain.size".to_string(),
                 MappingView {
@@ -1399,8 +1455,11 @@ mod tests {
             }),
         })
         .expect("MappingsView is serialisable");
-        for key in ["active", "maps", "mappings", "learning", "report"] {
+        for key in ["active", "maps", "knobs", "mappings", "learning", "report"] {
             assert!(mv.get(key).is_some(), "MappingsView lost `{key}`");
+        }
+        for key in ["id", "name", "device"] {
+            assert!(mv["knobs"][0].get(key).is_some(), "KnobInfo lost `{key}`");
         }
         for key in ["control", "control_name", "armed", "knob"] {
             assert!(
