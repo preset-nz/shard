@@ -29,9 +29,10 @@ import { Slider } from '@/components/ui/slider';
  * arrive on the panel's context, which changes every poll without rebuilding
  * the schema.
  *
- * Right-click links or unlinks. A linked row shows the LFO it follows, a depth
- * control, and a mark on the slider where the engine has moved the value to.
- * The slider itself stays the hand's.
+ * Right-click links or unlinks. A linked row shows the LFO it follows, the two
+ * ends of its sweep on a second slider, and a mark on the main slider where
+ * the engine has moved the value to. The main slider stays the hand's, and is
+ * what the value returns to when unlinked.
  *
  * Right-click also picks a MIDI knob, from the ones Settings knows, or learns
  * one by touch (Georg, 2026-09-14: picking is the main path). A mapped row
@@ -51,15 +52,22 @@ export interface ParamRowContext {
   heard: Record<string, number>;
   /** The active controller map. */
   midi: MappingsView;
-  onLink: (id: string, lfo: number, depth: number) => void;
+  onLink: (id: string, lfo: number, lo: number, hi: number) => void;
   onUnlink: (id: string) => void;
   onLearn: (id: string) => void;
   onMapMidi: (id: string, control: number) => void;
   onForgetMidi: (id: string) => void;
 }
 
-/** Where a new link starts: enough to hear, not so much it lurches. */
-const NEW_DEPTH = 0.25;
+/** A new link sweeps this far either side of where the hand is. */
+const NEW_HALF_WIDTH = 0.125;
+
+/** A sweep around `t`, kept inside the range. */
+function around(t: number): [number, number] {
+  const lo = Math.max(0, t - NEW_HALF_WIDTH);
+  const hi = Math.min(1, t + NEW_HALF_WIDTH);
+  return [lo, hi];
+}
 
 export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
   const f = field as unknown as ParamFieldExtras & { label?: string; id: string };
@@ -143,17 +151,20 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
           </div>
           {link && source && (
             <div className="flex items-center gap-2 pl-3">
-              <span className="shrink-0 text-[10px] text-muted-foreground">Depth</span>
+              <span className="w-14 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
+                {format(def, denormalise(def, Math.min(link.lo, link.hi)))}
+              </span>
               <Slider
-                min={-1}
+                min={0}
                 max={1}
-                step={0.01}
-                value={[link.depth]}
-                onValueChange={([d]) => c.onLink(def.id, link.lfo, d)}
+                step={0.001}
+                minStepsBetweenThumbs={1}
+                value={[Math.min(link.lo, link.hi), Math.max(link.lo, link.hi)]}
+                onValueChange={([lo, hi]) => c.onLink(def.id, link.lfo, lo, hi)}
                 className="flex-1"
               />
-              <span className="w-9 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
-                {`${link.depth > 0 ? '+' : ''}${Math.round(link.depth * 100)}%`}
+              <span className="w-14 shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
+                {format(def, denormalise(def, Math.max(link.lo, link.hi)))}
               </span>
             </div>
           )}
@@ -168,7 +179,11 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
             {c.mod.lfos.map((l) => (
               <ContextMenuItem
                 key={l.id}
-                onSelect={() => c.onLink(def.id, l.id, source ? link.depth : NEW_DEPTH)}
+                onSelect={() =>
+                  source
+                    ? c.onLink(def.id, l.id, link.lo, link.hi)
+                    : c.onLink(def.id, l.id, ...around(t))
+                }
               >
                 {l.name}
                 {link?.lfo === l.id ? ' ✓' : ''}

@@ -521,9 +521,10 @@ fn link_param(
     state: tauri::State<'_, Audio>,
     id: String,
     lfo: u64,
-    depth: f32,
+    lo: f32,
+    hi: f32,
 ) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.link(&id, lfo, depth))
+    state.edit_modulation(|doc| doc.link(&id, lfo, lo, hi))
 }
 
 /// Stop a parameter following anything.
@@ -1381,7 +1382,7 @@ mod tests {
 
         let mut doc = modulation::Modulation::default();
         let id = doc.add_lfo().id;
-        doc.link("grain.size", id, 0.5).unwrap();
+        doc.link("grain.size", id, 0.25, 0.75).unwrap();
         let view = serde_json::to_value(ModulationView::of(&doc, Vec::new()))
             .expect("ModulationView is serialisable");
         for key in ["lfos", "links", "refused"] {
@@ -1478,7 +1479,7 @@ mod tests {
         for key in ["id", "name", "rate", "shape", "phase"] {
             assert!(view["lfos"][0].get(key).is_some(), "LfoRecord lost `{key}`");
         }
-        for key in ["lfo", "depth"] {
+        for key in ["lfo", "lo", "hi"] {
             assert!(
                 view["links"]["grain.size"].get(key).is_some(),
                 "LinkRecord lost `{key}`"

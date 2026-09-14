@@ -122,8 +122,8 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
             .enumerate()
             .filter(|(_, p)| !matches!(p.taper, Taper::Stepped(_)))
         {
-            let depth = if i % 2 == 0 { 0.7 } else { -0.7 };
-            set.link(p.id, lfos[i % lfos.len()].id, depth).unwrap();
+            let (lo, hi) = if i % 2 == 0 { (0.2, 0.9) } else { (0.9, 0.2) };
+            set.link(p.id, lfos[i % lfos.len()].id, lo, hi).unwrap();
         }
         set
     };

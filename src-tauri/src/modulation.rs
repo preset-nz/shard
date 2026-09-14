@@ -49,9 +49,11 @@ pub struct LfoRecord {
 pub struct LinkRecord {
     /// The id of the LFO the parameter follows.
     pub lfo: u64,
-    /// Signed, as a share of the parameter's whole range. The engine clamps it
-    /// to ±1.
-    pub depth: f32,
+    /// The ends of the sweep, 0 to 1 of the parameter's range. The LFO's
+    /// trough lands on `lo` and its crest on `hi`; `lo` above `hi` runs it
+    /// the other way.
+    pub lo: f32,
+    pub hi: f32,
 }
 
 /// Links by parameter id. A map, so a parameter has at most one source.
@@ -117,7 +119,7 @@ impl Modulation {
 
         let mut set = ModSet::new(&specs);
         for (param, link) in &self.links {
-            if let Err(e) = set.link(param, link.lfo, link.depth) {
+            if let Err(e) = set.link(param, link.lfo, link.lo, link.hi) {
                 refused.push(Refused {
                     id: param.clone(),
                     reason: e.to_string(),
@@ -195,9 +197,9 @@ impl Modulation {
         Ok(())
     }
 
-    /// Make `param` follow LFO `lfo` at `depth`, replacing any link it had.
-    /// Depth is clamped to ±1, the parameter's whole range either way.
-    pub fn link(&mut self, param: &str, lfo: u64, depth: f32) -> Result<(), String> {
+    /// Make `param` follow LFO `lfo` between `lo` and `hi`, replacing any link
+    /// it had. The ends are clamped to 0 to 1, the parameter's own range.
+    pub fn link(&mut self, param: &str, lfo: u64, lo: f32, hi: f32) -> Result<(), String> {
         let slot =
             index_of(param).ok_or_else(|| LinkError::UnknownParameter(param.into()).to_string())?;
         if matches!(PARAMS[slot].taper, Taper::Stepped(_)) {
@@ -206,14 +208,15 @@ impl Modulation {
         if !self.lfos.iter().any(|l| l.id == lfo) {
             return Err(LinkError::UnknownLfo(lfo).to_string());
         }
-        if !depth.is_finite() {
-            return Err("a link's depth must be a number".into());
+        if !lo.is_finite() || !hi.is_finite() {
+            return Err("a link's ends must be numbers".into());
         }
         self.links.insert(
             param.to_string(),
             LinkRecord {
                 lfo,
-                depth: depth.clamp(-1.0, 1.0),
+                lo: lo.clamp(0.0, 1.0),
+                hi: hi.clamp(0.0, 1.0),
             },
         );
         Ok(())
@@ -244,8 +247,13 @@ mod tests {
         }
     }
 
+    /// A sweep over the upper `depth` share of the range.
     fn link(lfo: u64, depth: f32) -> LinkRecord {
-        LinkRecord { lfo, depth }
+        LinkRecord {
+            lfo,
+            lo: 1.0 - depth,
+            hi: 1.0,
+        }
     }
 
     #[test]
@@ -363,7 +371,7 @@ mod tests {
     fn removing_an_lfo_keeps_its_links_and_reports_them() {
         let mut doc = Modulation::default();
         let id = doc.add_lfo().id;
-        doc.link("grain.size", id, 0.5).unwrap();
+        doc.link("grain.size", id, 0.5, 1.0).unwrap();
         doc.remove_lfo(id).unwrap();
 
         assert_eq!(doc.links.get("grain.size"), Some(&link(id, 0.5)));
@@ -384,7 +392,7 @@ mod tests {
     fn a_refused_edit_changes_nothing() {
         let mut doc = Modulation::default();
         let id = doc.add_lfo().id;
-        doc.link("grain.size", id, 0.5).unwrap();
+        doc.link("grain.size", id, 0.0, 0.5).unwrap();
         let before = doc.clone();
 
         let good = doc.lfos[0].clone();
@@ -413,19 +421,19 @@ mod tests {
             assert!(doc.set_lfo(bad.clone()).is_err(), "accepted {bad:?}");
         }
         assert!(
-            doc.link("grain.window", id, 0.5).is_err(),
+            doc.link("grain.window", id, 0.0, 0.5).is_err(),
             "linked a stepped parameter"
         );
-        assert!(doc.link("grain.nonsense", id, 0.5).is_err());
-        assert!(doc.link("grain.position", 99, 0.5).is_err());
-        assert!(doc.link("grain.position", id, f32::INFINITY).is_err());
+        assert!(doc.link("grain.nonsense", id, 0.0, 0.5).is_err());
+        assert!(doc.link("grain.position", 99, 0.0, 0.5).is_err());
+        assert!(doc.link("grain.position", id, 0.0, f32::INFINITY).is_err());
         assert!(doc.remove_lfo(99).is_err());
 
         assert_eq!(doc, before);
     }
 
     #[test]
-    fn an_edit_brings_rate_phase_and_depth_into_range() {
+    fn an_edit_brings_rate_phase_and_ends_into_range() {
         let mut doc = Modulation::default();
         let id = doc.add_lfo().id;
         doc.set_lfo(LfoRecord {
@@ -447,10 +455,17 @@ mod tests {
             }
         );
 
-        doc.link("grain.position", id, -3.0).unwrap();
-        assert_eq!(doc.links["grain.position"], link(id, -1.0));
+        doc.link("grain.position", id, -3.0, 7.0).unwrap();
+        assert_eq!(
+            doc.links["grain.position"],
+            LinkRecord {
+                lfo: id,
+                lo: 0.0,
+                hi: 1.0
+            }
+        );
         // Linking again replaces, rather than adding a second source.
-        doc.link("grain.position", id, 0.25).unwrap();
+        doc.link("grain.position", id, 0.75, 1.0).unwrap();
         assert_eq!(doc.links.len(), 1);
         assert_eq!(doc.links["grain.position"], link(id, 0.25));
     }

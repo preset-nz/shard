@@ -1720,7 +1720,7 @@ mod tests {
             set(&bank, "grain.size", 100.0);
             if linked {
                 let mut mods = ModSet::new(&[lfo(1, 2.0, Shape::Square)]);
-                mods.link("grain.size", 1, 0.3).unwrap();
+                mods.link("grain.size", 1, 0.2, 0.8).unwrap();
                 drop(e.set_modulation(mods));
             }
             let mut out = vec![0.0; 512];
@@ -1807,7 +1807,7 @@ mod tests {
             set(&bank, "ring.mix", 0.5);
             if linked {
                 let mut mods = ModSet::new(&[lfo(1, 5.0, crate::modulation::Shape::Square)]);
-                mods.link("ring.mix", 1, 0.5).unwrap();
+                mods.link("ring.mix", 1, 0.0, 0.5).unwrap();
                 drop(e.set_modulation(mods));
             }
             let mut out = vec![0.0; 256];

@@ -196,7 +196,11 @@ mod tests {
     }
 
     fn link(lfo: u64, depth: f32) -> LinkRecord {
-        LinkRecord { lfo, depth }
+        LinkRecord {
+            lfo,
+            lo: 1.0 - depth,
+            hi: 1.0,
+        }
     }
 
     #[test]
@@ -312,7 +316,7 @@ mod tests {
         // value applies none of those, and says so.
         let text = r#"{"ring":{"odd":{
             "values":{"ring.mix":0.5,"ring.on":1.0,"grain.gain":0.25,"ring.gone":2.0},
-            "links":{"grain.size":{"lfo":1,"depth":0.5},"ring.freq":{"lfo":1,"depth":0.25}}
+            "links":{"grain.size":{"lfo":1,"lo":0.5,"hi":1.0},"ring.freq":{"lfo":1,"lo":0.4,"hi":0.5}}
         }}}"#;
         let p: Presets = serde_json::from_str(text).unwrap();
         let bank = ParamBank::new();

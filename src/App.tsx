@@ -431,7 +431,7 @@ export default function App() {
     mod,
     heard,
     midi,
-    onLink: (id, lfo, depth) => void editMod(() => linkParam(id, lfo, depth)),
+    onLink: (id, lfo, lo, hi) => void editMod(() => linkParam(id, lfo, lo, hi)),
     onUnlink: (id) => void editMod(() => unlinkParam(id)),
     onLearn: (id) => void learnMidi(id).catch((e) => setError(String(e))),
     onMapMidi: (id, control) => void mapMidi(id, control).catch((e) => setError(String(e))),

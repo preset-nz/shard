@@ -207,8 +207,12 @@ export interface LfoRecord {
 export interface LinkRecord {
   /** The id of the LFO the parameter follows. */
   lfo: number;
-  /** −1 to 1, as a share of the parameter's whole range. */
-  depth: number;
+  /**
+   * The ends of the sweep, 0 to 1 of the parameter's range. The LFO's trough
+   * lands on `lo` and its crest on `hi`.
+   */
+  lo: number;
+  hi: number;
 }
 
 /** The open patch's LFOs and links, and what in them the engine refused. */
@@ -232,8 +236,8 @@ export const lfoLimits = () => invoke<LfoLimits>('lfo_limits');
 export const addLfo = () => invoke<ModulationView>('add_lfo');
 export const removeLfo = (id: number) => invoke<ModulationView>('remove_lfo', { id });
 export const setLfo = (lfo: LfoRecord) => invoke<ModulationView>('set_lfo', { lfo });
-export const linkParam = (id: string, lfo: number, depth: number) =>
-  invoke<ModulationView>('link_param', { id, lfo, depth });
+export const linkParam = (id: string, lfo: number, lo: number, hi: number) =>
+  invoke<ModulationView>('link_param', { id, lfo, lo, hi });
 export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param', { id });
 
 /** Every parameter as the engine last heard it, indexed as `getParams`. */

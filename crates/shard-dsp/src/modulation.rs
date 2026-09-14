@@ -11,8 +11,11 @@
 //! - **Modulation never writes a stored value.** The bank holds the hand's
 //!   value. `apply` bends it where the engine reads, in normalised space and
 //!   through the parameter's own taper, so saving saves what the hand set.
-//! - **One source per parameter, with a signed depth.** A link is shaped so
-//!   it could become one row of a matrix later.
+//! - **One source per parameter, sweeping a range.** A link names a low and
+//!   a high end as shares of the parameter's range (Georg, 2026-09-14: "40 to
+//!   50 Hz on the ring modulator"), and the LFO travels between them. The
+//!   hand's value does not take part while a link exists; it is what you get
+//!   back when you unlink. Low above high runs the sweep the other way.
 
 use crate::params::{index_of, Taper, PARAMS};
 use crate::rng::Rng;
@@ -283,7 +286,9 @@ impl Lfo {
 struct Link {
     /// Index into this set's LFOs, resolved from an id when the link was made.
     lfo: usize,
-    depth: f32,
+    /// Where the LFO's trough and crest land, 0 to 1 of the parameter's range.
+    lo: f32,
+    hi: f32,
 }
 
 /// Why a link was refused. The document layer reports these rather than
@@ -335,9 +340,9 @@ impl ModSet {
         }
     }
 
-    /// Link `param` to the LFO with `lfo_id`, replacing any link it had. Depth
-    /// is clamped to ±1, which is the parameter's whole range either way.
-    pub fn link(&mut self, param: &str, lfo_id: u64, depth: f32) -> Result<(), LinkError> {
+    /// Link `param` to the LFO with `lfo_id`, replacing any link it had. The
+    /// ends are clamped to 0 to 1, the parameter's own range.
+    pub fn link(&mut self, param: &str, lfo_id: u64, lo: f32, hi: f32) -> Result<(), LinkError> {
         let slot = index_of(param).ok_or_else(|| LinkError::UnknownParameter(param.to_string()))?;
         if matches!(PARAMS[slot].taper, Taper::Stepped(_)) {
             return Err(LinkError::Stepped(PARAMS[slot].id));
@@ -352,7 +357,8 @@ impl ModSet {
         }
         self.links[slot] = Some(Link {
             lfo,
-            depth: depth.clamp(-1.0, 1.0),
+            lo: lo.clamp(0.0, 1.0),
+            hi: hi.clamp(0.0, 1.0),
         });
         Ok(())
     }
@@ -381,21 +387,20 @@ impl ModSet {
     }
 
     /// The value the engine should use for parameter `slot`, given the hand's
-    /// `base`. Exactly `base` when nothing is linked or the depth is zero, not a
-    /// round trip through the taper, which would not be bit-exact.
+    /// `base`. Exactly `base` when nothing is linked, not a round trip through
+    /// the taper, which would not be bit-exact. Linked, the LFO's −1 lands on
+    /// the low end and its +1 on the high end.
     #[inline]
     pub fn apply(&self, slot: usize, base: f32) -> f32 {
         let Some(Some(link)) = self.links.get(slot) else {
             return base;
         };
-        if link.depth == 0.0 {
-            return base;
-        }
         let Some(lfo) = self.lfos.get(link.lfo) else {
             return base;
         };
         let def = &PARAMS[slot];
-        def.denormalise((def.normalise(base) + link.depth * lfo.value).clamp(0.0, 1.0))
+        let t = 0.5 + 0.5 * lfo.value.clamp(-1.0, 1.0);
+        def.denormalise(link.lo + (link.hi - link.lo) * t)
     }
 
     /// The current output of the LFO with `id`, -1 to 1. For drawing and tests.
@@ -476,17 +481,54 @@ mod tests {
     }
 
     #[test]
-    fn unlinked_and_zero_depth_are_exactly_the_base_value() {
+    fn unlinked_is_exactly_the_base_value_and_a_link_ignores_it() {
         let mut set = ModSet::new(&[spec(7, 5.0, Shape::Square)]);
         let size = index_of("grain.size").unwrap();
         let density = index_of("grain.density").unwrap();
-        set.link("grain.density", 7, 0.0).unwrap();
+        let d = &PARAMS[density];
+        set.link("grain.density", 7, 0.25, 0.75).unwrap();
         for _ in 0..50 {
             set.advance(BLOCK, SR);
             assert_eq!(set.apply(size, 123.4), 123.4);
-            assert_eq!(set.apply(density, 37.7), 37.7);
+            let v = set.apply(density, 37.7);
+            let t = d.normalise(v);
+            assert!((t - 0.25).abs() < 1e-3 || (t - 0.75).abs() < 1e-3, "{t}");
         }
         assert_eq!(ModSet::empty().apply(size, 123.4), 123.4);
+    }
+
+    #[test]
+    fn the_ends_of_a_link_are_the_ends_of_the_sweep() {
+        // A triangle visits both ends; the sweep must reach exactly the
+        // values the ends name, and never pass them.
+        let mut set = ModSet::new(&[spec(1, 2.0, Shape::Triangle)]);
+        let slot = index_of("ring.freq").unwrap();
+        let d = &PARAMS[slot];
+        set.link("ring.freq", 1, 0.4, 0.5).unwrap();
+        let (lo, hi) = (d.denormalise(0.4), d.denormalise(0.5));
+        let (mut min, mut max) = (f32::MAX, f32::MIN);
+        for _ in 0..4_000 {
+            set.advance(BLOCK, SR);
+            let v = set.apply(slot, d.default);
+            assert!(v >= lo - 1e-3 && v <= hi + 1e-3, "{v} outside {lo}..{hi}");
+            min = min.min(v);
+            max = max.max(v);
+        }
+        assert!(
+            (min - lo).abs() < hi * 0.01,
+            "never reached the low end: {min}"
+        );
+        assert!(
+            (max - hi).abs() < hi * 0.01,
+            "never reached the high end: {max}"
+        );
+        // Low above high sweeps the other way, still inside the ends.
+        set.link("ring.freq", 1, 0.5, 0.4).unwrap();
+        for _ in 0..400 {
+            set.advance(BLOCK, SR);
+            let v = set.apply(slot, d.default);
+            assert!(v >= lo - 1e-3 && v <= hi + 1e-3);
+        }
     }
 
     #[test]
@@ -498,8 +540,9 @@ mod tests {
             .collect();
         let mut set = ModSet::new(&specs);
         for (i, (_, p)) in continuous().enumerate() {
-            let depth = if i % 2 == 0 { 1.0 } else { -1.0 };
-            set.link(p.id, (i % specs.len()) as u64 + 1, depth).unwrap();
+            let (lo, hi) = if i % 2 == 0 { (0.0, 1.0) } else { (1.0, 0.0) };
+            set.link(p.id, (i % specs.len()) as u64 + 1, lo, hi)
+                .unwrap();
         }
         for _ in 0..2_000 {
             set.advance(BLOCK, SR);
@@ -517,23 +560,21 @@ mod tests {
     fn links_are_refused_where_they_cannot_mean_anything() {
         let mut set = ModSet::new(&[spec(1, 1.0, Shape::Sine)]);
         assert_eq!(
-            set.link("grain.nonsense", 1, 0.5),
+            set.link("grain.nonsense", 1, 0.0, 0.5),
             Err(LinkError::UnknownParameter("grain.nonsense".into()))
         );
         assert_eq!(
-            set.link("grain.window", 1, 0.5),
+            set.link("grain.window", 1, 0.0, 0.5),
             Err(LinkError::Stepped("grain.window"))
         );
         assert_eq!(
-            set.link("grain.size", 99, 0.5),
+            set.link("grain.size", 99, 0.0, 0.5),
             Err(LinkError::UnknownLfo(99))
         );
-        // Out-of-range depth is clamped rather than refused.
-        set.link("grain.size", 1, 7.0).unwrap();
-        assert_eq!(
-            set.links[index_of("grain.size").unwrap()].unwrap().depth,
-            1.0
-        );
+        // Out-of-range ends are clamped rather than refused.
+        set.link("grain.size", 1, -3.0, 7.0).unwrap();
+        let l = set.links[index_of("grain.size").unwrap()].unwrap();
+        assert_eq!((l.lo, l.hi), (0.0, 1.0));
     }
 
     #[test]
