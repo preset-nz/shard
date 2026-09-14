@@ -52,6 +52,8 @@ pub struct Audio {
     grains: Arc<AtomicU32>,
     /// Transport, mirrored out of the audio thread for the UI.
     playing: Arc<AtomicBool>,
+    /// The sequencer's step, plus one; zero while it is off.
+    step: Arc<AtomicU32>,
     /// Every grain the cloud has spawned, drained by the UI at poll rate.
     grain_log: Arc<GrainLog>,
     /// One grain waiting to be auditioned. Handed across the same way a sample
@@ -115,6 +117,8 @@ pub struct Meters {
     pub reduction: f32,
     pub grains: u32,
     pub playing: bool,
+    /// The sequencer's current step, from zero, or -1 while it is off.
+    pub step: i32,
     /// Where plain playback has reached, 0 to 1.
     pub playhead: f32,
     /// True while one grain is being auditioned on its own.
@@ -208,6 +212,7 @@ fn param_defs() -> Vec<ParamInfo> {
                 Unit::Hz => "Hz",
                 Unit::Semitones => "st",
                 Unit::Percent => "%",
+                Unit::Bpm => "bpm",
                 Unit::Octaves => "oct",
             },
             smooth_ms: p.smooth_ms,
@@ -264,6 +269,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         reduction: f32::from_bits(state.reduction.swap(1.0f32.to_bits(), Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
         playing: state.playing.load(Ordering::Relaxed),
+        step: state.step.load(Ordering::Relaxed) as i32 - 1,
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
         reversing: state.reversing.load(Ordering::Relaxed),
@@ -988,6 +994,7 @@ fn build_audio() -> Result<Audio, String> {
     let reduction = Arc::new(AtomicU32::new(1.0f32.to_bits()));
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
+    let step = Arc::new(AtomicU32::new(0));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
     let swap: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
@@ -1017,6 +1024,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_swap = Arc::clone(&swap);
     let audio_playing = Arc::clone(&playing);
     let audio_playhead = Arc::clone(&playhead);
+    let audio_step = Arc::clone(&step);
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
     let audio_auditioning = Arc::clone(&auditioning);
@@ -1159,6 +1167,10 @@ fn build_audio() -> Result<Audio, String> {
                                     .store(engine.active_grains() as u32, Ordering::Relaxed);
                                 audio_playhead
                                     .store(engine.play_position().to_bits(), Ordering::Relaxed);
+                                audio_step.store(
+                                    engine.current_step().map_or(0, |s| s + 1),
+                                    Ordering::Relaxed,
+                                );
                                 audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
                                 audio_reversing.store(engine.reversing(), Ordering::Relaxed);
                             });
@@ -1211,6 +1223,7 @@ fn build_audio() -> Result<Audio, String> {
         reduction,
         grains,
         playing,
+        step,
         grain_log,
         audition,
         auditioning,
@@ -1343,6 +1356,7 @@ mod tests {
             reduction: 1.0,
             grains: 0,
             playing: false,
+            step: -1,
             playhead: 0.0,
             auditioning: false,
             reversing: false,
@@ -1355,6 +1369,7 @@ mod tests {
             "peak",
             "reduction",
             "grains",
+            "step",
             "playing",
             "playhead",
             "auditioning",

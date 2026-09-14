@@ -77,6 +77,17 @@ export const NODES: NodeInfo[] = [
     table: null,
     owns: (id) => under('trim')(id) || id === 'material.octave',
   },
+  // The step sequencer. It decides when the patch sounds, so it sits in no
+  // signal lane: its steps are a strip above the lanes, and its title there
+  // selects tempo, length and swing. The pattern is the strip, so the
+  // inspector leaves it out; as a stepped row it would be 65,536 options.
+  {
+    id: 'seq',
+    label: 'Sequencer',
+    lane: null,
+    table: 'seq',
+    owns: (id) => under('seq')(id) && id !== 'seq.pattern',
+  },
   {
     id: 'material',
     label: 'Sample',
@@ -152,6 +163,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'grain.window': WINDOW_NAMES,
   'filter.type': FILTER_TYPES,
   'drive.type': DRIVE_TYPES,
+  'seq.length': ['4 steps', '8 steps', '16 steps'],
 };
 
 function fieldFor(p: ParamInfo) {

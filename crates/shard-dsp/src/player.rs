@@ -11,6 +11,9 @@
 /// discontinuity and you hear a click once per loop.
 const FADE_MS: f32 = 8.0;
 
+/// Copy, so a retrigger can hand the pass in flight to a tail that fades out
+/// while a new pass fades in. Two numbers; nothing to allocate.
+#[derive(Clone, Copy)]
 pub struct Player {
     pos: f32,
     sample_rate: f32,
@@ -22,6 +25,13 @@ impl Player {
             pos: 0.0,
             sample_rate,
         }
+    }
+
+    /// How long the fade at the start of a pass is, in samples. A tail
+    /// fading out over the same time makes a retrigger an equal-power
+    /// crossfade.
+    pub fn seam_samples(&self) -> f32 {
+        (FADE_MS * 0.001 * self.sample_rate).max(1.0)
     }
 
     pub fn rewind(&mut self) {

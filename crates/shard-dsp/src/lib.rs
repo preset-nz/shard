@@ -30,6 +30,7 @@ pub mod ringmod;
 pub mod rng;
 pub mod rt;
 pub mod smooth;
+pub mod steps;
 
 pub use crush::{Crush, CrushParams};
 pub use drive::{Drive, DriveParams, DriveType};
@@ -44,3 +45,4 @@ pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;
 pub use ringmod::{RingMod, RingModParams};
 pub use smooth::OnePole;
+pub use steps::{StepClock, StepParams};

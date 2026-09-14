@@ -61,6 +61,9 @@ Keep the table small. Do not add a parameter the DSP does not read.
   `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
   plain sample (`material`) and the cloud (`grain`). Generators are summed.
 - An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".
+- A **trigger** decides when the patch sounds, and its first row is
+  `<node>.tempo`, named "Tempo". It is listed in `TRIGGERS`; today that is
+  the step sequencer (`seq`), which rewinds the material's pass.
 - `amp.gain` is the master gain, after everything.
 - No row's name repeats its node's name, because the header already says it.
 - The panel draws rows in table order, so order in `params.rs` is layout.

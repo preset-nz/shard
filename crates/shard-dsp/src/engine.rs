@@ -18,6 +18,7 @@ use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::{OnePole, Ramp};
+use crate::steps::{length_from_value, StepClock, StepParams};
 
 /// Resolved indices into the parameter table, looked up once at construction
 /// so the audio thread never does a string comparison.
@@ -53,6 +54,11 @@ struct Slots {
     drive_amount: usize,
     drive_tone: usize,
     drive_type: usize,
+    seq_on: usize,
+    seq_tempo: usize,
+    seq_length: usize,
+    seq_swing: usize,
+    seq_pattern: usize,
     filter_on: usize,
     filter_mix: usize,
     filter_cutoff: usize,
@@ -114,6 +120,11 @@ impl Slots {
             drive_amount: at("drive.amount"),
             drive_tone: at("drive.tone"),
             drive_type: at("drive.type"),
+            seq_on: at("seq.on"),
+            seq_tempo: at("seq.tempo"),
+            seq_length: at("seq.length"),
+            seq_swing: at("seq.swing"),
+            seq_pattern: at("seq.pattern"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -210,6 +221,11 @@ pub struct Engine {
     reversing: bool,
     /// Samples since reverse engaged, for the flick's minimum on-time.
     reverse_age: f32,
+    steps: StepClock,
+    /// The pass a step cut short, fading out under the new one.
+    tail: Player,
+    /// Samples of that fade still to run; zero when there is no tail.
+    tail_left: f32,
     drive: Drive,
     crush: Crush,
     ringmod: RingMod,
@@ -283,6 +299,9 @@ impl Engine {
             auditioning: false,
             reversing: false,
             reverse_age: 0.0,
+            steps: StepClock::new(sample_rate),
+            tail: Player::new(sample_rate),
+            tail_left: 0.0,
             drive: Drive::new(sample_rate),
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
@@ -310,6 +329,7 @@ impl Engine {
         self.granular.clear();
         self.auditioning = false;
         self.player.rewind();
+        self.tail_left = 0.0;
         old
     }
 
@@ -440,6 +460,10 @@ impl Engine {
         // gesture.
         self.reversing = false;
         self.reverse_age = 0.0;
+        // The steps stop with the tape, so no step stays lit, and the next
+        // block starts them again from step one.
+        self.steps.set_running(false);
+        self.tail_left = 0.0;
         self.playing = playing;
     }
 
@@ -475,6 +499,11 @@ impl Engine {
 
     pub fn active_grains(&self) -> usize {
         self.granular.active_grains()
+    }
+
+    /// The step the clock is in, or none while it is off. For the UI.
+    pub fn current_step(&self) -> Option<u32> {
+        self.steps.current()
     }
 
     /// Peak since the last call, then reset. Cheap enough to poll at 30 Hz
@@ -548,6 +577,15 @@ impl Engine {
         let env_on_target = gate(self.slots.env_on);
         let filter_on_target = gate(self.slots.filter_on);
         let drive_on_target = gate(self.slots.drive_on);
+        // The step clock. Stepped rows are read raw, and the pattern is a
+        // bit field carried in a float, exact up to 2^24.
+        self.steps.set_running(bank.get(self.slots.seq_on) >= 0.5);
+        let steps = StepParams {
+            tempo_bpm: read(&self.mods, bank, self.slots.seq_tempo),
+            length: length_from_value(bank.get(self.slots.seq_length)),
+            swing: read(&self.mods, bank, self.slots.seq_swing),
+            pattern: bank.get(self.slots.seq_pattern).round().max(0.0) as u32,
+        };
         let drive = DriveParams {
             amount_db: read(&self.mods, bank, self.slots.drive_amount),
             tone_hz: read(&self.mods, bank, self.slots.drive_tone),
@@ -635,6 +673,16 @@ impl Engine {
 
         let mut p = target;
         for frame in out.chunks_mut(2) {
+            // A step that is on rewinds the pass, and the envelope with it.
+            // The pass it cut short becomes the tail and fades out over the
+            // same few milliseconds the new pass fades in, so the step lands
+            // on time without a click. Cut hard, it jumped by 0.49 against a
+            // steady 0.03.
+            if self.steps.tick(&steps) {
+                self.tail = self.player;
+                self.tail_left = self.player.seam_samples();
+                self.player.rewind();
+            }
             p.position = self.smooth.position.process(target.position);
             p.jitter = self.smooth.jitter.process(target.jitter);
             p.size_ms = self.smooth.size.process(target.size_ms);
@@ -658,7 +706,14 @@ impl Engine {
             // the read, never `p.speed` itself: the tape's level fade below
             // reads speed alone, and an octave down must not sound like a reel
             // slowing to a stop.
-            let material = self.player.process(source, p.speed * read_ratio) * material_level;
+            let read_speed = p.speed * read_ratio;
+            let mut dry = self.player.process(source, read_speed);
+            if self.tail_left > 0.0 {
+                let fade = (self.tail_left / self.player.seam_samples()).sqrt();
+                dry += self.tail.process(source, read_speed) * fade;
+                self.tail_left -= 1.0;
+            }
+            let material = dry * material_level;
             // Off means off. Once the fade has landed the cloud's contribution
             // is already an exact zero, so it is not run at all.
             let (gl, gr) = if grain_on > 0.0 {
@@ -1194,6 +1249,88 @@ mod tests {
         assert!(
             switched < steady * 2.0 + 0.02,
             "switching jumped by {switched} against a steady {steady}"
+        );
+    }
+
+    #[test]
+    fn a_step_that_is_on_rewinds_the_pass() {
+        let run = |seq: f32| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(96_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "seq.on", seq);
+            // Four sixteenths at 120 is half a second; step one only.
+            set(&bank, "seq.length", 0.0);
+            set(&bank, "seq.pattern", 1.0);
+            let mut out = vec![0.0; 128];
+            for _ in 0..(24_000 / 64 + 2) {
+                e.process_block(&mut out, &bank);
+            }
+            e.play_position()
+        };
+        let stepped = run(1.0);
+        let free = run(0.0);
+        assert!(stepped < 0.01, "the second pass began at {stepped}");
+        assert!(free > 0.24, "without steps the pass ran on to {free}");
+    }
+
+    #[test]
+    fn steps_start_from_one_with_the_transport() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let bank = ParamBank::new();
+        set(&bank, "seq.on", 1.0);
+        e.set_playing(true);
+        let mut out = vec![0.0; 128];
+        // 12,800 frames is into the third sixteenth at 120.
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+        }
+        assert_eq!(e.current_step(), Some(2));
+        e.set_playing(false);
+        assert_eq!(e.current_step(), None, "a stopped transport lights no step");
+        e.set_playing(true);
+        e.process_block(&mut out, &bank);
+        assert_eq!(
+            e.current_step(),
+            Some(0),
+            "play starts the pattern from the top"
+        );
+    }
+
+    #[test]
+    fn retriggering_does_not_click() {
+        // A step rewinds the pass wherever the waveform happens to be. Cut
+        // hard, that is a jump to the start of the sample on every step.
+        let worst_step = |seq: bool| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "seq.on", if seq { 1.0 } else { 0.0 });
+            // Every step, at a tempo that lands the rewinds all over the sine.
+            set(&bank, "seq.pattern", 65_535.0);
+            set(&bank, "seq.tempo", 137.0);
+            let mut out = vec![0.0; 256];
+            let (mut prev, mut worst) = (0.0f32, 0.0f32);
+            // Long enough that the baseline crosses its own loop point too.
+            for block in 0..400 {
+                e.process_block(&mut out, &bank);
+                for s in out.iter().step_by(2) {
+                    if block > 20 {
+                        worst = worst.max((s - prev).abs());
+                    }
+                    prev = *s;
+                }
+            }
+            worst
+        };
+        let steady = worst_step(false);
+        let stepped = worst_step(true);
+        assert!(
+            stepped < steady * 2.0 + 0.02,
+            "retriggering jumped by {stepped} against a steady {steady}"
         );
     }
 

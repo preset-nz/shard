@@ -31,6 +31,8 @@ export interface Meters {
   reduction: number;
   grains: number;
   playing: boolean;
+  /** The sequencer's step, from zero, or -1 while it or the transport is off. */
+  step: number;
   /** Where plain playback has reached, 0 to 1. */
   playhead: number;
   /** True while one grain is being played on its own. */
@@ -152,6 +154,7 @@ export function format(p: ParamInfo, v: number): string {
   if (p.unit === 'Hz') return v >= 100 ? `${Math.round(v)} Hz` : `${v.toFixed(1)} Hz`;
   if (p.unit === 'ms') return v >= 100 ? `${Math.round(v)} ms` : `${v.toFixed(1)} ms`;
   if (p.unit === 'st') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`;
+  if (p.unit === 'bpm') return `${Math.round(v)} bpm`;
   return v.toFixed(2);
 }
 

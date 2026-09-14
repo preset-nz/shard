@@ -43,6 +43,7 @@ import { ModulatorTree } from '@/components/ModulatorTree';
 import { NodeCard } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
 import { SettingsDialog } from '@/components/SettingsDialog';
+import { StepStrip } from '@/components/StepStrip';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
 import { LANES, NODES, type ParamValues, registerParamScope } from '@/scope';
@@ -69,6 +70,7 @@ export default function App() {
     reduction: 1,
     grains: 0,
     playing: false,
+    step: -1,
     playhead: 0,
     auditioning: false,
     reversing: false,
@@ -655,6 +657,13 @@ export default function App() {
               </span>
             )}
           </div>
+
+          <StepStrip
+            values={values}
+            step={meter.step}
+            selected={selection?.kind === 'node' && selection.id === 'seq'}
+            onSelect={() => select({ kind: 'node', id: 'seq' })}
+          />
 
           {/* The work area. A click anywhere but on a card deselects,
               including a lane's empty space below its cards; Escape does the
