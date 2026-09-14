@@ -166,6 +166,35 @@ mod tests {
     }
 
     #[test]
+    fn what_reaches_the_audio_thread_is_the_tracker_in_range() {
+        // The path `apply_tracker` takes: bring into range, then store for
+        // the callback to load once a block.
+        use shard_dsp::steps::StepBank;
+        let sent = Tracker {
+            tempo: 500.0,
+            swing: -1.0,
+            tracks: vec![Track {
+                on: true,
+                length: 3,
+                pattern: 0xF_FFFF,
+            }],
+        };
+        let kept = sent.sanitised();
+        let bank = StepBank::default();
+        bank.store(&kept.params());
+        assert_eq!(
+            bank.load(),
+            StepParams {
+                on: true,
+                tempo_bpm: TEMPO_MAX,
+                length: 4,
+                swing: 0.0,
+                pattern: 0xFFFF,
+            }
+        );
+    }
+
+    #[test]
     fn the_engine_plays_the_first_track_at_the_songs_tempo() {
         let t = Tracker {
             tempo: 82.0,

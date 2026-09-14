@@ -17,6 +17,10 @@ const SWING_MAX = 0.75;
  * whatever the length, so four steps read as one beat rather than a bar
  * stretched out.
  *
+ * Shortening a track keeps the steps past its new end, so lengthening it
+ * again gives them back. They cannot be seen or reached while hidden, so the
+ * strip says when there are some.
+ *
  * Every change hands the whole tracker up; App shows it at once and Rust
  * answers with it brought into range.
  */
@@ -139,6 +143,23 @@ export function StepStrip({
           );
         })}
       </fieldset>
+
+      {hiddenSteps(track) > 0 && (
+        <span title="Kept from a longer track. Lengthen it to see and change them.">
+          +{hiddenSteps(track)} past step {track.length}
+        </span>
+      )}
     </div>
   );
+}
+
+/** Steps that are on past the track's end. */
+function hiddenSteps(track: Track): number {
+  let rest = track.pattern >>> track.length;
+  let count = 0;
+  while (rest > 0) {
+    count += rest & 1;
+    rest >>>= 1;
+  }
+  return count;
 }

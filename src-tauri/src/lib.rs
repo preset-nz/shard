@@ -1044,7 +1044,8 @@ fn build_audio() -> Result<Audio, String> {
     // Lock every slot the callback hands off through once, here. On macOS a
     // mutex allocates on its first lock, and without this that first lock
     // would land on the audio thread. `tests/audio_thread.rs` in shard-dsp
-    // holds the pattern.
+    // holds the pattern. The tracker's `steps` is not here on purpose: it is
+    // atomics, like the bank, and has no lock to prime.
     drop(swap.lock());
     drop(audition.lock());
     drop(retired.lock());
