@@ -18,7 +18,7 @@ use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::{OnePole, Ramp};
-use crate::steps::{length_from_value, StepClock, StepParams};
+use crate::steps::{StepClock, StepParams};
 
 /// Resolved indices into the parameter table, looked up once at construction
 /// so the audio thread never does a string comparison.
@@ -54,11 +54,6 @@ struct Slots {
     drive_amount: usize,
     drive_tone: usize,
     drive_type: usize,
-    seq_on: usize,
-    seq_tempo: usize,
-    seq_length: usize,
-    seq_swing: usize,
-    seq_pattern: usize,
     filter_on: usize,
     filter_mix: usize,
     filter_cutoff: usize,
@@ -120,11 +115,6 @@ impl Slots {
             drive_amount: at("drive.amount"),
             drive_tone: at("drive.tone"),
             drive_type: at("drive.type"),
-            seq_on: at("seq.on"),
-            seq_tempo: at("seq.tempo"),
-            seq_length: at("seq.length"),
-            seq_swing: at("seq.swing"),
-            seq_pattern: at("seq.pattern"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -222,6 +212,8 @@ pub struct Engine {
     /// Samples since reverse engaged, for the flick's minimum on-time.
     reverse_age: f32,
     steps: StepClock,
+    /// What the steps play, from the tracker above the patch. See `set_steps`.
+    step_params: StepParams,
     /// The pass a step cut short, fading out under the new one.
     tail: Player,
     /// Samples of that fade still to run; zero when there is no tail.
@@ -300,6 +292,7 @@ impl Engine {
             reversing: false,
             reverse_age: 0.0,
             steps: StepClock::new(sample_rate),
+            step_params: StepParams::default(),
             tail: Player::new(sample_rate),
             tail_left: 0.0,
             drive: Drive::new(sample_rate),
@@ -506,6 +499,13 @@ impl Engine {
         self.steps.current()
     }
 
+    /// What the steps play, handed in once a block like the parameters.
+    /// Tempo, swing and the pattern belong to the tracker, the level above
+    /// the patch, so they arrive here rather than through the bank.
+    pub fn set_steps(&mut self, p: StepParams) {
+        self.step_params = p;
+    }
+
     /// Peak since the last call, then reset. Cheap enough to poll at 30 Hz
     /// for a meter.
     pub fn take_peak(&mut self) -> f32 {
@@ -577,15 +577,9 @@ impl Engine {
         let env_on_target = gate(self.slots.env_on);
         let filter_on_target = gate(self.slots.filter_on);
         let drive_on_target = gate(self.slots.drive_on);
-        // The step clock. Stepped rows are read raw, and the pattern is a
-        // bit field carried in a float, exact up to 2^24.
-        self.steps.set_running(bank.get(self.slots.seq_on) >= 0.5);
-        let steps = StepParams {
-            tempo_bpm: read(&self.mods, bank, self.slots.seq_tempo),
-            length: length_from_value(bank.get(self.slots.seq_length)),
-            swing: read(&self.mods, bank, self.slots.seq_swing),
-            pattern: bank.get(self.slots.seq_pattern).round().max(0.0) as u32,
-        };
+        // The step clock, as the tracker last handed it in.
+        let steps = self.step_params;
+        self.steps.set_running(steps.on);
         let drive = DriveParams {
             amount_db: read(&self.mods, bank, self.slots.drive_amount),
             tone_hz: read(&self.mods, bank, self.slots.drive_tone),
@@ -1259,23 +1253,26 @@ mod tests {
 
     #[test]
     fn a_step_that_is_on_rewinds_the_pass() {
-        let run = |seq: f32| {
+        let run = |on: bool| {
             let mut e = Engine::new(48_000.0, 64);
             e.set_source(tone(96_000));
             e.set_playing(true);
             let bank = ParamBank::new();
-            set(&bank, "seq.on", seq);
             // Four sixteenths at 120 is half a second; step one only.
-            set(&bank, "seq.length", 0.0);
-            set(&bank, "seq.pattern", 1.0);
+            e.set_steps(StepParams {
+                on,
+                length: 4,
+                pattern: 1,
+                ..Default::default()
+            });
             let mut out = vec![0.0; 128];
             for _ in 0..(24_000 / 64 + 2) {
                 e.process_block(&mut out, &bank);
             }
             e.play_position()
         };
-        let stepped = run(1.0);
-        let free = run(0.0);
+        let stepped = run(true);
+        let free = run(false);
         assert!(stepped < 0.01, "the second pass began at {stepped}");
         assert!(free > 0.24, "without steps the pass ran on to {free}");
     }
@@ -1285,7 +1282,10 @@ mod tests {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(48_000));
         let bank = ParamBank::new();
-        set(&bank, "seq.on", 1.0);
+        e.set_steps(StepParams {
+            on: true,
+            ..Default::default()
+        });
         e.set_playing(true);
         let mut out = vec![0.0; 128];
         // 12,800 frames is into the third sixteenth at 120.
@@ -1313,10 +1313,13 @@ mod tests {
             e.set_source(tone(48_000));
             e.set_playing(true);
             let bank = ParamBank::new();
-            set(&bank, "seq.on", if seq { 1.0 } else { 0.0 });
             // Every step, at a tempo that lands the rewinds all over the sine.
-            set(&bank, "seq.pattern", 65_535.0);
-            set(&bank, "seq.tempo", 137.0);
+            e.set_steps(StepParams {
+                on: seq,
+                tempo_bpm: 137.0,
+                pattern: 0xFFFF,
+                ..Default::default()
+            });
             let mut out = vec![0.0; 256];
             let (mut prev, mut worst) = (0.0f32, 0.0f32);
             // Long enough that the baseline crosses its own loop point too.

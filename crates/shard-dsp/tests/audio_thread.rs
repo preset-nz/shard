@@ -11,7 +11,7 @@ use std::hint::black_box;
 use std::sync::Mutex;
 
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
-use shard_dsp::{Engine, GrainSpawn, LfoSpec, ModSet, ParamBank, Shape, Taper, PARAMS};
+use shard_dsp::{Engine, GrainSpawn, LfoSpec, ModSet, ParamBank, Shape, StepParams, Taper, PARAMS};
 
 #[global_allocator]
 static GUARD: GuardedAlloc = GuardedAlloc;
@@ -132,21 +132,18 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(96_000));
     let bank = ParamBank::new();
-    for id in [
-        "grain.on",
-        "ring.on",
-        "crush.on",
-        "filter.on",
-        "drive.on",
-        "seq.on",
-    ] {
+    for id in ["grain.on", "ring.on", "crush.on", "filter.on", "drive.on"] {
         bank.set_by_id(id, 1.0);
     }
     bank.set_by_id("grain.gain", 1.0);
     // Every step at the top tempo, so retriggers and their tails run in
-    // nearly every block.
-    bank.set_by_id("seq.pattern", 65_535.0);
-    bank.set_by_id("seq.tempo", 240.0);
+    // nearly every block. Handed in per block, as the callback does.
+    let steps = StepParams {
+        on: true,
+        tempo_bpm: 240.0,
+        pattern: 0xFFFF,
+        ..Default::default()
+    };
     e.set_playing(true);
     drop(e.set_modulation(first));
 
@@ -156,6 +153,7 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
         let ((), caught) = no_alloc(|| {
             for block in from..from + 300 {
                 sweep(&bank, block);
+                e.set_steps(steps);
                 e.process_block(&mut out, &bank);
                 // The app publishes what the engine heard after every block.
                 e.publish_heard(&bank, &heard);

@@ -154,7 +154,6 @@ export function format(p: ParamInfo, v: number): string {
   if (p.unit === 'Hz') return v >= 100 ? `${Math.round(v)} Hz` : `${v.toFixed(1)} Hz`;
   if (p.unit === 'ms') return v >= 100 ? `${Math.round(v)} ms` : `${v.toFixed(1)} ms`;
   if (p.unit === 'st') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`;
-  if (p.unit === 'bpm') return `${Math.round(v)} bpm`;
   return v.toFixed(2);
 }
 
@@ -256,6 +255,30 @@ export const envelopeCurve = () => invoke<number[]>('envelope_curve');
 
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
+
+/** A track of steps. Monophonic: a new step cuts the last. */
+export interface Track {
+  on: boolean;
+  /** 4, 8 or 16 sixteenths. */
+  length: number;
+  /** One bit per step, step one first. */
+  pattern: number;
+}
+
+/**
+ * The level above the patch: the song's tempo and swing, and its tracks. One
+ * track today, playing the document's one patch.
+ */
+export interface Tracker {
+  tempo: number;
+  /** Of a sixteenth, 0 to 0.75, on the even steps. */
+  swing: number;
+  tracks: Track[];
+}
+
+export const getTracker = () => invoke<Tracker>('tracker');
+/** Replaces the tracker whole; answers with it clamped and snapped, as the engine plays it. */
+export const setTracker = (tracker: Tracker) => invoke<Tracker>('set_tracker', { tracker });
 
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];

@@ -55,16 +55,19 @@ taper is both a value mapping and a hint about what control to draw.
 
 Keep the table small. Do not add a parameter the DSP does not read.
 
+**The table is the patch, and the tracker is the level above it.** Tempo,
+swing and tracks of steps belong to the song, not to a sound, so they are not
+parameters: they live in `src-tauri/src/tracker.rs`, save above the patch in
+the `.shard` document, and reach the engine through `steps::StepBank` and
+`Engine::set_steps`, once a block. A value that should survive loading a
+different patch does not belong in `params.rs`.
+
 **Every switchable node follows one pattern, by role.**
 - Its switch is `<node>.on`, drawn in the section header.
 - A **generator** makes sound, and its first row after the switch is
   `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
   plain sample (`material`) and the cloud (`grain`). Generators are summed.
-- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".
-- A **trigger** decides when the patch sounds, and its first row is
-  `<node>.tempo`, named "Tempo". It is listed in `TRIGGERS`; today that is
-  the step sequencer (`seq`), which rewinds the material's pass.
-- `amp.gain` is the master gain, after everything.
+- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".- `amp.gain` is the master gain, after everything.
 - No row's name repeats its node's name, because the header already says it.
 - The panel draws rows in table order, so order in `params.rs` is layout.
 

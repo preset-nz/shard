@@ -11,6 +11,7 @@ import {
   type GrainInfo,
   getHeard,
   getParams,
+  getTracker,
   grainLog,
   type LfoLimits,
   learnMidi,
@@ -33,7 +34,9 @@ import {
   setLfo,
   setParam,
   setPlaying,
+  setTracker,
   sourceInfo,
+  type Tracker,
   unlinkParam,
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
@@ -116,6 +119,20 @@ export default function App() {
    */
   const [blockWorst, setBlockWorst] = useState(0);
   const worstRef = useRef({ us: 0, at: 0 });
+  /** The tracker, the level above the patch. Shown at once, then as Rust answers. */
+  const [tracker, setTrackerView] = useState<Tracker | null>(null);
+  const trackerSeq = useRef(0);
+  const changeTracker = useCallback(async (next: Tracker) => {
+    setTrackerView(next);
+    const seq = ++trackerSeq.current;
+    try {
+      const played = await setTracker(next);
+      // Only the newest answer, or a slow one would undo a quicker click.
+      if (seq === trackerSeq.current) setTrackerView(played);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -137,6 +154,7 @@ export default function App() {
         setSource(await sourceInfo());
         setMod(await readModulation());
         setLimits(await lfoLimits());
+        setTrackerView(await getTracker());
       } catch (e) {
         setError(String(e));
       }
@@ -296,6 +314,10 @@ export default function App() {
       setPatchName(path.split('/').pop() ?? path);
       setSource(await sourceInfo());
       setMod(await readModulation());
+      // The document's tracker replaces the one on screen, and no answer to
+      // an edit made before the load may put the old one back.
+      trackerSeq.current++;
+      setTrackerView(await getTracker());
       useSelection.getState().clear();
       setError(null);
 
@@ -658,12 +680,13 @@ export default function App() {
             )}
           </div>
 
-          <StepStrip
-            values={values}
-            step={meter.step}
-            selected={selection?.kind === 'node' && selection.id === 'seq'}
-            onSelect={() => select({ kind: 'node', id: 'seq' })}
-          />
+          {tracker && (
+            <StepStrip
+              tracker={tracker}
+              step={meter.step}
+              onChange={(next) => void changeTracker(next)}
+            />
+          )}
 
           {/* The work area. A click anywhere but on a card deselects,
               including a lane's empty space below its cards; Escape does the

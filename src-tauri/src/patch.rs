@@ -1,8 +1,15 @@
 //! The document.
 //!
-//! A patch is the sound: every parameter value, the LFOs and what follows
-//! them, node presets, and a reference to the material. Not the material itself — samples stay
-//! where they are, so a patch is a few kilobytes of text you can read and diff.
+//! A `.shard` file holds two levels (Georg, 2026-09-14: "so the tracker is
+//! one level up from the patch"). The **tracker** decides when things play:
+//! tempo, swing and tracks of steps, see `tracker.rs`. The **patch** is the
+//! sound: every parameter value, the LFOs and what follows them, node
+//! presets, and a reference to the material. Not the material itself —
+//! samples stay where they are, so a document is a few kilobytes of text you
+//! can read and diff.
+//!
+//! One patch today. Several patches inline in the same file is the node API's
+//! decision 23, and tracks name the patch they play when that lands.
 //!
 //! **Parameters are stored by id, never by index.** The table's order is an
 //! implementation detail and will change; the ids are a wire format and will
@@ -23,14 +30,25 @@ use shard_dsp::ParamBank;
 use crate::mapping::MapRef;
 use crate::modulation::{Modulation, Refused};
 use crate::presets::Presets;
+use crate::tracker::Tracker;
 
 /// Bumped only for a change old builds cannot read. Adding parameters does
 /// not need it, because unknown and missing ids are both handled.
-pub const VERSION: u32 = 1;
+pub const VERSION: u32 = 2;
 
+/// The whole file: the tracker, and the patch it plays.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Document {
+    pub version: u32,
+    /// Absent gives the default tracker: off, 120 bpm, four on the floor.
+    #[serde(default)]
+    pub tracker: Tracker,
+    pub patch: Patch,
+}
+
+/// The sound.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Patch {
-    pub version: u32,
     /// Parameter values by id. A map, not a list, so order never matters.
     pub params: BTreeMap<String, f32>,
     /// Where the material was. Absolute, because this is a personal tool and
@@ -45,9 +63,9 @@ pub struct Patch {
     /// data referred to, never copied in. Absent leaves the active map alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_map: Option<MapRef>,
-    /// The LFOs, and which parameter follows which, as top-level `lfos` and
-    /// `links`. Document data beside the values, never mixed into them: the
-    /// values stay the hand's. See `modulation.rs`.
+    /// The LFOs, and which parameter follows which, as `lfos` and `links`
+    /// beside `params`. Document data beside the values, never mixed into
+    /// them: the values stay the hand's. See `modulation.rs`.
     #[serde(flatten)]
     pub modulation: Modulation,
 }
@@ -71,10 +89,34 @@ pub struct LoadReport {
     pub map_missing: Option<String>,
 }
 
+impl Document {
+    pub fn new(tracker: Tracker, patch: Patch) -> Self {
+        Self {
+            version: VERSION,
+            tracker,
+            patch,
+        }
+    }
+
+    pub fn to_json(&self) -> Result<String, String> {
+        serde_json::to_string_pretty(self).map_err(|e| e.to_string())
+    }
+
+    pub fn from_json(text: &str) -> Result<Self, String> {
+        let doc: Document = serde_json::from_str(text).map_err(|e| e.to_string())?;
+        if doc.version > VERSION {
+            return Err(format!(
+                "document is version {}, this build reads up to {VERSION}",
+                doc.version
+            ));
+        }
+        Ok(doc)
+    }
+}
+
 impl Patch {
     pub fn capture(bank: &ParamBank, sample_path: Option<String>) -> Self {
         Self {
-            version: VERSION,
             params: PARAMS
                 .iter()
                 .enumerate()
@@ -112,26 +154,22 @@ impl Patch {
 
         report
     }
-
-    pub fn to_json(&self) -> Result<String, String> {
-        serde_json::to_string_pretty(self).map_err(|e| e.to_string())
-    }
-
-    pub fn from_json(text: &str) -> Result<Self, String> {
-        let patch: Patch = serde_json::from_str(text).map_err(|e| e.to_string())?;
-        if patch.version > VERSION {
-            return Err(format!(
-                "patch is version {}, this build reads up to {VERSION}",
-                patch.version
-            ));
-        }
-        Ok(patch)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A document around a patch written as JSON, as a hand would.
+    fn patch_of(params: &str) -> Patch {
+        let text = format!(r#"{{"version":{VERSION},"patch":{{"params":{params}}}}}"#);
+        Document::from_json(&text).unwrap().patch
+    }
+
+    fn round_trip(patch: Patch) -> Document {
+        let text = Document::new(Tracker::default(), patch).to_json().unwrap();
+        Document::from_json(&text).unwrap()
+    }
 
     #[test]
     fn round_trips_every_parameter() {
@@ -142,11 +180,10 @@ mod tests {
         }
         let before: Vec<f32> = (0..PARAMS.len()).map(|i| bank.get(i)).collect();
 
-        let patch = Patch::capture(&bank, None);
-        let text = patch.to_json().unwrap();
+        let back = round_trip(Patch::capture(&bank, None));
 
         let fresh = ParamBank::new();
-        let report = Patch::from_json(&text).unwrap().apply(&fresh);
+        let report = back.patch.apply(&fresh);
 
         assert_eq!(report.applied, PARAMS.len());
         assert!(report.unknown.is_empty());
@@ -163,9 +200,8 @@ mod tests {
 
     #[test]
     fn an_unknown_id_is_reported_not_swallowed() {
-        let text = r#"{"version":1,"params":{"grain.size":200.0,"grain.nonsense":1.0}}"#;
         let bank = ParamBank::new();
-        let report = Patch::from_json(text).unwrap().apply(&bank);
+        let report = patch_of(r#"{"grain.size":200.0,"grain.nonsense":1.0}"#).apply(&bank);
         assert_eq!(report.applied, 1);
         assert_eq!(report.unknown, vec!["grain.nonsense"]);
         assert!(
@@ -177,9 +213,8 @@ mod tests {
 
     #[test]
     fn a_missing_id_keeps_its_default() {
-        let text = r#"{"version":1,"params":{"grain.size":200.0}}"#;
         let bank = ParamBank::new();
-        Patch::from_json(text).unwrap().apply(&bank);
+        patch_of(r#"{"grain.size":200.0}"#).apply(&bank);
         let density = &PARAMS[shard_dsp::params::index_of("grain.density").unwrap()];
         assert_eq!(bank.get_by_id("grain.density"), Some(density.default));
     }
@@ -188,11 +223,11 @@ mod tests {
     fn order_in_the_file_does_not_matter() {
         // The reason values are keyed by id. Inserting a parameter in the
         // middle of the table must not shift what an old patch loads.
-        let a = r#"{"version":1,"params":{"grain.size":200.0,"amp.gain":0.5}}"#;
-        let b = r#"{"version":1,"params":{"amp.gain":0.5,"grain.size":200.0}}"#;
+        let a = patch_of(r#"{"grain.size":200.0,"amp.gain":0.5}"#);
+        let b = patch_of(r#"{"amp.gain":0.5,"grain.size":200.0}"#);
         let (ba, bb) = (ParamBank::new(), ParamBank::new());
-        Patch::from_json(a).unwrap().apply(&ba);
-        Patch::from_json(b).unwrap().apply(&bb);
+        a.apply(&ba);
+        b.apply(&bb);
         for (i, def) in PARAMS.iter().enumerate() {
             assert_eq!(ba.get(i), bb.get(i), "{}", def.id);
         }
@@ -202,9 +237,8 @@ mod tests {
     fn a_hand_edited_nonsense_value_is_clamped() {
         // Patches are text and will be edited by hand. Nothing out of range
         // may reach the audio thread.
-        let text = r#"{"version":1,"params":{"grain.density":1e30,"amp.gain":-5.0}}"#;
         let bank = ParamBank::new();
-        Patch::from_json(text).unwrap().apply(&bank);
+        patch_of(r#"{"grain.density":1e30,"amp.gain":-5.0}"#).apply(&bank);
         let d = &PARAMS[shard_dsp::params::index_of("grain.density").unwrap()];
         assert_eq!(bank.get_by_id("grain.density"), Some(d.max));
         assert_eq!(bank.get_by_id("amp.gain"), Some(0.0));
@@ -212,17 +246,16 @@ mod tests {
 
     #[test]
     fn a_newer_version_is_refused_with_a_reason() {
-        let text = r#"{"version":999,"params":{}}"#;
-        let err = Patch::from_json(text).unwrap_err();
+        let text = r#"{"version":999,"patch":{"params":{}}}"#;
+        let err = Document::from_json(text).unwrap_err();
         assert!(err.contains("999"), "unhelpful error: {err}");
     }
 
     #[test]
     fn the_sample_path_survives_the_round_trip() {
         let bank = ParamBank::new();
-        let patch = Patch::capture(&bank, Some("/tmp/x.wav".into()));
-        let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
-        assert_eq!(back.sample_path.as_deref(), Some("/tmp/x.wav"));
+        let back = round_trip(Patch::capture(&bank, Some("/tmp/x.wav".into())));
+        assert_eq!(back.patch.sample_path.as_deref(), Some("/tmp/x.wav"));
     }
 
     #[test]
@@ -233,9 +266,10 @@ mod tests {
             .presets
             .save(&bank, &Default::default(), "grain", "cloud")
             .unwrap();
-        let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
-        assert_eq!(back.presets, patch.presets);
-        assert_eq!(back.presets.names("grain"), vec!["cloud"]);
+        let saved = patch.presets.clone();
+        let back = round_trip(patch);
+        assert_eq!(back.patch.presets, saved);
+        assert_eq!(back.patch.presets.names("grain"), vec!["cloud"]);
     }
 
     #[test]
@@ -259,25 +293,74 @@ mod tests {
                 hi: 0.2,
             },
         );
+        let saved = patch.modulation.clone();
 
-        let text = patch.to_json().unwrap();
+        let text = Document::new(Tracker::default(), patch).to_json().unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(json["lfos"].is_array(), "lfos is a top-level list: {text}");
         assert!(
-            json["links"]["grain.position"].is_object(),
+            json["patch"]["lfos"].is_array(),
+            "lfos sit in the patch: {text}"
+        );
+        assert!(
+            json["patch"]["links"]["grain.position"].is_object(),
             "links sit beside params: {text}"
         );
 
-        let back = Patch::from_json(&text).unwrap();
-        assert_eq!(back.modulation, patch.modulation);
+        let back = Document::from_json(&text).unwrap();
+        assert_eq!(back.patch.modulation, saved);
     }
 
     #[test]
     fn a_patch_with_no_sample_still_loads() {
         let bank = ParamBank::new();
-        let patch = Patch::capture(&bank, None);
-        let back = Patch::from_json(&patch.to_json().unwrap()).unwrap();
-        assert!(back.sample_path.is_none());
-        assert!(!back.apply(&bank).sample_missing);
+        let back = round_trip(Patch::capture(&bank, None));
+        assert!(back.patch.sample_path.is_none());
+        assert!(!back.patch.apply(&bank).sample_missing);
+    }
+
+    #[test]
+    fn the_tracker_sits_above_the_patch() {
+        let bank = ParamBank::new();
+        let tracker = Tracker {
+            tempo: 87.0,
+            tracks: vec![crate::tracker::Track {
+                on: true,
+                length: 16,
+                pattern: 43_690,
+            }],
+            ..Tracker::default()
+        };
+        let text = Document::new(tracker.clone(), Patch::capture(&bank, None))
+            .to_json()
+            .unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            json["tracker"]["tracks"].is_array(),
+            "the tracker is top level: {text}"
+        );
+        assert!(
+            json["patch"]["params"].is_object(),
+            "the patch sits under it: {text}"
+        );
+        assert!(
+            !json["patch"]["params"]
+                .as_object()
+                .unwrap()
+                .keys()
+                .any(|k| k.starts_with("seq.")),
+            "no step lives in the patch: {text}"
+        );
+        // A bit field, written as a whole number and read back exactly.
+        assert_eq!(json["tracker"]["tracks"][0]["pattern"], 43_690);
+        assert_eq!(Document::from_json(&text).unwrap().tracker, tracker);
+    }
+
+    #[test]
+    fn a_document_without_a_tracker_gets_the_default_one() {
+        let text = format!(r#"{{"version":{VERSION},"patch":{{"params":{{}}}}}}"#);
+        assert_eq!(
+            Document::from_json(&text).unwrap().tracker,
+            Tracker::default()
+        );
     }
 }

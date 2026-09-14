@@ -7,18 +7,28 @@
 //! going, the effects keep their state. What a trigger should render down
 //! and what stays live is still open, and this is the place to find out.
 //!
+//! **The steps belong to the tracker, the level above the patch** (Georg,
+//! the same day). Tempo, swing and the pattern are not parameters: they do
+//! not live in the table, a patch does not save them, and an LFO cannot
+//! reach them. They cross to the audio thread through `StepBank` and into
+//! the engine with `Engine::set_steps`, once a block.
+//!
 //! **A step is always a sixteenth; length shortens the loop.** Four steps
 //! at 120 is one beat, half a second, not a bar of quarter notes. That keeps
 //! swing meaning one thing, since swing belongs to sixteenths
-//! (`design/drum-programming.md`), and leaves room for lanes of different
+//! (`design/drum-programming.md`), and leaves room for tracks of different
 //! lengths running against each other later.
 //!
 //! Sample-accurate: the clock is advanced per frame inside the engine's
 //! loop, so a trigger lands on the frame it is due, not at a block edge.
 //! Swing delays every second step by a share of a step.
 
-#[derive(Debug, Clone, Copy)]
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StepParams {
+    /// Whether the steps run at all.
+    pub on: bool,
     pub tempo_bpm: f32,
     /// 4, 8 or 16.
     pub length: u32,
@@ -30,22 +40,67 @@ pub struct StepParams {
 }
 
 impl Default for StepParams {
+    /// Off, and four on the floor, so switching on does something.
     fn default() -> Self {
         Self {
+            on: false,
             tempo_bpm: 120.0,
             length: 16,
             swing: 0.0,
-            pattern: 0,
+            pattern: 0b0001_0001_0001_0001,
         }
     }
 }
 
-/// 4, 8 or 16 from the stepped parameter's value 0, 1 or 2.
-pub fn length_from_value(v: f32) -> u32 {
-    match v.round() as i32 {
-        i32::MIN..=0 => 4,
-        1 => 8,
-        _ => 16,
+/// The steps, shared between whatever edits the tracker and the audio thread.
+///
+/// The same idea as `ParamBank`, for five numbers that are not parameters.
+/// Stored whole, read whole once a block. A read that lands between two
+/// fields of a store plays one block with half the old tracker, which nobody
+/// can hear and the next block corrects.
+pub struct StepBank {
+    on: AtomicBool,
+    tempo_bpm: AtomicU32,
+    length: AtomicU32,
+    swing: AtomicU32,
+    pattern: AtomicU32,
+}
+
+impl StepBank {
+    pub fn new(p: StepParams) -> Self {
+        Self {
+            on: AtomicBool::new(p.on),
+            tempo_bpm: AtomicU32::new(p.tempo_bpm.to_bits()),
+            length: AtomicU32::new(p.length),
+            swing: AtomicU32::new(p.swing.to_bits()),
+            pattern: AtomicU32::new(p.pattern),
+        }
+    }
+
+    pub fn store(&self, p: &StepParams) {
+        self.on.store(p.on, Ordering::Relaxed);
+        self.tempo_bpm
+            .store(p.tempo_bpm.to_bits(), Ordering::Relaxed);
+        self.length.store(p.length, Ordering::Relaxed);
+        self.swing.store(p.swing.to_bits(), Ordering::Relaxed);
+        self.pattern.store(p.pattern, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn load(&self) -> StepParams {
+        StepParams {
+            on: self.on.load(Ordering::Relaxed),
+            tempo_bpm: f32::from_bits(self.tempo_bpm.load(Ordering::Relaxed)),
+            length: self.length.load(Ordering::Relaxed),
+            swing: f32::from_bits(self.swing.load(Ordering::Relaxed)),
+            pattern: self.pattern.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl Default for StepBank {
+    fn default() -> Self {
+        Self::new(StepParams::default())
     }
 }
 
@@ -141,6 +196,7 @@ mod tests {
     #[test]
     fn four_on_the_floor_at_120_is_every_half_second() {
         let p = StepParams {
+            on: true,
             tempo_bpm: 120.0,
             length: 16,
             swing: 0.0,
@@ -157,6 +213,7 @@ mod tests {
     #[test]
     fn four_steps_loop_every_beat_not_every_bar() {
         let p = StepParams {
+            on: true,
             tempo_bpm: 120.0,
             length: 4,
             swing: 0.0,
@@ -170,6 +227,7 @@ mod tests {
     #[test]
     fn swing_delays_the_even_steps_only() {
         let straight = StepParams {
+            on: true,
             tempo_bpm: 120.0,
             length: 4,
             swing: 0.0,
@@ -208,10 +266,17 @@ mod tests {
     }
 
     #[test]
-    fn lengths_come_from_the_stepped_value() {
-        assert_eq!(length_from_value(0.0), 4);
-        assert_eq!(length_from_value(1.0), 8);
-        assert_eq!(length_from_value(2.0), 16);
-        assert_eq!(length_from_value(-3.0), 4);
+    fn the_bank_hands_back_exactly_what_it_was_given() {
+        let p = StepParams {
+            on: true,
+            tempo_bpm: 87.5,
+            length: 8,
+            swing: 0.56,
+            pattern: 0b1010_1010_1010_1010,
+        };
+        let bank = StepBank::default();
+        assert_eq!(bank.load(), StepParams::default());
+        bank.store(&p);
+        assert_eq!(bank.load(), p);
     }
 }

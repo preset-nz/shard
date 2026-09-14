@@ -21,6 +21,7 @@ use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
 use shard_dsp::params::{Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
+use shard_dsp::steps::StepBank;
 use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
 
 mod controllers;
@@ -30,6 +31,7 @@ mod modulation;
 mod patch;
 mod presets;
 mod source;
+mod tracker;
 
 /// Debug builds count every allocator call made inside the audio callback,
 /// and `meters` reports the running total. Release builds keep the plain
@@ -67,6 +69,12 @@ pub struct Audio {
     playhead: Arc<AtomicU32>,
     /// Set by the UI, read by the audio thread at the top of each block.
     play_request: Arc<AtomicBool>,
+    /// The tracker as the engine plays it, read once a block. Written only by
+    /// `apply_tracker`, together with the document below.
+    steps: Arc<StepBank>,
+    /// The level above the patch: tempo, swing and tracks. Saved in the same
+    /// `.shard` file, above the patch.
+    tracker: Mutex<tracker::Tracker>,
     /// The loaded sample, kept so the UI can draw a waveform and so a reload
     /// can replace it. Swapping goes through the queue, never a lock on audio.
     source: Mutex<source::Loaded>,
@@ -212,7 +220,6 @@ fn param_defs() -> Vec<ParamInfo> {
                 Unit::Hz => "Hz",
                 Unit::Semitones => "st",
                 Unit::Percent => "%",
-                Unit::Bpm => "bpm",
                 Unit::Octaves => "oct",
             },
             smooth_ms: p.smooth_ms,
@@ -345,9 +352,9 @@ fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
     env.curve(256, (hi - lo) as f32, state.sample_rate)
 }
 
-/// Write the current sound to a `.shard` file. A few kilobytes of readable
-/// JSON: parameter values by id, LFOs and links, presets, and where the sample
-/// was.
+/// Write the document to a `.shard` file. A few kilobytes of readable JSON:
+/// the tracker, and under it the patch, with parameter values by id, LFOs and
+/// links, presets, and where the sample was.
 #[tauri::command]
 fn save_patch(
     state: tauri::State<'_, Audio>,
@@ -376,7 +383,9 @@ fn save_patch(
             id: m.id,
             name: m.name.clone(),
         });
-    std::fs::write(&path, p.to_json()?).map_err(|e| format!("{path}: {e}"))
+    let tracker = state.tracker.lock().expect("tracker poisoned").clone();
+    let doc = patch::Document::new(tracker, p);
+    std::fs::write(&path, doc.to_json()?).map_err(|e| format!("{path}: {e}"))
 }
 
 /// Read a `.shard` file back. Reloads the sample it names when that file is
@@ -389,7 +398,10 @@ fn load_patch(
     path: String,
 ) -> Result<patch::LoadReport, String> {
     let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
-    let p = patch::Patch::from_json(&text)?;
+    let doc = patch::Document::from_json(&text)?;
+    // The tracker comes with the document, above the patch.
+    apply_tracker(&state, doc.tracker.clone());
+    let p = &doc.patch;
     let mut report = p.apply(&state.bank);
     // A patch names its map. One this Mac does not have leaves the active
     // map alone and is reported, like an unknown id.
@@ -552,6 +564,28 @@ fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<Modulation
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
     state.play_request.store(playing, Ordering::Relaxed);
+}
+
+/// The tracker, as saved and as the engine plays it.
+#[tauri::command]
+fn tracker(state: tauri::State<'_, Audio>) -> tracker::Tracker {
+    state.tracker.lock().expect("tracker poisoned").clone()
+}
+
+/// Replace the tracker whole. Answers with what the engine now plays, which
+/// differs from what was sent only where a value was out of range.
+#[tauri::command]
+fn set_tracker(state: tauri::State<'_, Audio>, tracker: tracker::Tracker) -> tracker::Tracker {
+    apply_tracker(&state, tracker)
+}
+
+/// The one way the tracker changes: brought into range, handed to the audio
+/// thread, and kept as the document.
+fn apply_tracker(state: &Audio, next: tracker::Tracker) -> tracker::Tracker {
+    let next = next.sanitised();
+    state.steps.store(&next.params());
+    *state.tracker.lock().expect("tracker poisoned") = next.clone();
+    next
 }
 
 #[tauri::command]
@@ -995,6 +1029,7 @@ fn build_audio() -> Result<Audio, String> {
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
     let step = Arc::new(AtomicU32::new(0));
+    let steps = Arc::new(StepBank::new(tracker::Tracker::default().params()));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
     let swap: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
@@ -1025,6 +1060,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_playing = Arc::clone(&playing);
     let audio_playhead = Arc::clone(&playhead);
     let audio_step = Arc::clone(&step);
+    let audio_steps = Arc::clone(&steps);
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
     let audio_auditioning = Arc::clone(&auditioning);
@@ -1135,6 +1171,8 @@ fn build_audio() -> Result<Audio, String> {
                                     out.fill(0.0);
                                     return;
                                 }
+                                // The tracker, once a block, as the bank is.
+                                engine.set_steps(audio_steps.load());
                                 engine.process_block(&mut scratch[..needed], &audio_bank);
                                 engine.publish_heard(&audio_bank, &audio_heard);
 
@@ -1230,6 +1268,8 @@ fn build_audio() -> Result<Audio, String> {
         reversing,
         playhead,
         play_request,
+        steps,
+        tracker: Mutex::new(tracker::Tracker::default()),
         source: Mutex::new(source::startup_drone(sample_rate)),
         presets: Mutex::new(presets::Presets::default()),
         modulation: Mutex::new(modulation::Modulation::default()),
@@ -1278,6 +1318,8 @@ pub fn run() {
             set_param,
             meters,
             set_playing,
+            tracker,
+            set_tracker,
             envelope_curve,
             save_patch,
             load_patch,
@@ -1379,6 +1421,18 @@ mod tests {
             "audio_allocs",
         ] {
             assert!(meters.get(key).is_some(), "Meters lost `{key}`");
+        }
+
+        let tracker =
+            serde_json::to_value(tracker::Tracker::default()).expect("Tracker is serialisable");
+        for key in ["tempo", "swing", "tracks"] {
+            assert!(tracker.get(key).is_some(), "Tracker lost `{key}`");
+        }
+        for key in ["on", "length", "pattern"] {
+            assert!(
+                tracker["tracks"][0].get(key).is_some(),
+                "Track lost `{key}`"
+            );
         }
 
         let report = serde_json::to_value(presets::ApplyReport::default())

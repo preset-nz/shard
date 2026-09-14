@@ -34,7 +34,6 @@ pub enum Taper {
 pub enum Unit {
     None,
     Ms,
-    Bpm,
     Hz,
     Semitones,
     Percent,
@@ -122,60 +121,6 @@ pub const PARAMS: &[ParamDef] = &[
     // sample is one generator and the grain cloud is another; each has a
     // switch and a Gain, and the two are summed into the effects. The plain
     // sample starts on, so pressing play gives the material.
-    // The step clock, the first trigger source (Georg, 2026-09-14). A step
-    // that is on retriggers the material's pass. `length` is 4, 8 or 16 via
-    // `steps::length_from_value`; `pattern` is one bit per step, which is a
-    // number in the patch and a row of buttons in the UI.
-    ParamDef {
-        id: "seq.on",
-        name: "Sequencer",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "seq.tempo",
-        name: "Tempo",
-        min: 40.0,
-        max: 240.0,
-        default: 120.0,
-        taper: Taper::Linear,
-        unit: Unit::Bpm,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "seq.length",
-        name: "Length",
-        min: 0.0,
-        max: 2.0,
-        default: 2.0,
-        taper: Taper::Stepped(3),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "seq.swing",
-        name: "Swing",
-        min: 0.0,
-        max: 0.75,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "seq.pattern",
-        name: "Pattern",
-        min: 0.0,
-        max: 65_535.0,
-        default: 4_369.0,
-        taper: Taper::Stepped(65_536),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
     ParamDef {
         id: "material.on",
         name: "Material",
@@ -742,8 +687,6 @@ pub const PARAMS: &[ParamDef] = &[
 /// The switchable nodes that make sound rather than shape it. They lead with
 /// Gain; every other switchable node is an effect and leads with Mix.
 pub const GENERATORS: &[&str] = &["material", "grain"];
-/// Nodes that trigger rather than sound or shape. Each leads with Tempo.
-pub const TRIGGERS: &[&str] = &["seq"];
 
 pub fn index_of(id: &str) -> Option<usize> {
     PARAMS.iter().position(|p| p.id == id)
@@ -956,8 +899,6 @@ mod tests {
                 .unwrap_or_else(|| panic!("{node} has a switch and nothing else"));
             let (id, name) = if GENERATORS.contains(&node) {
                 (format!("{node}.gain"), "Gain")
-            } else if TRIGGERS.contains(&node) {
-                (format!("{node}.tempo"), "Tempo")
             } else {
                 (format!("{node}.mix"), "Mix")
             };
