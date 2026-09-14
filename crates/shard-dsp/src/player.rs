@@ -1,6 +1,8 @@
-//! Plain looping playback.
+//! Plain playback.
 //!
-//! The sample as it is, at rate one, looping. No grains, no shaping.
+//! The sample as it is, at rate one, looping. No grains, no shaping. Under
+//! the steps it plays once instead: a step starts a pass, the pass stops at
+//! the edge of the window, and it stays silent until the next step.
 //!
 //! This exists to make the instrument learnable. Pressing play and hearing the
 //! material untouched gives you the reference; every control then has an
@@ -12,11 +14,14 @@
 const FADE_MS: f32 = 8.0;
 
 /// Copy, so a retrigger can hand the pass in flight to a tail that fades out
-/// while a new pass fades in. Two numbers; nothing to allocate.
+/// while a new pass fades in. Three fields; nothing to allocate.
 #[derive(Clone, Copy)]
 pub struct Player {
     pos: f32,
     sample_rate: f32,
+    /// A one-shot pass has reached the edge of the window. Silent until the
+    /// next rewind, or until it is asked to loop again.
+    played_out: bool,
 }
 
 impl Player {
@@ -24,6 +29,7 @@ impl Player {
         Self {
             pos: 0.0,
             sample_rate,
+            played_out: false,
         }
     }
 
@@ -34,8 +40,28 @@ impl Player {
         (FADE_MS * 0.001 * self.sample_rate).max(1.0)
     }
 
+    /// Start a new pass from the top.
     pub fn rewind(&mut self) {
         self.pos = 0.0;
+        self.played_out = false;
+    }
+
+    /// Start a new pass from the far end, for a tape running backwards. From
+    /// the top it would leave the window on its first sample.
+    pub fn rewind_to_end(&mut self, source_len: usize) {
+        self.pos = source_len.saturating_sub(1) as f32;
+        self.played_out = false;
+    }
+
+    /// Silence the pass where it is, as though it had played out.
+    pub fn finish(&mut self) {
+        self.played_out = true;
+    }
+
+    /// Whether a pass is sounding: always while looping, and under the steps
+    /// from a rewind to the edge of the window.
+    pub fn sounding(&self) -> bool {
+        !self.played_out
     }
 
     /// Samples elapsed into the current pass. The envelope's clock.
@@ -56,10 +82,22 @@ impl Player {
     /// negative value runs the reel backwards. Fractional values are the whole
     /// point — a tape slowing to a halt spends most of its time between the
     /// two, and that is where the pitch drops and the sound garbles.
+    ///
+    /// Not `looping`, the pass ends where it leaves the window, at either
+    /// edge, and returns silence from then on. Both edges already fade to
+    /// zero, so the end of a pass needs no fade of its own.
     #[inline]
-    pub fn process(&mut self, source: &[f32], speed: f32) -> f32 {
+    pub fn process(&mut self, source: &[f32], speed: f32, looping: bool) -> f32 {
         if source.len() < 2 {
             return 0.0;
+        }
+        if self.played_out {
+            if !looping {
+                return 0.0;
+            }
+            // Looping again picks up from the edge it stopped at, where the
+            // seam's fade is at zero, so it wraps in without a click.
+            self.played_out = false;
         }
         let last = source.len() - 1;
 
@@ -87,10 +125,14 @@ impl Player {
         // out of step with the envelope.
         let span = last as f32;
         self.pos += speed;
-        if self.pos > span {
-            self.pos -= span;
-        } else if self.pos < 0.0 {
-            self.pos += span;
+        if self.pos > span || self.pos < 0.0 {
+            if !looping {
+                self.played_out = true;
+            } else if self.pos > span {
+                self.pos -= span;
+            } else {
+                self.pos += span;
+            }
         }
         // A speed large enough to jump the whole buffer in one sample would
         // leave the position outside it; clamp rather than trust the caller.
@@ -114,7 +156,7 @@ mod tests {
     fn silent_without_a_source() {
         let mut p = Player::new(48_000.0);
         for _ in 0..1000 {
-            assert_eq!(p.process(&[], 1.0), 0.0);
+            assert_eq!(p.process(&[], 1.0, true), 0.0);
         }
     }
 
@@ -125,7 +167,7 @@ mod tests {
         let mut peak: f32 = 0.0;
         // Three times round.
         for _ in 0..14_400 {
-            peak = peak.max(p.process(&src, 1.0).abs());
+            peak = peak.max(p.process(&src, 1.0, true).abs());
         }
         assert!(peak > 0.5, "peak was {peak}");
     }
@@ -138,10 +180,10 @@ mod tests {
         // full amplitude.
         let src = tone(4_800);
         let mut p = Player::new(48_000.0);
-        let mut prev = p.process(&src, 1.0);
+        let mut prev = p.process(&src, 1.0, true);
         let mut worst = 0.0f32;
         for _ in 0..24_000 {
-            let s = p.process(&src, 1.0);
+            let s = p.process(&src, 1.0, true);
             worst = worst.max((s - prev).abs());
             prev = s;
         }
@@ -154,7 +196,7 @@ mod tests {
         let src = tone(4_800);
         let mut p = Player::new(48_000.0);
         for _ in 0..24_000 {
-            let s = p.process(&src, 1.0);
+            let s = p.process(&src, 1.0, true);
             assert!(s.abs() <= 1.0 + 1e-5);
             assert!(s.is_finite());
         }
@@ -166,12 +208,12 @@ mod tests {
         let mut p = Player::new(48_000.0);
         assert_eq!(p.position(src.len()), 0.0);
         for _ in 0..500 {
-            p.process(&src, 1.0);
+            p.process(&src, 1.0, true);
         }
         let mid = p.position(src.len());
         assert!(mid > 0.4 && mid < 0.6, "mid was {mid}");
         for _ in 0..600 {
-            p.process(&src, 1.0);
+            p.process(&src, 1.0, true);
         }
         assert!(p.position(src.len()) < 0.2, "should have wrapped");
     }
@@ -181,9 +223,38 @@ mod tests {
         let src = tone(4_800);
         let mut p = Player::new(48_000.0);
         for _ in 0..2_000 {
-            p.process(&src, 1.0);
+            p.process(&src, 1.0, true);
         }
         p.rewind();
         assert_eq!(p.position(src.len()), 0.0);
+    }
+
+    #[test]
+    fn a_one_shot_pass_plays_once_then_stays_silent() {
+        let src = tone(4_800);
+        for (speed, backwards) in [(1.0, false), (-1.0, true)] {
+            let mut p = Player::new(48_000.0);
+            if backwards {
+                p.rewind_to_end(src.len());
+            }
+            let mut peak = 0.0f32;
+            for _ in 0..4_700 {
+                peak = peak.max(p.process(&src, speed, false).abs());
+            }
+            assert!(peak > 0.5, "the pass never sounded: peak {peak}");
+            assert!(p.sounding());
+            // Past the edge, and well past where a loop would have wrapped.
+            for _ in 0..10_000 {
+                p.process(&src, speed, false);
+            }
+            assert!(!p.sounding(), "speed {speed} should have played out");
+            assert_eq!(p.process(&src, speed, false), 0.0);
+            // A rewind starts the next pass, and looping again resumes.
+            p.rewind();
+            assert!(p.sounding());
+            p.finish();
+            p.process(&src, 1.0, true);
+            assert!(p.sounding(), "looping picks a played-out pass back up");
+        }
     }
 }

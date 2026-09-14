@@ -1,11 +1,14 @@
 //! The step clock: a grid that retriggers the patch.
 //!
 //! The first in-app trigger source (Georg, 2026-09-14: "being able to set
-//! the 4/8/16 steps to trigger the patch"). A step that is on rewinds the
-//! material's pass, which restarts the envelope with it, since the envelope
-//! runs on the player's position. Nothing else changes: the cloud keeps
-//! going, the effects keep their state. What a trigger should render down
-//! and what stays live is still open, and this is the place to find out.
+//! the 4/8/16 steps to trigger the patch"). A step that is on plays the
+//! material's pass once, which restarts the envelope with it, since the
+//! envelope runs on the player's position. Between steps nothing sounds
+//! (Georg, the same day, with no step set: "I'd assume it is silent"): the
+//! pass stops at the edge of the window, and the cloud stops throwing grains
+//! and lets the ones in flight play out. The effects keep their state. What
+//! a trigger should render down and what stays live is still open, and this
+//! is the place to find out.
 //!
 //! **The steps belong to the tracker, the level above the patch** (Georg,
 //! the same day). Tempo, swing and the pattern are not parameters: they do

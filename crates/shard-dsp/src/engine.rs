@@ -457,6 +457,11 @@ impl Engine {
         // block starts them again from step one.
         self.steps.set_running(false);
         self.tail_left = 0.0;
+        // Under the steps nothing sounds until a step does, so play does not
+        // pick up the pass the transport stopped in.
+        if playing && !self.playing && self.step_params.on {
+            self.player.finish();
+        }
         self.playing = playing;
     }
 
@@ -544,8 +549,10 @@ impl Engine {
             window: window_from(read(&self.mods, bank, self.slots.window)),
             // The cloud's own level; the master gain comes after everything.
             gain: read(&self.mods, bank, self.slots.grain_gain),
-            // Set per sample below; this is only the struct's starting shape.
+            // Both set per sample below; this is only the struct's starting
+            // shape.
             speed: 1.0,
+            spawning: true,
         };
         let ring = RingModParams {
             freq: read(&self.mods, bank, self.slots.ring_freq),
@@ -579,7 +586,17 @@ impl Engine {
         let drive_on_target = gate(self.slots.drive_on);
         // The step clock, as the tracker last handed it in.
         let steps = self.step_params;
+        // Switched on mid-pass, the steps take over from the loop: the pass
+        // in flight fades out as a tail, and nothing sounds until a step does.
+        if steps.on && !self.steps.running() && self.player.sounding() {
+            self.tail = self.player;
+            self.tail_left = self.player.seam_samples();
+            self.player.finish();
+        }
         self.steps.set_running(steps.on);
+        // Under the steps a pass plays once (Georg, 2026-09-14); without them
+        // it loops.
+        let looping = !steps.on;
         let drive = DriveParams {
             amount_db: read(&self.mods, bank, self.slots.drive_amount),
             tone_hz: read(&self.mods, bank, self.slots.drive_tone),
@@ -667,10 +684,10 @@ impl Engine {
 
         let mut p = target;
         for frame in out.chunks_mut(2) {
-            // A step that is on rewinds the pass, and the envelope with it.
-            // The pass it cut short becomes the tail and fades out over the
-            // same few milliseconds the new pass fades in, so the step lands
-            // on time without a click. Cut hard, it jumped by 0.49 against a
+            // A step that is on starts a pass, and the envelope with it. A
+            // pass it cuts short becomes the tail and fades out over the same
+            // few milliseconds the new pass fades in, so the step lands on
+            // time without a click. Cut hard, it jumped by 0.49 against a
             // steady 0.03.
             //
             // Only the material is covered. Both envelopes read the new
@@ -678,9 +695,19 @@ impl Engine {
             // but flat, which is the default) still puts an edge on the tail
             // and on the cloud. Open, roadmap row 4.
             if self.steps.tick(&steps) {
-                self.tail = self.player;
-                self.tail_left = self.player.seam_samples();
-                self.player.rewind();
+                // A pass that has played out has nothing to fade, and must
+                // not replace a tail that is still fading.
+                if self.player.sounding() {
+                    self.tail = self.player;
+                    self.tail_left = self.player.seam_samples();
+                }
+                // A reel running backwards starts its pass from the far end,
+                // or it would leave the window on its first sample.
+                if self.smooth.speed.value() < 0.0 {
+                    self.player.rewind_to_end(source.len());
+                } else {
+                    self.player.rewind();
+                }
             }
             p.position = self.smooth.position.process(target.position);
             p.jitter = self.smooth.jitter.process(target.jitter);
@@ -706,13 +733,16 @@ impl Engine {
             // reads speed alone, and an octave down must not sound like a reel
             // slowing to a stop.
             let read_speed = p.speed * read_ratio;
-            let mut dry = self.player.process(source, read_speed);
+            let mut dry = self.player.process(source, read_speed, looping);
             if self.tail_left > 0.0 {
                 let fade = (self.tail_left / self.player.seam_samples()).sqrt();
-                dry += self.tail.process(source, read_speed) * fade;
+                dry += self.tail.process(source, read_speed, looping) * fade;
                 self.tail_left -= 1.0;
             }
             let material = dry * material_level;
+            // The cloud follows the pass: it throws grains while one sounds,
+            // and between steps lets the grains it has thrown play out.
+            p.spawning = self.player.sounding();
             // Off means off. Once the fade has landed the cloud's contribution
             // is already an exact zero, so it is not run at all.
             let (gl, gr) = if grain_on > 0.0 {
@@ -1041,7 +1071,7 @@ mod tests {
         for _ in 0..90 {
             e.process_block(&mut out, &bank);
             for frame in out.chunks(2) {
-                expected.push_back(player.process(&src, 1.0));
+                expected.push_back(player.process(&src, 1.0, true));
                 let want = expected.pop_front().unwrap();
                 worst = worst.max((frame[0] - want).abs());
             }
@@ -1339,6 +1369,136 @@ mod tests {
         assert!(
             stepped < steady * 2.0 + 0.02,
             "retriggering jumped by {stepped} against a steady {steady}"
+        );
+    }
+
+    #[test]
+    fn steps_with_none_set_are_silent() {
+        // Georg, 2026-09-14: the steps on with no step set played the loop,
+        // where he expected silence. Both generators on, so the cloud has to
+        // hold its peace as well as the material.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let bank = ParamBank::new();
+        bank.set_by_id("grain.on", 1.0);
+        e.set_steps(StepParams {
+            on: true,
+            pattern: 0,
+            ..Default::default()
+        });
+        e.set_playing(true);
+        let mut out = vec![0.0; 512];
+        for block in 0..200 {
+            e.process_block(&mut out, &bank);
+            assert!(
+                out.iter().all(|s| *s == 0.0),
+                "block {block} made sound with no step set"
+            );
+        }
+        assert_eq!(e.active_grains(), 0);
+    }
+
+    #[test]
+    fn a_step_plays_the_pass_once() {
+        // A quarter-second sample under one step in a two-second bar: it
+        // sounds, the cloud trails off after it, then nothing until the bar
+        // comes round.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(12_000));
+        let bank = ParamBank::new();
+        bank.set_by_id("grain.on", 1.0);
+        e.set_steps(StepParams {
+            on: true,
+            length: 16,
+            pattern: 1,
+            ..Default::default()
+        });
+        e.set_playing(true);
+        // 240 frames a block is 5 ms, so 400 blocks is the bar.
+        let mut out = vec![0.0; 480];
+        let peaks: Vec<f32> = (0..480)
+            .map(|_| {
+                e.process_block(&mut out, &bank);
+                out.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+            })
+            .collect();
+        let loudest = |r: core::ops::Range<usize>| peaks[r].iter().copied().fold(0.0, f32::max);
+        assert!(loudest(0..40) > 0.1, "the step never sounded");
+        // The pass ends at 0.25 s and the last grain 180 ms after it.
+        assert_eq!(loudest(120..395), 0.0, "sound between the steps");
+        assert!(loudest(400..440) > 0.1, "the bar came round in silence");
+    }
+
+    #[test]
+    fn a_step_on_a_reversed_reel_plays_from_the_far_end() {
+        // Rewound to the top, a backwards pass leaves the window on its first
+        // sample and a reversed reel under the steps is silent.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(12_000));
+        let bank = ParamBank::new();
+        bank.set_by_id("tape.reverse", 1.0);
+        e.set_playing(true);
+        let mut out = vec![0.0; 480];
+        // A second for the reel to come round to backwards.
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+        }
+        assert!(e.reversing());
+        e.set_steps(StepParams {
+            on: true,
+            length: 16,
+            pattern: 1,
+            ..Default::default()
+        });
+        let mut peak = 0.0f32;
+        for block in 0..40 {
+            e.process_block(&mut out, &bank);
+            // Past the first 25 ms, so the loop the steps took over has
+            // faded out as a tail and only the new pass is left to measure.
+            if block >= 5 {
+                peak = out.iter().fold(peak, |m, s| m.max(s.abs()));
+            }
+        }
+        assert!(peak > 0.1, "the reversed pass was {peak}");
+    }
+
+    #[test]
+    fn switching_the_steps_on_mid_pass_fades_the_loop_out() {
+        // The steps take over from a loop that is sounding. With no step set
+        // it has to go quiet, and over the tail's fade rather than at once.
+        let worst_step = |switch: bool| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(48_000));
+            let bank = ParamBank::new();
+            e.set_playing(true);
+            let mut out = vec![0.0; 256];
+            let (mut prev, mut worst) = (0.0f32, 0.0f32);
+            for block in 0..300 {
+                if block == 100 {
+                    e.set_steps(StepParams {
+                        on: switch,
+                        pattern: 0,
+                        ..Default::default()
+                    });
+                }
+                e.process_block(&mut out, &bank);
+                for s in out.iter().step_by(2) {
+                    if block > 20 {
+                        worst = worst.max((s - prev).abs());
+                    }
+                    prev = *s;
+                }
+                if switch && block > 110 {
+                    assert!(out.iter().all(|s| *s == 0.0), "block {block} still sounded");
+                }
+            }
+            worst
+        };
+        let steady = worst_step(false);
+        let switched = worst_step(true);
+        assert!(
+            switched < steady * 2.0 + 0.02,
+            "switching the steps on jumped by {switched} against a steady {steady}"
         );
     }
 

@@ -84,6 +84,10 @@ pub struct GrainParams {
     /// grains stretch and thin out as they drop in pitch, and at a standstill
     /// nothing new is thrown at all.
     pub speed: f32,
+    /// Whether the scheduler throws new grains. Grains already in flight
+    /// play out either way, so switching it off trails the cloud away rather
+    /// than cutting it. Off between the steps' one-shot passes.
+    pub spawning: bool,
 }
 
 impl Default for GrainParams {
@@ -100,6 +104,7 @@ impl Default for GrainParams {
             window: Window::Hann,
             gain: 1.0,
             speed: 1.0,
+            spawning: true,
         }
     }
 }
@@ -268,11 +273,17 @@ impl Granular {
         // braked reel throws no new grains — the cloud freezes rather than
         // filling with grains that read a single sample and thud.
         let speed = if p.speed.is_finite() { p.speed } else { 1.0 };
-        self.next_spawn -= speed.abs();
-        if self.next_spawn <= 0.0 {
-            let density = p.density.clamp(0.1, 2000.0);
-            self.next_spawn += (self.sample_rate / density).max(1.0);
-            self.spawn(p, source.len());
+        if !p.spawning {
+            // Held at zero, so the first grain lands the moment spawning
+            // resumes: on the step, not a spawn interval after it.
+            self.next_spawn = 0.0;
+        } else {
+            self.next_spawn -= speed.abs();
+            if self.next_spawn <= 0.0 {
+                let density = p.density.clamp(0.1, 2000.0);
+                self.next_spawn += (self.sample_rate / density).max(1.0);
+                self.spawn(p, source.len());
+            }
         }
 
         let (l, r) = self.render(source, speed);
