@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Track, Tracker } from '@/audio';
-import { NodeSwitch } from '@/components/NodeCard';
 import { Slider } from '@/components/ui/slider';
 
 const LENGTHS = [4, 8, 16];
@@ -66,10 +65,9 @@ export function StepStrip({
         track.on ? '' : 'opacity-60'
       }`}
     >
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider">Tracker</span>
-        <NodeSwitch label="The track" on={track.on} onSwitch={(on) => setTrack({ on })} />
-      </div>
+      {/* No switch: the mode decides whether the steps play, and this strip
+          only shows in tracker mode. */}
+      <span className="text-[11px] font-semibold uppercase tracking-wider">Tracker</span>
 
       <label className="flex items-center gap-1">
         <input

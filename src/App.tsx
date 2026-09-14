@@ -64,6 +64,27 @@ import { useSelection } from '@/stores/selection';
  */
 const GRAIN_SCROLLBACK = 200;
 
+/**
+ * The two ways of working (Georg, 2026-09-14). They change what plays as well
+ * as what shows: tracker plays the steps, and sound scaping loops the patch
+ * freely so it can be heard the whole time it is shaped. Remembered across
+ * launches as UI state, and written to the track's switch, which stays the one
+ * thing that decides whether steps play.
+ */
+const MODES = [
+  {
+    id: 'tracker',
+    label: 'Tracker',
+    title: 'Play the steps. The patch shows as a strip of levels and switches. (⌘1)',
+  },
+  {
+    id: 'soundscape',
+    label: 'Sound scaping',
+    title: 'Loop the patch freely and shape it. The steps rest. (⌘2)',
+  },
+] as const;
+type Mode = (typeof MODES)[number]['id'];
+
 export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
   const [values, setValues] = useState<ParamValues>({});
@@ -107,6 +128,7 @@ export default function App() {
   // The grain inspector and the raw parameter list are for debugging, so they
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
+  const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
   /** The active controller map, as the rows draw it. */
@@ -133,6 +155,18 @@ export default function App() {
       setError(String(e));
     }
   }, []);
+
+  // The mode decides whether the steps play, so the track's switch follows
+  // it: on launch, on every switch, and after a document brings its own.
+  useEffect(() => {
+    const track = tracker?.tracks[0];
+    const want = mode === 'tracker';
+    if (!tracker || !track || track.on === want) return;
+    void changeTracker({
+      ...tracker,
+      tracks: [{ ...track, on: want }, ...tracker.tracks.slice(1)],
+    });
+  }, [mode, tracker, changeTracker]);
 
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
@@ -399,6 +433,11 @@ export default function App() {
         setShowDebugger((v) => !v);
         return;
       }
+      if ((e.metaKey || e.ctrlKey) && (e.key === '1' || e.key === '2')) {
+        e.preventDefault();
+        setMode(e.key === '1' ? 'tracker' : 'soundscape');
+        return;
+      }
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
 
@@ -439,7 +478,7 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, doSave, doLoad, setBrake, setReverse, setShowDebugger]);
+  }, [togglePlay, doSave, doLoad, setBrake, setReverse, setShowDebugger, setMode]);
 
   // How many parameters follow each LFO, for the tree and the editor.
   const linkedCounts = new Map<number, number>();
@@ -517,6 +556,26 @@ export default function App() {
         >
           Reverse
         </button>
+
+        <fieldset className="flex rounded border border-border p-0.5" aria-label="Mode">
+          {MODES.map((m) => (
+            <button
+              key={m.id}
+              type="button"
+              aria-pressed={mode === m.id}
+              title={m.title}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => setMode(m.id)}
+              className={`rounded-sm px-2 py-0.5 text-xs ${
+                mode === m.id
+                  ? 'bg-primary/15 text-primary'
+                  : 'text-muted-foreground hover:text-foreground'
+              }`}
+            >
+              {m.label}
+            </button>
+          ))}
+        </fieldset>
         <span className="text-sm font-semibold tracking-tight">Shard</span>
         <span className="text-xs text-muted-foreground">
           {patchName ? `${patchName} — ` : ''}
@@ -572,37 +631,39 @@ export default function App() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
-          <ModulatorTree
-            lfos={mod.lfos}
-            selected={selectedLfo}
-            linked={linkedCounts}
-            onSelect={(id) => (id === null ? clear() : select({ kind: 'lfo', id }))}
-            onAdd={() =>
-              void editMod(async () => {
-                const view = await addLfo();
-                // The new LFO is last; select it so it can be set up at once.
-                const added = view.lfos[view.lfos.length - 1];
-                if (added) select({ kind: 'lfo', id: added.id });
-                return view;
-              })
-            }
-            onRemove={(id) =>
-              void editMod(async () => {
-                const view = await removeLfo(id);
-                const now = useSelection.getState().selection;
-                if (now?.kind === 'lfo' && now.id === id) clear();
-                const orphaned = linkedCounts.get(id) ?? 0;
-                if (orphaned > 0) {
-                  setNote(
-                    `Removed the LFO. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
-                  );
-                }
-                return view;
-              })
-            }
-          />
-        </nav>
+        {mode === 'soundscape' && (
+          <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
+            <ModulatorTree
+              lfos={mod.lfos}
+              selected={selectedLfo}
+              linked={linkedCounts}
+              onSelect={(id) => (id === null ? clear() : select({ kind: 'lfo', id }))}
+              onAdd={() =>
+                void editMod(async () => {
+                  const view = await addLfo();
+                  // The new LFO is last; select it so it can be set up at once.
+                  const added = view.lfos[view.lfos.length - 1];
+                  if (added) select({ kind: 'lfo', id: added.id });
+                  return view;
+                })
+              }
+              onRemove={(id) =>
+                void editMod(async () => {
+                  const view = await removeLfo(id);
+                  const now = useSelection.getState().selection;
+                  if (now?.kind === 'lfo' && now.id === id) clear();
+                  const orphaned = linkedCounts.get(id) ?? 0;
+                  if (orphaned > 0) {
+                    setNote(
+                      `Removed the LFO. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
+                    );
+                  }
+                  return view;
+                })
+              }
+            />
+          </nav>
+        )}
 
         <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
           {/* The material's title selects it: trim and octave, which every
@@ -612,7 +673,11 @@ export default function App() {
             <button
               type="button"
               onMouseDown={(e) => e.preventDefault()}
-              onClick={() => select({ kind: 'node', id: 'source' })}
+              onClick={() => {
+                // Editing lives in sound scaping, where the inspector is.
+                select({ kind: 'node', id: 'source' });
+                setMode('soundscape');
+              }}
               title="Show the material's trim and octave"
               className={`text-[11px] font-semibold uppercase tracking-wider ${
                 selection?.kind === 'node' && selection.id === 'source'
@@ -680,7 +745,7 @@ export default function App() {
             )}
           </div>
 
-          {tracker && (
+          {mode === 'tracker' && tracker && (
             <StepStrip
               tracker={tracker}
               step={meter.step}
@@ -691,7 +756,30 @@ export default function App() {
           {/* The work area. A click anywhere but on a card deselects,
               including a lane's empty space below its cards; Escape does the
               same from the keyboard. */}
-          {defs && (
+          {/* In tracker mode the patch is a strip: each node's level and
+              switch, in lane order. Its title opens it in sound scaping. */}
+          {defs && mode === 'tracker' && (
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] content-start gap-2">
+              {LANES.flatMap((lane) => NODES.filter((n) => n.lane === lane.id)).map((node) => (
+                <NodeCard
+                  key={node.id}
+                  node={node}
+                  defs={defs}
+                  values={values}
+                  selected={false}
+                  onSelect={() => {
+                    select({ kind: 'node', id: node.id });
+                    setMode('soundscape');
+                  }}
+                  onError={setError}
+                  onNote={setNote}
+                  onPresetApplied={refreshMod}
+                />
+              ))}
+            </div>
+          )}
+
+          {defs && mode === 'soundscape' && (
             // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
             // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
             <div
@@ -741,41 +829,43 @@ export default function App() {
           )}
         </main>
 
-        <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
-          {defs ? (
-            <Inspector
-              selection={selection}
-              defs={defs}
-              values={values}
-              ctx={panelCtx}
-              limits={limits}
-              linkedCounts={linkedCounts}
-              onSelect={select}
-              onLfoChange={(next) => void editMod(() => setLfo(next))}
-              onError={setError}
-              onNote={setNote}
-              onPresetApplied={refreshMod}
-            />
-          ) : (
-            <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
-          )}
+        {mode === 'soundscape' && (
+          <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
+            {defs ? (
+              <Inspector
+                selection={selection}
+                defs={defs}
+                values={values}
+                ctx={panelCtx}
+                limits={limits}
+                linkedCounts={linkedCounts}
+                onSelect={select}
+                onLfoChange={(next) => void editMod(() => setLfo(next))}
+                onError={setError}
+                onNote={setNote}
+                onPresetApplied={refreshMod}
+              />
+            ) : (
+              <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
+            )}
 
-          {defs && showDebugger && (
-            <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
-              {defs.map((d) => (
-                <div
-                  key={d.id}
-                  className="flex justify-between gap-2 text-[11px] text-muted-foreground"
-                >
-                  <span className="truncate font-mono">{d.id}</span>
-                  <span className="shrink-0 tabular-nums">
-                    {format(d, values[d.id] ?? d.default)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </aside>
+            {defs && showDebugger && (
+              <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
+                {defs.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex justify-between gap-2 text-[11px] text-muted-foreground"
+                  >
+                    <span className="truncate font-mono">{d.id}</span>
+                    <span className="shrink-0 tabular-nums">
+                      {format(d, values[d.id] ?? d.default)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </aside>
+        )}
       </div>
 
       <SettingsDialog
