@@ -143,6 +143,10 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
         bank.set_by_id(id, 1.0);
     }
     bank.set_by_id("grain.gain", 1.0);
+    // Every step at the top tempo, so retriggers and their tails run in
+    // nearly every block.
+    bank.set_by_id("seq.pattern", 65_535.0);
+    bank.set_by_id("seq.tempo", 240.0);
     e.set_playing(true);
     drop(e.set_modulation(first));
 

@@ -6,6 +6,9 @@ import type { ParamValues } from '@/scope';
 /** `seq.length` is stepped 0, 1, 2. */
 const LENGTHS = [4, 8, 16];
 
+/** How long a click's pattern stands in for the polled one: about ten polls. */
+const WRITE_HOLD_MS = 300;
+
 /**
  * The step sequencer's steps: one button per sixteenth, the one playing lit.
  *
@@ -34,13 +37,18 @@ export function StepStrip({
   const on = (values['seq.on'] ?? 0) >= 0.5;
   const length = LENGTHS[Math.min(2, Math.max(0, Math.round(values['seq.length'] ?? 2)))];
   const heard = Math.max(0, Math.round(values['seq.pattern'] ?? 0));
-  const written = useRef<number | null>(null);
-  if (written.current === heard) written.current = null;
-  const pattern = written.current ?? heard;
+  const written = useRef<{ value: number; at: number } | null>(null);
+  const w = written.current;
+  // Dropped once the poll agrees, or after a few polls regardless, so a
+  // write that failed cannot pin the strip to a pattern the engine lacks.
+  if (w && (w.value === heard || performance.now() - w.at > WRITE_HOLD_MS)) {
+    written.current = null;
+  }
+  const pattern = written.current?.value ?? heard;
 
   const toggle = (i: number) => {
     const next = pattern ^ (1 << i);
-    written.current = next;
+    written.current = { value: next, at: performance.now() };
     void setParam('seq.pattern', next);
   };
 

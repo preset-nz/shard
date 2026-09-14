@@ -678,6 +678,11 @@ impl Engine {
             // same few milliseconds the new pass fades in, so the step lands
             // on time without a click. Cut hard, it jumped by 0.49 against a
             // steady 0.03.
+            //
+            // Only the material is covered. Both envelopes read the new
+            // pass's clock from this frame, so a shaped envelope (anything
+            // but flat, which is the default) still puts an edge on the tail
+            // and on the cloud. Open, roadmap row 4.
             if self.steps.tick(&steps) {
                 self.tail = self.player;
                 self.tail_left = self.player.seam_samples();
