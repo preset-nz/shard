@@ -1,15 +1,19 @@
 import { create } from 'zustand';
 
 /**
- * What the inspector shows: one node from the work area, one LFO from the
- * tree, or nothing.
+ * What the inspector shows: one node from the work area, one material or LFO
+ * from the tree, or nothing. The waveform follows it too.
  *
  * Its own tiny store rather than part of any document, per guidance
  * `design/interaction-state.md`. The tree and the work area both write it,
  * and the inspector reads it. It is never saved with the patch: it describes
  * how you are working, not the sound.
  */
-export type Selection = { kind: 'node'; id: string } | { kind: 'lfo'; id: number } | null;
+export type Selection =
+  | { kind: 'node'; id: string }
+  | { kind: 'material'; id: number }
+  | { kind: 'lfo'; id: number }
+  | null;
 
 interface SelectionState {
   selection: Selection;

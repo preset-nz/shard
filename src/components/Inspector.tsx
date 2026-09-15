@@ -1,10 +1,26 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import { type LfoLimits, type LfoRecord, type ParamInfo, setParam } from '@/audio';
+import {
+  type LfoLimits,
+  type LfoRecord,
+  type MaterialsView,
+  type MaterialView,
+  type ParamInfo,
+  setParam,
+} from '@/audio';
 import { LfoEditor } from '@/components/LfoEditor';
+import { MaterialEditor } from '@/components/MaterialEditor';
+import { MaterialPicker } from '@/components/MaterialPicker';
 import { NodeSwitch } from '@/components/NodeCard';
 import { NodePresets } from '@/components/NodePresets';
 import type { ParamRowContext } from '@/components/ParamRow';
-import { nodeById, type ParamValues, rowsOf, scopeKeyFor, switchIdOf } from '@/scope';
+import {
+  nodeById,
+  type ParamValues,
+  READS_MATERIAL,
+  rowsOf,
+  scopeKeyFor,
+  switchIdOf,
+} from '@/scope';
 import type { Selection } from '@/stores/selection';
 
 /**
@@ -12,13 +28,17 @@ import type { Selection } from '@/stores/selection';
  *
  * A node shows its rows, and under them a **Linked** block with every LFO
  * those rows follow, folded down to rate and shape, so a node and what moves
- * it can be tuned together (Georg, 2026-09-14). An LFO shows its full editor.
+ * it can be tuned together (Georg, 2026-09-14). A generator also picks its
+ * material. A material shows its octave and trim, and an LFO its full editor.
  */
 export function Inspector({
   selection,
   defs,
   values,
   ctx,
+  pool,
+  onWire,
+  onMaterialChange,
   limits,
   linkedCounts,
   onSelect,
@@ -31,6 +51,9 @@ export function Inspector({
   defs: ParamInfo[];
   values: ParamValues;
   ctx: ParamRowContext;
+  pool: MaterialsView;
+  onWire: (node: string, material: number | null) => void;
+  onMaterialChange: (next: MaterialView) => void;
   limits: LfoLimits | null;
   /** How many parameters follow each LFO, by id. */
   linkedCounts: Map<number, number>;
@@ -52,6 +75,19 @@ export function Inspector({
         limits={limits}
         linked={linkedCounts.get(lfo.id) ?? 0}
         onChange={onLfoChange}
+      />
+    );
+  }
+
+  if (selection.kind === 'material') {
+    const material = pool.materials.find((m) => m.id === selection.id);
+    if (!material) return null;
+    return (
+      <MaterialEditor
+        key={material.id}
+        material={material}
+        pool={pool}
+        onChange={onMaterialChange}
       />
     );
   }
@@ -83,6 +119,11 @@ export function Inspector({
           />
         )}
       </div>
+      {READS_MATERIAL.has(node.id) && (
+        <div className="px-3 pt-2">
+          <MaterialPicker node={node.id} pool={pool} onWire={onWire} />
+        </div>
+      )}
       {/* Dimmed when off, but still editable: set it up, then switch it in. */}
       <div className={on ? '' : 'opacity-50'}>
         <PropertyPanel key={node.id} scopeKey={scopeKeyFor(node.id)} selection={values} ctx={ctx} />

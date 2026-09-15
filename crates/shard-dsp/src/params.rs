@@ -141,40 +141,8 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
-    // Material pre-conditions: how the source is read before anything shapes
-    // it. Varispeed, so an octave up is twice as fast as well as twice as
-    // high. Stepped, because an octave is the point; a glide is a different
-    // control.
-    ParamDef {
-        id: "material.octave",
-        name: "Octave",
-        min: -2.0,
-        max: 2.0,
-        default: 0.0,
-        taper: Taper::Stepped(5),
-        unit: Unit::Octaves,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "trim.start",
-        name: "Start",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 30.0,
-    },
-    ParamDef {
-        id: "trim.end",
-        name: "End",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 30.0,
-    },
+    // No octave or trim here: those belong to each material, and reach the
+    // engine as a `sources::Reading` per generator (Georg, 2026-09-15).
     // Section switches, one per effect. Stepped, and never smoothed here: the
     // engine fades each bypass itself over a fixed 10 ms, so a switch cannot
     // click, and a section that is off is bit-exact with its mix at zero. The
@@ -863,23 +831,6 @@ mod tests {
             assert!(*v >= 0.0 && *v <= 3.0);
         }
         assert!(seen.contains(&0.0) && seen.contains(&3.0));
-    }
-
-    #[test]
-    fn octave_steps_are_whole_octaves_centred_on_zero() {
-        // The first stepped range that does not start at zero, so the one
-        // that would expose index-for-value confusion anywhere downstream.
-        let o = &PARAMS[index_of("material.octave").unwrap()];
-        let seen: Vec<f32> = (0..=40).map(|i| o.denormalise(i as f32 / 40.0)).collect();
-        for want in [-2.0, -1.0, 0.0, 1.0, 2.0] {
-            assert!(seen.contains(&want), "never reached {want}");
-        }
-        assert!(seen.iter().all(|v| (v - v.round()).abs() < 1e-4));
-        assert_eq!(
-            o.denormalise(o.normalise(o.default)),
-            0.0,
-            "the default must survive a round trip"
-        );
     }
 
     #[test]

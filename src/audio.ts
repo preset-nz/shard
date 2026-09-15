@@ -89,29 +89,48 @@ export const paramDefs = () => invoke<ParamInfo[]>('param_defs');
 export const getParams = () => invoke<number[]>('get_params');
 export const setParam = (id: string, value: number) => invoke<void>('set_param', { id, value });
 export const meters = () => invoke<Meters>('meters');
-export const sourceInfo = () => invoke<SourceInfo>('source_info');
 
-/** A material as the tree lists it. */
+/** A material as the tree and the inspector show it. */
 export interface MaterialView {
   id: number;
   name: string;
-  path: string;
+  /** Where the WAV is. Null for the built-in drone. */
+  path: string | null;
   /** The file is not where the document said it was. */
   missing: boolean;
+  /** Whole octaves, −2 to +2. */
+  octave: number;
+  /** The window's ends, 0 to 1 of the file. */
+  trim_start: number;
+  trim_end: number;
 }
 
-/** The material pool in the tree's order, and the one playing. */
+/** Which material each generator reads, by node id. Null is silent. */
+export interface Wires {
+  material: number | null;
+  grain: number | null;
+}
+
+/** The material pool in the tree's order, and what each generator reads. */
 export interface MaterialsView {
   materials: MaterialView[];
-  active: number | null;
+  wires: Wires;
 }
 
 export const materials = () => invoke<MaterialsView>('materials');
-/** Decode a WAV, add it to the pool and play it, whole and at its own pitch. */
+/** A material's waveform. Rejects for one whose file could not be read. */
+export const materialWave = (id: number) => invoke<SourceInfo>('material_wave', { id });
+/** Decode a WAV and add it to the pool, whole and at its own pitch. A silent generator reads it. */
 export const addMaterial = (path: string) => invoke<MaterialsView>('add_material', { path });
-/** Play a material with the octave and trim it was left at. */
-export const selectMaterial = (id: number) => invoke<MaterialsView>('select_material', { id });
+/** Put the built-in drone back in the pool after it was removed. */
+export const addDrone = () => invoke<MaterialsView>('add_drone');
 export const removeMaterial = (id: number) => invoke<MaterialsView>('remove_material', { id });
+/** Wire a material into `material` (Sample) or `grain` (Granular). Null is silence. */
+export const wireMaterial = (node: string, material: number | null) =>
+  invoke<MaterialsView>('wire_material', { node, material });
+/** Set a material's octave and trim. Tauri takes command arguments in camelCase. */
+export const setMaterial = (id: number, octave: number, trimStart: number, trimEnd: number) =>
+  invoke<MaterialsView>('set_material', { id, octave, trimStart, trimEnd });
 
 /** Everything spawned since the last call. Drains, so poll it steadily. */
 export const grainLog = () => invoke<GrainInfo[]>('grain_log');

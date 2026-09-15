@@ -1,7 +1,15 @@
-import { denormalise, format, normalise, type ParamInfo, setParam } from '@/audio';
+import {
+  denormalise,
+  format,
+  type MaterialsView,
+  normalise,
+  type ParamInfo,
+  setParam,
+} from '@/audio';
+import { MaterialPicker } from '@/components/MaterialPicker';
 import { NodePresets } from '@/components/NodePresets';
 import { Slider } from '@/components/ui/slider';
-import { levelIdOf, type NodeInfo, type ParamValues, switchIdOf } from '@/scope';
+import { levelIdOf, type NodeInfo, type ParamValues, READS_MATERIAL, switchIdOf } from '@/scope';
 
 /** A node's on/off switch. Switching keeps every setting. */
 export function NodeSwitch({
@@ -38,16 +46,18 @@ export function NodeSwitch({
  *
  * Generated from the table: the level is the node's first row by the
  * parameter pattern (Gain for a generator, Mix for an effect), so a new node
- * needs no card of its own. Click the title to show the node in the
- * inspector; right-click the card for its presets. Solo arrives with roadmap
- * row 14.
+ * needs no card of its own. A generator that reads a material also picks
+ * which, in both modes. Click the title to show the node in the inspector;
+ * right-click the card for its presets. Solo arrives with roadmap row 14.
  */
 export function NodeCard({
   node,
   defs,
   values,
+  pool,
   selected,
   onSelect,
+  onWire,
   onError,
   onNote,
   onPresetApplied,
@@ -55,8 +65,10 @@ export function NodeCard({
   node: NodeInfo;
   defs: ParamInfo[];
   values: ParamValues;
+  pool: MaterialsView;
   selected: boolean;
   onSelect: () => void;
+  onWire: (node: string, material: number | null) => void;
   onError: (message: string | null) => void;
   onNote: (message: string | null) => void;
   onPresetApplied: () => void;
@@ -90,6 +102,9 @@ export function NodeCard({
           />
         )}
       </div>
+      {READS_MATERIAL.has(node.id) && (
+        <MaterialPicker node={node.id} pool={pool} onWire={onWire} className="mt-2" />
+      )}
       {level && (
         <div className="mt-2 flex items-center gap-2">
           <Slider

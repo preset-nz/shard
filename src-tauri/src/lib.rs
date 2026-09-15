@@ -22,7 +22,7 @@ use serde::Serialize;
 use shard_dsp::params::{Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::steps::StepBank;
-use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
+use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, ReadingBank};
 
 mod controllers;
 mod mapping;
@@ -40,6 +40,10 @@ mod tracker;
 #[cfg(debug_assertions)]
 #[global_allocator]
 static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
+
+/// One source buffer per generator, by `Generator::index`: a new material
+/// waiting for the audio thread, or an old one it handed back.
+type SourceSlots = [Option<Vec<f32>>; 2];
 
 /// Shared between the UI thread and the audio thread.
 pub struct Audio {
@@ -76,26 +80,32 @@ pub struct Audio {
     /// The level above the patch: tempo, swing and tracks. Saved in the same
     /// `.shard` file, above the patch.
     tracker: Mutex<tracker::Tracker>,
-    /// The material pool, and which material plays. Taken before `decoded`,
-    /// which is taken before `source`.
+    /// The material pool, and what each generator is wired to. Taken before
+    /// `decoded`, which is taken before `feeding`.
     materials: Mutex<materials::Pool>,
-    /// Every material's audio by id, decoded once and kept, so switching
-    /// between materials is a copy rather than a decode. Resident: a
-    /// three-minute file is about 33 MB.
+    /// Every material's audio by id, decoded once and kept, so wiring a
+    /// material is a copy rather than a decode. Resident: a three-minute file
+    /// is about 33 MB.
     decoded: Mutex<std::collections::HashMap<u64, Arc<source::Loaded>>>,
-    /// The playing sample, kept so the UI can draw a waveform. Swapping goes
-    /// through the queue, never a lock on audio.
-    source: Mutex<Arc<source::Loaded>>,
+    /// The built-in drone's audio, which the drone material reads.
+    drone: Arc<source::Loaded>,
+    /// The material each generator was last sent, by `Generator::index`, or
+    /// none for silence. So a wiring change sends only what changed.
+    feeding: Mutex<[Option<u64>; 2]>,
+    /// How each generator reads its material, read by the audio thread once a
+    /// block. Written only by `send_pool` and `send_readings`.
+    readings: Arc<ReadingBank>,
     /// Node presets for the open patch. Saved with it and replaced when
     /// another patch loads; never touched by the audio thread.
     presets: Mutex<presets::Presets>,
     /// The open patch's LFOs and links. Every edit rebuilds a `ModSet` from
     /// this and hands it across through `mod_swap`.
     modulation: Mutex<modulation::Modulation>,
-    swap: Arc<Mutex<Option<Vec<f32>>>>,
-    /// A source buffer the audio thread swapped out and handed back, waiting
-    /// for `meters` to free it here rather than on the audio thread.
-    retired: Arc<Mutex<Option<Vec<f32>>>>,
+    /// A new source for each generator that has one waiting.
+    swap: Arc<Mutex<SourceSlots>>,
+    /// Source buffers the audio thread swapped out and handed back, waiting
+    /// for `meters` to free them here rather than on the audio thread.
+    retired: Arc<Mutex<SourceSlots>>,
     /// A modulation set waiting for the audio thread, and the one it replaced,
     /// handed back the same way as a source buffer.
     mod_swap: Arc<Mutex<Option<ModSet>>>,
@@ -261,7 +271,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
     // Free whatever source buffer the audio thread retired since the last
     // poll. Blocking here is fine; the audio thread only ever tries the lock.
     if let Ok(mut slot) = state.retired.lock() {
-        drop(slot.take());
+        drop(std::mem::take(&mut *slot));
     }
     if let Ok(mut slot) = state.mod_retired.lock() {
         drop(slot.take());
@@ -369,13 +379,8 @@ fn save_patch(
     ctl: tauri::State<'_, Arc<midi::Controllers>>,
     path: String,
 ) -> Result<(), String> {
-    // The playing material's octave and trim are in the rows until now.
-    let pool = {
-        let mut pool = state.materials.lock().expect("materials poisoned");
-        pool.settle(&state.bank);
-        pool.clone()
-    };
-    let mut p = patch::Patch::capture(&state.bank, pool.active);
+    let pool = state.materials.lock().expect("materials poisoned").clone();
+    let mut p = patch::Patch::capture(&state.bank, pool.wires);
     p.presets = state.presets.lock().expect("presets poisoned").clone();
     p.modulation = state
         .modulation
@@ -420,11 +425,7 @@ fn load_patch(
         .pool
         .materials
         .iter()
-        .filter_map(|m| {
-            source::load(&m.path, state.sample_rate)
-                .ok()
-                .map(|l| (m.id, Arc::new(l)))
-        })
+        .filter_map(|m| state.load_record(m).ok().map(|l| (m.id, l)))
         .collect();
     // The tracker comes with the document, above the patch.
     apply_tracker(&state, doc.tracker.clone());
@@ -450,35 +451,20 @@ fn load_patch(
     report.refused = state.send_modulation(&p.modulation);
     *state.modulation.lock().expect("modulation poisoned") = p.modulation.clone();
 
-    // The document's pool replaces the old one, and the patch's material
-    // plays. Its octave and trim come with it even when its file has gone, so
-    // saving again keeps them.
+    // The document's pool and the patch's wires replace the old ones. A wired
+    // material whose file has gone keeps its wire, its octave and its trim, so
+    // saving again keeps them. Not an error: its generator is silent, and the
+    // UI says which file is missing.
     let mut pool = doc.pool.clone();
-    pool.active = None;
-    match p.material.and_then(|id| pool.get(id).cloned()) {
-        Some(m) => {
-            report.sample_path = Some(m.path.clone());
-            match decoded.get(&m.id) {
-                Some(loaded) => state.play_source(Arc::clone(loaded)),
-                // Not an error: the patch is still worth having. The drone
-                // plays, and the UI says which file is missing.
-                None => {
-                    report.sample_missing = true;
-                    state.play_source(Arc::new(source::startup_drone(state.sample_rate)));
-                }
-            }
-            // Infallible, since `m` came from this pool. A `?` here would
-            // leave the document half-applied.
-            pool.activate(m.id, &state.bank)
-                .expect("the material was read from this pool");
-        }
-        None => {
-            pool.deactivate(&state.bank);
-            state.play_source(Arc::new(source::startup_drone(state.sample_rate)));
-        }
+    pool.set_wires(p.wires);
+    if let Some(m) = pool.wired().find(|m| !decoded.contains_key(&m.id)) {
+        // Only a WAV can go missing; the drone has no file.
+        report.sample_path = m.path.clone();
+        report.sample_missing = true;
     }
     *state.materials.lock().expect("materials poisoned") = pool;
     *state.decoded.lock().expect("decoded poisoned") = decoded;
+    state.send_pool();
 
     Ok(report)
 }
@@ -633,32 +619,44 @@ fn apply_tracker(state: &Audio, next: tracker::Tracker) -> tracker::Tracker {
     next
 }
 
+/// A material's waveform for drawing. Refused for a material whose file could
+/// not be read.
 #[tauri::command]
-fn source_info(state: tauri::State<'_, Audio>) -> SourceInfo {
-    let s = state.source.lock().expect("source poisoned");
-    SourceInfo {
-        name: s.name.clone(),
-        seconds: s.samples.len() as f32 / state.sample_rate,
+fn material_wave(state: tauri::State<'_, Audio>, id: u64) -> Result<SourceInfo, String> {
+    let loaded = state
+        .decoded
+        .lock()
+        .expect("decoded poisoned")
+        .get(&id)
+        .cloned()
+        .ok_or_else(|| format!("material {id} could not be read"))?;
+    Ok(SourceInfo {
+        name: loaded.name.clone(),
+        seconds: loaded.samples.len() as f32 / state.sample_rate,
         sample_rate: state.sample_rate,
-        peaks: s.peaks.clone(),
-    }
+        peaks: loaded.peaks.clone(),
+    })
 }
 
-/// A material as the tree lists it.
+/// A material as the tree and the inspector show it.
 #[derive(Serialize)]
 pub struct MaterialView {
     pub id: u64,
     pub name: String,
-    pub path: String,
+    /// None for the built-in drone.
+    pub path: Option<String>,
     /// The file is not where the document said it was.
     pub missing: bool,
+    pub octave: f32,
+    pub trim_start: f32,
+    pub trim_end: f32,
 }
 
-/// The pool in the tree's order, and the material playing.
+/// The pool in the tree's order, and what each generator reads.
 #[derive(Serialize)]
 pub struct MaterialsView {
     pub materials: Vec<MaterialView>,
-    pub active: Option<u64>,
+    pub wires: materials::Wires,
 }
 
 impl MaterialsView {
@@ -671,86 +669,125 @@ impl MaterialsView {
                     id: m.id,
                     name: m.name.clone(),
                     path: m.path.clone(),
-                    missing: !std::path::Path::new(&m.path).exists(),
+                    missing: m
+                        .path
+                        .as_deref()
+                        .is_some_and(|p| !std::path::Path::new(p).exists()),
+                    octave: m.octave,
+                    trim_start: m.trim_start,
+                    trim_end: m.trim_end,
                 })
                 .collect(),
-            active: pool.active,
+            wires: pool.wires,
         }
     }
 }
 
-// The material commands take the materials lock, then the decoded lock, then
-// the source lock. Each decodes before it changes anything, so a file that
-// will not load leaves the pool and the sound as they were. The ones that can
-// decode are async: they run off the main thread, so a long decode never
-// freezes the window.
+// The material commands take the materials lock, then the decoded lock. Each
+// decodes before it changes anything, so a file that will not load leaves the
+// pool and the sound as they were. The ones that can decode are async: they
+// run off the main thread, so a long decode never freezes the window.
 
 #[tauri::command]
 fn materials(state: tauri::State<'_, Audio>) -> MaterialsView {
     MaterialsView::of(&state.materials.lock().expect("materials poisoned"))
 }
 
-/// Add a WAV to the pool and play it, whole and at its own pitch.
+/// Add a WAV to the pool, whole and at its own pitch. A generator with no
+/// material yet reads it, so the first file added is heard at once.
 #[tauri::command(async)]
 fn add_material(state: tauri::State<'_, Audio>, path: String) -> Result<MaterialsView, String> {
     let loaded = Arc::new(source::load(&path, state.sample_rate)?);
-    let mut pool = state.materials.lock().expect("materials poisoned");
-    let id = pool.add(&loaded.name, &path);
-    pool.activate(id, &state.bank)
-        .expect("a material just added is in the pool");
-    state
-        .decoded
-        .lock()
-        .expect("decoded poisoned")
-        .insert(id, Arc::clone(&loaded));
-    state.play_source(loaded);
-    Ok(MaterialsView::of(&pool))
+    let view = {
+        let mut pool = state.materials.lock().expect("materials poisoned");
+        let id = pool.add(&loaded.name, &path);
+        state
+            .decoded
+            .lock()
+            .expect("decoded poisoned")
+            .insert(id, loaded);
+        pool.wire_unwired(id);
+        MaterialsView::of(&pool)
+    };
+    state.send_pool();
+    Ok(view)
 }
 
-/// Play a material from the pool, with the octave and trim it was left at.
-#[tauri::command(async)]
-fn select_material(state: tauri::State<'_, Audio>, id: u64) -> Result<MaterialsView, String> {
-    let mut pool = state.materials.lock().expect("materials poisoned");
-    if pool.active != Some(id) {
-        let path = pool
-            .get(id)
-            .ok_or_else(|| format!("there is no material {id}"))?
-            .path
-            .clone();
-        let loaded = state.decode(id, &path)?;
-        pool.activate(id, &state.bank)?;
-        state.play_source(loaded);
-    }
-    Ok(MaterialsView::of(&pool))
+/// Add the built-in drone back to the pool, after it was removed. Like a WAV,
+/// a generator with no material yet reads it.
+#[tauri::command]
+fn add_drone(state: tauri::State<'_, Audio>) -> MaterialsView {
+    let view = {
+        let mut pool = state.materials.lock().expect("materials poisoned");
+        let id = pool.add_drone();
+        state
+            .decoded
+            .lock()
+            .expect("decoded poisoned")
+            .insert(id, Arc::clone(&state.drone));
+        pool.wire_unwired(id);
+        MaterialsView::of(&pool)
+    };
+    state.send_pool();
+    view
 }
 
-/// Remove a material. Removing the one playing plays its neighbour in the
-/// tree, or the drone when none is left or the neighbour will not load.
-#[tauri::command(async)]
+/// Remove a material. A generator that read it goes silent.
+#[tauri::command]
 fn remove_material(state: tauri::State<'_, Audio>, id: u64) -> Result<MaterialsView, String> {
-    let mut pool = state.materials.lock().expect("materials poisoned");
-    let next = pool.neighbour(id);
-    let was_active = pool.active == Some(id);
-    pool.remove(id)?;
-    state.decoded.lock().expect("decoded poisoned").remove(&id);
-    if was_active {
-        let next = next.and_then(|n| {
-            let path = pool.get(n)?.path.clone();
-            state.decode(n, &path).ok().map(|loaded| (n, loaded))
-        });
-        match next {
-            Some((n, loaded)) => {
-                pool.activate(n, &state.bank)
-                    .expect("the neighbour was read from this pool");
-                state.play_source(loaded);
-            }
-            None => {
-                pool.deactivate(&state.bank);
-                state.play_source(Arc::new(source::startup_drone(state.sample_rate)));
-            }
+    let view = {
+        let mut pool = state.materials.lock().expect("materials poisoned");
+        pool.remove(id)?;
+        state.decoded.lock().expect("decoded poisoned").remove(&id);
+        MaterialsView::of(&pool)
+    };
+    state.send_pool();
+    Ok(view)
+}
+
+/// Wire a material into a generator, `material` (Sample) or `grain`
+/// (Granular), or unwire it with none, which is silent. A material whose file
+/// cannot be read is refused.
+#[tauri::command(async)]
+fn wire_material(
+    state: tauri::State<'_, Audio>,
+    node: String,
+    material: Option<u64>,
+) -> Result<MaterialsView, String> {
+    let generator =
+        materials::generator_of(&node).ok_or_else(|| format!("{node} does not read a material"))?;
+    let view = {
+        let mut pool = state.materials.lock().expect("materials poisoned");
+        if let Some(id) = material {
+            let m = pool
+                .get(id)
+                .ok_or_else(|| format!("there is no material {id}"))?;
+            state.decode(m)?;
         }
-    }
-    Ok(MaterialsView::of(&pool))
+        pool.wire(generator, material)?;
+        MaterialsView::of(&pool)
+    };
+    state.send_pool();
+    Ok(view)
+}
+
+/// Set a material's octave and trim. Every generator reading it follows at
+/// the next block.
+#[tauri::command]
+fn set_material(
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    octave: f32,
+    trim_start: f32,
+    trim_end: f32,
+) -> Result<MaterialsView, String> {
+    let view = {
+        let mut pool = state.materials.lock().expect("materials poisoned");
+        pool.set_values(id, octave, trim_start, trim_end)?;
+        MaterialsView::of(&pool)
+    };
+    state.send_readings();
+    Ok(view)
 }
 
 /// Open the device and start the stream.
@@ -1134,50 +1171,95 @@ impl Audio {
         Ok(ModulationView::of(&doc, refused))
     }
 
-    /// Hand a decoded sample to the audio thread through the swap slot, and
-    /// keep it here for drawing. The audio thread takes it at a block
-    /// boundary; it never decodes and never allocates.
-    fn play_source(&self, loaded: Arc<source::Loaded>) {
-        *self.swap.lock().expect("swap poisoned") = Some(loaded.samples.clone());
-        *self.source.lock().expect("source poisoned") = loaded;
+    /// Hand the pool to the audio thread: every generator's reading, and a new
+    /// source only for a generator whose material changed. The audio thread
+    /// takes a source at a block boundary; it never decodes and never
+    /// allocates. Nothing wired, or a material whose file could not be read,
+    /// is silent.
+    fn send_pool(&self) {
+        let pool = self.materials.lock().expect("materials poisoned");
+        let decoded = self.decoded.lock().expect("decoded poisoned");
+        let mut feeding = self.feeding.lock().expect("feeding poisoned");
+        for g in Generator::ALL {
+            let want = pool.wires.get(g).filter(|id| decoded.contains_key(id));
+            if feeding[g.index()] != want {
+                // Silence is an empty buffer, which allocates nothing.
+                let samples = want
+                    .and_then(|id| decoded.get(&id))
+                    .map(|l| l.samples.clone())
+                    .unwrap_or_default();
+                self.swap.lock().expect("swap poisoned")[g.index()] = Some(samples);
+                feeding[g.index()] = want;
+            }
+        }
+        self.store_readings(&pool, &decoded);
+    }
+
+    /// Hand every generator's reading to the audio thread, and nothing else.
+    fn send_readings(&self) {
+        let pool = self.materials.lock().expect("materials poisoned");
+        let decoded = self.decoded.lock().expect("decoded poisoned");
+        self.store_readings(&pool, &decoded);
+    }
+
+    fn store_readings(
+        &self,
+        pool: &materials::Pool,
+        decoded: &std::collections::HashMap<u64, Arc<source::Loaded>>,
+    ) {
+        let [player, grain] = Generator::ALL.map(|g| Self::reading_of(pool, decoded, g));
+        self.readings.store(player, grain);
+    }
+
+    /// How a generator reads: through its material's octave and trim, or at
+    /// the defaults when it has no readable material and so reads nothing.
+    fn reading_of(
+        pool: &materials::Pool,
+        decoded: &std::collections::HashMap<u64, Arc<source::Loaded>>,
+        g: Generator,
+    ) -> shard_dsp::Reading {
+        pool.wires
+            .get(g)
+            .filter(|id| decoded.contains_key(id))
+            .and_then(|id| pool.get(id))
+            .map(|m| m.reading())
+            .unwrap_or_default()
     }
 
     /// A material's audio: from the cache, or decoded now and kept. Only a
     /// material whose file was missing when it was first asked for gets here
     /// uncached.
-    fn decode(&self, id: u64, path: &str) -> Result<Arc<source::Loaded>, String> {
-        if let Some(loaded) = self.decoded.lock().expect("decoded poisoned").get(&id) {
+    fn decode(&self, m: &materials::MaterialRecord) -> Result<Arc<source::Loaded>, String> {
+        if let Some(loaded) = self.decoded.lock().expect("decoded poisoned").get(&m.id) {
             return Ok(Arc::clone(loaded));
         }
-        let loaded = Arc::new(source::load(path, self.sample_rate)?);
+        let loaded = self.load_record(m)?;
         self.decoded
             .lock()
             .expect("decoded poisoned")
-            .insert(id, Arc::clone(&loaded));
+            .insert(m.id, Arc::clone(&loaded));
         Ok(loaded)
     }
 
-    /// The trimmed window in sample indices, mirroring the engine's own
-    /// clamping so a drawn curve matches the one being heard.
-    fn trim_indices(&self) -> (usize, usize) {
-        let n = self.source.lock().expect("source poisoned").samples.len();
-        if n < 2 {
-            return (0, n);
+    /// A material's audio, read now: its WAV decoded, or the drone shared.
+    fn load_record(&self, m: &materials::MaterialRecord) -> Result<Arc<source::Loaded>, String> {
+        match &m.path {
+            Some(path) => Ok(Arc::new(source::load(path, self.sample_rate)?)),
+            None => Ok(Arc::clone(&self.drone)),
         }
-        let a = self
-            .bank
-            .get_by_id("trim.start")
-            .unwrap_or(0.0)
-            .clamp(0.0, 1.0);
-        let b = self
-            .bank
-            .get_by_id("trim.end")
-            .unwrap_or(1.0)
-            .clamp(0.0, 1.0);
-        let (a, b) = if a <= b { (a, b) } else { (b, a) };
-        let lo = ((a * n as f32) as usize).min(n - 2);
-        let hi = ((b * n as f32) as usize).clamp(lo + 2, n);
-        (lo, hi)
+    }
+
+    /// Plain playback's trimmed window in sample indices, worked out as the
+    /// engine does, so a drawn envelope matches the one heard.
+    fn trim_indices(&self) -> (usize, usize) {
+        let pool = self.materials.lock().expect("materials poisoned");
+        let decoded = self.decoded.lock().expect("decoded poisoned");
+        let len = pool
+            .wires
+            .get(Generator::Player)
+            .and_then(|id| decoded.get(&id))
+            .map_or(0, |l| l.samples.len());
+        Self::reading_of(&pool, &decoded, Generator::Player).window(len)
     }
 }
 
@@ -1192,11 +1274,12 @@ fn build_audio() -> Result<Audio, String> {
     let steps = Arc::new(StepBank::new(tracker::Tracker::default().params()));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
-    let swap: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
+    let swap: Arc<Mutex<SourceSlots>> = Arc::new(Mutex::new([None, None]));
     let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
     let auditioning = Arc::new(AtomicBool::new(false));
     let reversing = Arc::new(AtomicBool::new(false));
-    let retired: Arc<Mutex<Option<Vec<f32>>>> = Arc::new(Mutex::new(None));
+    let retired: Arc<Mutex<SourceSlots>> = Arc::new(Mutex::new([None, None]));
+    let readings = Arc::new(ReadingBank::new());
     let mod_swap: Arc<Mutex<Option<ModSet>>> = Arc::new(Mutex::new(None));
     let mod_retired: Arc<Mutex<Option<ModSet>>> = Arc::new(Mutex::new(None));
     let timer = Arc::new(BlockTimer::new());
@@ -1204,8 +1287,9 @@ fn build_audio() -> Result<Audio, String> {
     // Lock every slot the callback hands off through once, here. On macOS a
     // mutex allocates on its first lock, and without this that first lock
     // would land on the audio thread. `tests/audio_thread.rs` in shard-dsp
-    // holds the pattern. The tracker's `steps` is not here on purpose: it is
-    // atomics, like the bank, and has no lock to prime.
+    // holds the pattern. The tracker's `steps` and the materials' `readings`
+    // are not here on purpose: they are atomics, like the bank, and have no
+    // lock to prime.
     drop(swap.lock());
     drop(audition.lock());
     drop(retired.lock());
@@ -1222,6 +1306,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_playhead = Arc::clone(&playhead);
     let audio_step = Arc::clone(&step);
     let audio_steps = Arc::clone(&steps);
+    let audio_readings = Arc::clone(&readings);
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
     let audio_auditioning = Arc::clone(&auditioning);
@@ -1253,8 +1338,8 @@ fn build_audio() -> Result<Audio, String> {
                 engine.set_source(source::startup_drone(sample_rate).samples);
                 let log = engine.grain_log();
                 let mut scratch = vec![0.0f32; 8192];
-                // A swapped-out source, held until the UI side can take it.
-                let mut retiring: Option<Vec<f32>> = None;
+                // Swapped-out sources, held until the UI side can take them.
+                let mut retiring: SourceSlots = [None, None];
                 // A swapped-out modulation set, held the same way.
                 let mut mods_retiring: Option<ModSet> = None;
 
@@ -1274,20 +1359,25 @@ fn build_audio() -> Result<Audio, String> {
                                 // collects it, and no new swap is taken while
                                 // one is waiting, so a buffer is never freed
                                 // on this thread.
-                                if let Some(old) = retiring.take() {
-                                    match audio_retired.try_lock() {
-                                        Ok(mut slot) if slot.is_none() => *slot = Some(old),
-                                        _ => retiring = Some(old),
+                                if retiring.iter().any(Option::is_some) {
+                                    if let Ok(mut slot) = audio_retired.try_lock() {
+                                        if slot.iter().all(Option::is_none) {
+                                            *slot = std::mem::take(&mut retiring);
+                                        }
                                     }
                                 }
 
                                 // Locks on this thread are only ever tried,
                                 // never waited on. If the UI holds one this
                                 // block, the hand-off happens on the next.
-                                if retiring.is_none() {
+                                // Each generator's source swaps on its own.
+                                if retiring.iter().all(Option::is_none) {
                                     if let Ok(mut pending) = audio_swap.try_lock() {
-                                        if let Some(buf) = pending.take() {
-                                            retiring = Some(engine.set_source(buf));
+                                        for g in Generator::ALL {
+                                            if let Some(buf) = pending[g.index()].take() {
+                                                retiring[g.index()] =
+                                                    Some(engine.swap_source(g, buf));
+                                            }
                                         }
                                     }
                                 }
@@ -1334,6 +1424,9 @@ fn build_audio() -> Result<Audio, String> {
                                 }
                                 // The tracker, once a block, as the bank is.
                                 engine.set_steps(audio_steps.load());
+                                // How each generator reads its material, the same way.
+                                let (player, grain) = audio_readings.load();
+                                engine.set_readings(player, grain);
                                 engine.process_block(&mut scratch[..needed], &audio_bank);
                                 engine.publish_heard(&audio_bank, &audio_heard);
 
@@ -1415,6 +1508,13 @@ fn build_audio() -> Result<Audio, String> {
         .recv()
         .map_err(|_| "the audio thread died during startup".to_string())??;
 
+    // A new document plays the built-in drone through both generators, and
+    // lists it, so nothing sounds that the pool does not show (Georg,
+    // 2026-09-15). The engine above starts on the same drone.
+    let drone = Arc::new(source::startup_drone(sample_rate));
+    let pool = materials::Pool::with_drone();
+    let drone_id = pool.wires.material.expect("a new pool wires the drone");
+
     Ok(Audio {
         bank,
         heard,
@@ -1431,9 +1531,12 @@ fn build_audio() -> Result<Audio, String> {
         play_request,
         steps,
         tracker: Mutex::new(tracker::Tracker::default()),
-        materials: Mutex::new(materials::Pool::default()),
-        decoded: Mutex::new(std::collections::HashMap::new()),
-        source: Mutex::new(Arc::new(source::startup_drone(sample_rate))),
+        materials: Mutex::new(pool),
+        decoded: Mutex::new([(drone_id, Arc::clone(&drone))].into()),
+        drone,
+        // The engine starts with the drone in both generators, as the pool does.
+        feeding: Mutex::new([Some(drone_id); 2]),
+        readings,
         presets: Mutex::new(presets::Presets::default()),
         modulation: Mutex::new(modulation::Modulation::default()),
         swap,
@@ -1486,11 +1589,13 @@ pub fn run() {
             envelope_curve,
             save_patch,
             load_patch,
-            source_info,
+            material_wave,
             materials,
             add_material,
-            select_material,
             remove_material,
+            add_drone,
+            wire_material,
+            set_material,
             grain_log,
             audition_grain,
             preset_names,
@@ -1622,12 +1727,24 @@ mod tests {
         }
 
         let mut pool = materials::Pool::default();
-        pool.add("x.wav", "/nowhere/x.wav");
+        let id = pool.add("x.wav", "/nowhere/x.wav");
+        pool.wire(Generator::Grain, Some(id)).unwrap();
         let view = serde_json::to_value(MaterialsView::of(&pool)).expect("MaterialsView");
-        for key in ["materials", "active"] {
+        for key in ["materials", "wires"] {
             assert!(view.get(key).is_some(), "MaterialsView lost `{key}`");
         }
-        for key in ["id", "name", "path", "missing"] {
+        for key in ["material", "grain"] {
+            assert!(view["wires"].get(key).is_some(), "Wires lost `{key}`");
+        }
+        for key in [
+            "id",
+            "name",
+            "path",
+            "missing",
+            "octave",
+            "trim_start",
+            "trim_end",
+        ] {
             assert!(
                 view["materials"][0].get(key).is_some(),
                 "MaterialView lost `{key}`"

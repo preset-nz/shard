@@ -18,6 +18,7 @@ use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::{OnePole, Ramp};
+use crate::sources::{Generator, Reading};
 use crate::steps::{StepClock, StepParams};
 
 /// Resolved indices into the parameter table, looked up once at construction
@@ -32,7 +33,6 @@ struct Slots {
     pan: usize,
     reverse: usize,
     window: usize,
-    octave: usize,
     ring_freq: usize,
     ring_mix: usize,
     crush_bits: usize,
@@ -62,8 +62,6 @@ struct Slots {
     limit: usize,
     ceiling: usize,
     env_on: usize,
-    trim_start: usize,
-    trim_end: usize,
     env_mix: usize,
     env_attack: usize,
     env_decay: usize,
@@ -93,7 +91,6 @@ impl Slots {
             pan: at("grain.pan"),
             reverse: at("grain.reverse"),
             window: at("grain.window"),
-            octave: at("material.octave"),
             ring_freq: at("ring.freq"),
             ring_mix: at("ring.mix"),
             crush_bits: at("crush.bits"),
@@ -123,8 +120,6 @@ impl Slots {
             limit: at("amp.limit"),
             ceiling: at("amp.ceiling"),
             env_on: at("env.on"),
-            trim_start: at("trim.start"),
-            trim_end: at("trim.end"),
             env_mix: at("env.mix"),
             env_attack: at("env.attack"),
             env_decay: at("env.decay"),
@@ -197,7 +192,13 @@ impl Fades {
 }
 
 pub struct Engine {
-    source: Vec<f32>,
+    /// What plain playback reads, and what the cloud reads. Each generator
+    /// has its own material (Georg, 2026-09-15); they may be the same file.
+    player_source: Vec<f32>,
+    grain_source: Vec<f32>,
+    /// How each reads it: which part, at what octave. See `set_readings`.
+    player_reading: Reading,
+    grain_reading: Reading,
     player: Player,
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
@@ -290,7 +291,10 @@ impl Engine {
         granular.set_log(Arc::clone(&log));
 
         Self {
-            source: Vec::new(),
+            player_source: Vec::new(),
+            grain_source: Vec::new(),
+            player_reading: Reading::default(),
+            grain_reading: Reading::default(),
             player: Player::new(sample_rate),
             playing: false,
             granular,
@@ -320,25 +324,50 @@ impl Engine {
         }
     }
 
-    /// Replace the source material and hand back the old buffer.
+    /// Replace one generator's material and hand back the old buffer.
     ///
     /// Safe on the audio thread at a block boundary, because nothing here
     /// touches the allocator: the new buffer arrives already built, and the
     /// old one is returned rather than dropped. Freeing it takes the
     /// allocator's lock just as building it did, so the caller passes it to a
     /// thread that is allowed to block. Never from inside `process_block`.
-    pub fn set_source(&mut self, samples: Vec<f32>) -> Vec<f32> {
-        let old = std::mem::replace(&mut self.source, samples);
-        self.granular.clear();
-        self.auditioning = false;
-        self.player.rewind();
-        self.tail_left = 0.0;
-        old
+    ///
+    /// Each generator reads its own material (Georg, 2026-09-15), so swapping
+    /// one leaves the other playing: a new source for the player restarts its
+    /// pass, and one for the cloud clears its grains.
+    pub fn swap_source(&mut self, which: Generator, samples: Vec<f32>) -> Vec<f32> {
+        match which {
+            Generator::Player => {
+                self.player.rewind();
+                self.tail_left = 0.0;
+                std::mem::replace(&mut self.player_source, samples)
+            }
+            Generator::Grain => {
+                self.granular.clear();
+                self.auditioning = false;
+                std::mem::replace(&mut self.grain_source, samples)
+            }
+        }
+    }
+
+    /// Both generators read `samples`. For tests, the CLI and startup: it
+    /// copies the buffer and frees the old ones, so never on the audio thread.
+    pub fn set_source(&mut self, samples: Vec<f32>) {
+        drop(self.swap_source(Generator::Grain, samples.clone()));
+        drop(self.swap_source(Generator::Player, samples));
+    }
+
+    /// How each generator reads its material: which part, at what octave.
+    /// Handed in once a block, as the steps are. The values belong to the
+    /// materials rather than to the patch, so they are not in the bank.
+    pub fn set_readings(&mut self, player: Reading, grain: Reading) {
+        self.player_reading = player;
+        self.grain_reading = grain;
     }
 
     /// Swap in a new set of LFOs and links, and hand back the old one.
     ///
-    /// The same contract as `set_source`: built on the command thread, swapped
+    /// The same contract as `swap_source`: built on the command thread, swapped
     /// at a block boundary, and the old set dropped anywhere but here. LFOs in
     /// both sets keep running, matched by id, so adding an LFO or changing a
     /// rate never restarts the others.
@@ -376,7 +405,7 @@ impl Engine {
             return false;
         }
         self.granular.clear();
-        self.auditioning = self.granular.trigger(spawn, self.source.len());
+        self.auditioning = self.granular.trigger(spawn, self.grain_source.len());
         self.auditioning
     }
 
@@ -425,7 +454,7 @@ impl Engine {
         // Split the borrows by field so the grain pool can be advanced while
         // the source is read.
         let granular = &mut self.granular;
-        let source = &self.source;
+        let source = &self.grain_source;
         let mut peak = self.peak;
 
         for frame in out.chunks_mut(2) {
@@ -475,21 +504,6 @@ impl Engine {
         self.playing = playing;
     }
 
-    /// The trimmed window, as indices into the source. Always at least two
-    /// samples wide, and always ordered, however the two controls are set.
-    fn trim_range(&self, bank: &ParamBank) -> (usize, usize) {
-        let n = self.source.len();
-        if n < 2 {
-            return (0, n);
-        }
-        let a = read(&self.mods, bank, self.slots.trim_start).clamp(0.0, 1.0);
-        let b = read(&self.mods, bank, self.slots.trim_end).clamp(0.0, 1.0);
-        let (a, b) = if a <= b { (a, b) } else { (b, a) };
-        let lo = ((a * n as f32) as usize).min(n - 2);
-        let hi = ((b * n as f32) as usize).clamp(lo + 2, n);
-        (lo, hi)
-    }
-
     /// Where plain playback has reached, 0 to 1 across the *whole* source, so
     /// the drawn playhead lines up with the drawn waveform rather than with
     /// the trimmed window.
@@ -497,8 +511,12 @@ impl Engine {
         self.trimmed_play_position
     }
 
-    pub fn source_len(&self) -> usize {
-        self.source.len()
+    /// How long one generator's material is, in samples.
+    pub fn source_len(&self, which: Generator) -> usize {
+        match which {
+            Generator::Player => self.player_source.len(),
+            Generator::Grain => self.grain_source.len(),
+        }
     }
 
     pub fn sample_rate(&self) -> f32 {
@@ -682,19 +700,22 @@ impl Engine {
         // Varispeed, so an octave up also halves the pass. The envelopes run
         // on the player's position, so they follow the sample, not the clock:
         // an attack drawn over the first bar of the waveform stays there.
-        let octave = read(&self.mods, bank, self.slots.octave)
-            .round()
-            .clamp(-2.0, 2.0);
-        let read_ratio = octave.exp2();
-        let octave_semis = 12.0 * octave;
+        //
+        // Each generator reads its own material, through that material's
+        // octave and trim (Georg, 2026-09-15), handed in by `set_readings`.
+        let read_ratio = self.player_reading.octaves().exp2();
+        let grain_semis = 12.0 * self.grain_reading.octaves();
 
-        let (lo, hi) = self.trim_range(bank);
-        // The cloud only sees the slice, so it has to be told where the slice
+        let (lo, hi) = self.player_reading.window(self.player_source.len());
+        let (grain_lo, grain_hi) = self.grain_reading.window(self.grain_source.len());
+        // The cloud only sees its slice, so it has to be told where the slice
         // is before it logs a spawn — otherwise every drawn mark would sit at
         // the wrong place the moment the trim moved off zero.
-        self.granular.set_source_window(lo, self.source.len());
-        let source = &self.source[lo..hi];
-        let span = self.source.len().max(1) as f32;
+        self.granular
+            .set_source_window(grain_lo, self.grain_source.len());
+        let source = &self.player_source[lo..hi];
+        let grain_source = &self.grain_source[grain_lo..grain_hi];
+        let span = self.player_source.len().max(1) as f32;
         let window_len = source.len() as f32;
 
         let mut p = target;
@@ -732,7 +753,7 @@ impl Engine {
             p.density = self.smooth.density.process(target.density);
             // Added after smoothing: the octave is stepped and lands at once.
             // So is the step's pitch, which belongs to the pass.
-            p.pitch = self.smooth.pitch.process(target.pitch) + octave_semis + self.pass_semis;
+            p.pitch = self.smooth.pitch.process(target.pitch) + grain_semis + self.pass_semis;
             p.pitch_spread = self.smooth.spread.process(target.pitch_spread);
             p.pan_spread = self.smooth.pan.process(target.pan_spread);
             p.speed = self.smooth.speed.process(speed_target);
@@ -769,7 +790,7 @@ impl Engine {
             // Off means off. Once the fade has landed the cloud's contribution
             // is already an exact zero, so it is not run at all.
             let (gl, gr) = if grain_on > 0.0 {
-                self.granular.process(source, &p)
+                self.granular.process(grain_source, &p)
             } else {
                 (0.0, 0.0)
             };
@@ -932,6 +953,53 @@ mod tests {
             peak = peak.max(out.iter().fold(0.0f32, |a, s| a.max(s.abs())));
         }
         assert!(peak > 0.01, "peak was {peak}");
+    }
+
+    #[test]
+    fn each_generator_reads_its_own_material() {
+        // Sample and Granular wired to different materials (Georg,
+        // 2026-09-15). Silence in one and a tone in the other shows which
+        // generator reads which.
+        let peak = |player: Vec<f32>, grain: Vec<f32>, material_on: f32, grain_on: f32| {
+            let mut e = Engine::new(48_000.0, 128);
+            drop(e.swap_source(Generator::Player, player));
+            drop(e.swap_source(Generator::Grain, grain));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "material.on", material_on);
+            set(&bank, "grain.on", grain_on);
+            set(&bank, "grain.gain", 1.0);
+            let mut out = vec![0.0; 512];
+            let mut peak = 0.0f32;
+            for block in 0..200 {
+                e.process_block(&mut out, &bank);
+                // Measured once the switches have landed: Sample starts on and
+                // takes its 10 ms to fade out, which is not a routing fault.
+                if block >= 20 {
+                    peak = peak.max(out.iter().fold(0.0f32, |a, s| a.max(s.abs())));
+                }
+            }
+            peak
+        };
+        let silence = || vec![0.0; 48_000];
+        assert!(
+            peak(tone(48_000), silence(), 1.0, 0.0) > 0.01,
+            "the player should read its own material"
+        );
+        assert!(
+            peak(silence(), tone(48_000), 0.0, 1.0) > 0.01,
+            "the cloud should read its own material"
+        );
+        assert_eq!(
+            peak(tone(48_000), silence(), 0.0, 1.0),
+            0.0,
+            "the cloud heard the player's material"
+        );
+        assert_eq!(
+            peak(silence(), tone(48_000), 1.0, 0.0),
+            0.0,
+            "the player heard the cloud's material"
+        );
     }
 
     #[test]
@@ -1569,8 +1637,12 @@ mod tests {
             e.set_source(src.clone());
             e.set_playing(true);
             let bank = ParamBank::new();
-            bank.set_by_id("trim.start", lo);
-            bank.set_by_id("trim.end", hi);
+            let window = Reading {
+                trim_start: lo,
+                trim_end: hi,
+                ..Reading::default()
+            };
+            e.set_readings(window, window);
             bank.set_by_id("grain.on", 0.0);
             bank.set_by_id("amp.gain", 1.0);
             let mut out = vec![0.0; 512];
@@ -1609,8 +1681,12 @@ mod tests {
             (0.0, 0.0),
             (0.3, 0.3001),
         ] {
-            bank.set_by_id("trim.start", lo);
-            bank.set_by_id("trim.end", hi);
+            let window = Reading {
+                trim_start: lo,
+                trim_end: hi,
+                ..Reading::default()
+            };
+            e.set_readings(window, window);
             for _ in 0..50 {
                 e.process_block(&mut out, &bank);
                 for s in &out {
@@ -1810,8 +1886,15 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
-        set(&bank, "trim.start", 0.5);
-        set(&bank, "trim.end", 0.6);
+        // Only the cloud's window moves, which is the one its marks must honour.
+        e.set_readings(
+            Reading::default(),
+            Reading {
+                trim_start: 0.5,
+                trim_end: 0.6,
+                ..Reading::default()
+            },
+        );
         set(&bank, "grain.position", 0.5);
         set(&bank, "grain.jitter", 0.0);
         set(&bank, "grain.gain", 1.0);
@@ -2087,7 +2170,13 @@ mod tests {
             e.set_playing(true);
             let bank = ParamBank::new();
             set(&bank, "grain.on", 0.0);
-            set(&bank, "material.octave", octave);
+            e.set_readings(
+                Reading {
+                    octave,
+                    ..Reading::default()
+                },
+                Reading::default(),
+            );
             let mut out = vec![0.0; 512];
             e.process_block(&mut out, &bank);
             let start = e.play_position();
@@ -2118,7 +2207,13 @@ mod tests {
             set(&bank, "grain.gain", 1.0);
             set(&bank, "grain.on", 1.0);
             set(&bank, "grain.density", 40.0);
-            set(&bank, "material.octave", octave);
+            e.set_readings(
+                Reading::default(),
+                Reading {
+                    octave,
+                    ..Reading::default()
+                },
+            );
             let mut out = vec![0.0; 512];
             // About a second.
             for _ in 0..94 {

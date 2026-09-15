@@ -11,7 +11,10 @@ use std::hint::black_box;
 use std::sync::Mutex;
 
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
-use shard_dsp::{Engine, GrainSpawn, LfoSpec, ModSet, ParamBank, Shape, StepParams, Taper, PARAMS};
+use shard_dsp::{
+    Engine, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape, StepParams, Taper,
+    PARAMS,
+};
 
 #[global_allocator]
 static GUARD: GuardedAlloc = GuardedAlloc;
@@ -51,12 +54,28 @@ fn the_guard_catches_an_allocation_and_its_free() {
 fn a_block_never_touches_the_allocator() {
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(96_000));
+    // The cloud reads a different material from the player.
+    drop(e.swap_source(Generator::Grain, tone(30_000)));
     e.set_playing(true);
     let bank = ParamBank::new();
     let mut out = vec![0.0f32; 2048];
 
     for block in 0..2_000 {
         sweep(&bank, block);
+        // Each generator's reading across its range too, ends crossed and all.
+        let t = |k: usize| ((block * k) % 97) as f32 / 96.0;
+        e.set_readings(
+            Reading {
+                octave: t(5) * 4.0 - 2.0,
+                trim_start: t(7),
+                trim_end: t(11),
+            },
+            Reading {
+                octave: t(13) * 4.0 - 2.0,
+                trim_start: t(17),
+                trim_end: t(19),
+            },
+        );
         // Devices do not promise a fixed block size, so neither does this.
         let n = [64, 256, 512, 2048][block % 4];
         let ((), caught) = no_alloc(|| e.process_block(&mut out[..n], &bank));
@@ -223,14 +242,20 @@ fn the_callback_hand_offs_never_touch_the_allocator() {
     // test on 2026-09-13 (Rust 1.96), when an unprimed pair caught exactly two
     // calls. So the app locks every slot once before the stream starts, and
     // this holds that a primed slot is then free to hand off from.
-    let swap: Mutex<Option<Vec<f32>>> = Mutex::new(Some(tone(1_000)));
-    let retired: Mutex<Option<Vec<f32>>> = Mutex::new(None);
+    //
+    // One slot per generator, as the app holds them: a source for the player,
+    // a source for the cloud, or both.
+    let swap: Mutex<[Option<Vec<f32>>; 2]> = Mutex::new([Some(tone(1_000)), Some(tone(500))]);
+    let retired: Mutex<[Option<Vec<f32>>; 2]> = Mutex::new([None, None]);
     drop(swap.lock());
     drop(retired.lock());
 
     let ((), caught) = no_alloc(|| {
-        let taken = swap.try_lock().ok().and_then(|mut slot| slot.take());
-        if let Ok(mut slot) = retired.try_lock() {
+        let taken = swap
+            .try_lock()
+            .ok()
+            .map(|mut slot| std::mem::take(&mut *slot));
+        if let (Ok(mut slot), Some(taken)) = (retired.try_lock(), taken) {
             *slot = taken;
         }
     });
@@ -238,14 +263,11 @@ fn the_callback_hand_offs_never_touch_the_allocator() {
         caught, 0,
         "a hand-off touched the allocator {caught} time(s)"
     );
-    assert_eq!(
-        retired
-            .lock()
-            .map(|s| s.as_ref().map(Vec::len))
-            .ok()
-            .flatten(),
-        Some(1_000)
-    );
+    let lens = retired
+        .lock()
+        .map(|s| s.each_ref().map(|b| b.as_ref().map(Vec::len)))
+        .ok();
+    assert_eq!(lens, Some([Some(1_000), Some(500)]));
 }
 
 #[test]
@@ -307,17 +329,24 @@ fn handing_a_modulation_set_across_never_touches_the_allocator() {
 }
 
 #[test]
-fn swapping_the_source_hands_the_old_buffer_back_instead_of_freeing_it() {
+fn swapping_a_source_hands_the_old_buffer_back_instead_of_freeing_it() {
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(48_000));
-    let next = tone(24_000);
 
-    let (old, caught) = no_alloc(|| e.set_source(next));
-    assert_eq!(caught, 0, "the swap freed something on the audio thread");
+    for (which, len) in [(Generator::Player, 24_000), (Generator::Grain, 12_000)] {
+        let next = tone(len);
+        let (old, caught) = no_alloc(|| e.swap_source(which, next));
+        assert_eq!(caught, 0, "the swap freed something on the audio thread");
+        assert_eq!(
+            old.len(),
+            48_000,
+            "the old buffer should come back to the caller"
+        );
+        assert_eq!(e.source_len(which), len);
+    }
     assert_eq!(
-        old.len(),
-        48_000,
-        "the old buffer should come back to the caller"
+        e.source_len(Generator::Player),
+        24_000,
+        "swapping the cloud's source must leave the player's alone"
     );
-    assert_eq!(e.source_len(), 24_000);
 }

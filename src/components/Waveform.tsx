@@ -30,6 +30,7 @@ export function Waveform({
   peaks,
   position,
   jitter,
+  showGrain = true,
   playhead,
   trimStart,
   trimEnd,
@@ -47,6 +48,11 @@ export function Waveform({
   position: number;
   /** Grain jitter, also a fraction of the trimmed window. */
   jitter: number;
+  /**
+   * Whether to draw the grain read position and its jitter band. Only over
+   * the material the cloud reads; over any other they point at nothing.
+   */
+  showGrain?: boolean;
   /** Plain playback's position, already in whole-file terms. */
   playhead: number | null;
   trimStart: number;
@@ -139,7 +145,7 @@ export function Waveform({
     const jitterSpan = jitter * span;
 
     // Jitter band first, so the position line sits on top of it.
-    if (jitterSpan > 0.001) {
+    if (showGrain && jitterSpan > 0.001) {
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.15;
       const a = Math.max(lo, grainX - jitterSpan) * w;
@@ -207,16 +213,19 @@ export function Waveform({
     }
 
     // The grain read position, on top.
-    ctx.strokeStyle = accent;
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.moveTo(grainX * w, 0);
-    ctx.lineTo(grainX * w, h);
-    ctx.stroke();
+    if (showGrain) {
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(grainX * w, 0);
+      ctx.lineTo(grainX * w, h);
+      ctx.stroke();
+    }
   }, [
     peaks,
     position,
     jitter,
+    showGrain,
     playhead,
     trimStart,
     trimEnd,

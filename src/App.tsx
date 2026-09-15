@@ -1,6 +1,7 @@
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  addDrone,
   addLfo,
   addMaterial,
   auditionGrain,
@@ -21,9 +22,11 @@ import {
   loadPatch,
   type MappingsView,
   type MaterialsView,
+  type MaterialView,
   type Meters,
   type ModulationView,
   mapMidi,
+  materialWave,
   type ParamInfo,
   paramDefs,
   mappings as readMappings,
@@ -34,14 +37,14 @@ import {
   removeMaterial,
   type SourceInfo,
   savePatch,
-  selectMaterial,
   setLfo,
+  setMaterial,
   setParam,
   setPlaying,
   setTracker,
-  sourceInfo,
   type Tracker,
   unlinkParam,
+  wireMaterial,
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Inspector } from '@/components/Inspector';
@@ -93,9 +96,13 @@ type Mode = (typeof MODES)[number]['id'];
 export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
   const [values, setValues] = useState<ParamValues>({});
-  const [source, setSource] = useState<SourceInfo | null>(null);
-  /** The material pool, as Rust last answered with it. */
-  const [pool, setPool] = useState<MaterialsView>({ materials: [], active: null });
+  /** The material pool and what each generator reads, as Rust last answered. */
+  const [pool, setPool] = useState<MaterialsView>({
+    materials: [],
+    wires: { material: null, grain: null },
+  });
+  /** Waveforms by material id, each fetched once. */
+  const [waves, setWaves] = useState<Record<number, SourceInfo>>({});
   const [meter, setMeter] = useState<Meters>({
     peak: 0,
     reduction: 1,
@@ -192,7 +199,6 @@ export default function App() {
           next[p.id] = v[i];
         });
         setValues(next);
-        setSource(await sourceInfo());
         setPool(await readMaterials());
         setMod(await readModulation());
         setLimits(await lfoLimits());
@@ -264,9 +270,11 @@ export default function App() {
     };
   }, [defs]);
 
-  // Refetch the curve only when an envelope or trim control actually moves.
-  // Polling it thirty times a second would be free but pointless; this way
-  // the drawn curve is the one Rust computes, not a copy of the maths.
+  // Refetch the curve only when an envelope control or Sample's material
+  // actually moves. Polling it thirty times a second would be free but
+  // pointless; this way the drawn curve is the one Rust computes, not a copy
+  // of the maths.
+  const playerMaterial = pool.materials.find((m) => m.id === pool.wires.material) ?? null;
   const envKey = [
     values['env.on'],
     values['env.mix'],
@@ -274,8 +282,9 @@ export default function App() {
     values['env.decay'],
     values['env.sustain'],
     values['env.release'],
-    values['trim.start'],
-    values['trim.end'],
+    pool.wires.material,
+    playerMaterial?.trim_start,
+    playerMaterial?.trim_end,
   ].join(',');
   // envKey is the trigger, not an input: the command reads the values on the
   // Rust side, so nothing in this effect references them, but it still has to
@@ -293,6 +302,41 @@ export default function App() {
       alive = false;
     };
   }, [defs, envKey]);
+
+  // What the waveform shows follows the selection (Georg, 2026-09-15): a
+  // material picked in the tree, else the one wired into the selected
+  // generator, else Sample's.
+  const shownFor = selection?.kind === 'node' && selection.id === 'grain' ? 'Granular' : 'Sample';
+  const shownId: number | null =
+    selection?.kind === 'material'
+      ? selection.id
+      : shownFor === 'Granular'
+        ? pool.wires.grain
+        : pool.wires.material;
+  const shownRecord = pool.materials.find((m) => m.id === shownId) ?? null;
+  const shownWave = shownId === null ? null : (waves[shownId] ?? null);
+  const shownIsPlayer = shownId !== null && shownId === pool.wires.material;
+  const shownIsGrain = shownId !== null && shownId === pool.wires.grain;
+  const readers = [shownIsPlayer ? 'Sample' : null, shownIsGrain ? 'Granular' : null].filter(
+    (r): r is string => r !== null,
+  );
+
+  // Each waveform is fetched once. Ids are never reused within a document,
+  // and opening a document clears the lot.
+  useEffect(() => {
+    if (shownId === null || waves[shownId]) return;
+    let alive = true;
+    materialWave(shownId)
+      .then((w) => {
+        if (alive) setWaves((prev) => ({ ...prev, [shownId]: w }));
+      })
+      .catch(() => {
+        // A material whose file could not be read has no waveform to draw.
+      });
+    return () => {
+      alive = false;
+    };
+  }, [shownId, waves]);
 
   /**
    * The tape brake — a finger on the reel, not a mute.
@@ -354,7 +398,7 @@ export default function App() {
       if (typeof path !== 'string') return;
       const report = await loadPatch(path);
       setPatchName(path.split('/').pop() ?? path);
-      setSource(await sourceInfo());
+      setWaves({});
       setPool(await readMaterials());
       setMod(await readModulation());
       // The document's tracker replaces the one on screen, and no answer to
@@ -392,18 +436,43 @@ export default function App() {
     }
   }, [setMode]);
 
-  /** Run one material command, then draw the pool and the sample now playing. */
+  /** Run one material command, and draw the pool Rust answers with. */
   const editMaterials = useCallback(async (run: () => Promise<MaterialsView>) => {
     try {
       setPool(await run());
-      setSource(await sourceInfo());
       setError(null);
     } catch (e) {
       setError(String(e));
     }
   }, []);
 
-  /** Add one or more WAVs to the pool. The last one that loads plays. */
+  /** Wire a material into Sample (`material`) or Granular (`grain`), or nothing. */
+  const wire = useCallback(
+    (node: string, material: number | null) =>
+      void editMaterials(() => wireMaterial(node, material)),
+    [editMaterials],
+  );
+
+  /**
+   * A material's octave or trim. Shown at once, then as Rust answers. Only
+   * the newest answer lands, or a slow one would undo a quicker drag.
+   */
+  const materialSeq = useRef(0);
+  const changeMaterial = useCallback(async (m: MaterialView) => {
+    setPool((prev) => ({
+      ...prev,
+      materials: prev.materials.map((x) => (x.id === m.id ? m : x)),
+    }));
+    const seq = ++materialSeq.current;
+    try {
+      const view = await setMaterial(m.id, m.octave, m.trim_start, m.trim_end);
+      if (seq === materialSeq.current) setPool(view);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  /** Add one or more WAVs to the pool. A silent generator reads the first. */
   const pickFiles = useCallback(async () => {
     try {
       const picked = await open({
@@ -420,10 +489,7 @@ export default function App() {
           failed.push(String(e));
         }
       }
-      if (view) {
-        setPool(view);
-        setSource(await sourceInfo());
-      }
+      if (view) setPool(view);
       setError(failed.length > 0 ? failed.join(' · ') : null);
     } catch (e) {
       setError(String(e));
@@ -612,10 +678,7 @@ export default function App() {
           ))}
         </fieldset>
         <span className="text-sm font-semibold tracking-tight">Shard</span>
-        <span className="text-xs text-muted-foreground">
-          {patchName ? `${patchName} — ` : ''}
-          {source ? `${source.name} · ${source.seconds.toFixed(1)}s` : 'loading'}
-        </span>
+        <span className="text-xs text-muted-foreground">{patchName ?? 'Untitled'}</span>
         <div className="flex-1" />
         <button
           type="button"
@@ -670,17 +733,18 @@ export default function App() {
           <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
             <MaterialTree
               pool={pool}
-              inspecting={selection?.kind === 'node' && selection.id === 'source'}
-              onSelect={(id) =>
+              selected={selection?.kind === 'material' ? selection.id : null}
+              onSelect={(id) => select({ kind: 'material', id })}
+              onAdd={() => void pickFiles()}
+              onAddDrone={() => void editMaterials(addDrone)}
+              onRemove={(id) =>
                 void editMaterials(async () => {
-                  const view = await selectMaterial(id);
-                  // Show what it plays with: its octave and trim.
-                  select({ kind: 'node', id: 'source' });
+                  const view = await removeMaterial(id);
+                  const now = useSelection.getState().selection;
+                  if (now?.kind === 'material' && now.id === id) clear();
                   return view;
                 })
               }
-              onAdd={() => void pickFiles()}
-              onRemove={(id) => void editMaterials(() => removeMaterial(id))}
             />
             <ModulatorTree
               lfos={mod.lfos}
@@ -715,21 +779,24 @@ export default function App() {
         )}
 
         <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
-          {/* The material's title selects it: trim and octave, which every
-              generator reads. The waveform itself stays the trim and grain
-              control. */}
+          {/* The waveform follows the selection. Its title selects the
+              material shown, for its octave and trim. The playhead and the
+              envelope are drawn only over Sample's material, and the grains
+              only over Granular's. */}
           <div className="-mb-2 flex items-baseline gap-2">
             <button
               type="button"
+              disabled={shownId === null}
               onMouseDown={(e) => e.preventDefault()}
               onClick={() => {
+                if (shownId === null) return;
                 // Editing lives in sound scaping, where the inspector is.
-                select({ kind: 'node', id: 'source' });
+                select({ kind: 'material', id: shownId });
                 setMode('soundscape');
               }}
-              title="Show the material's trim and octave"
+              title="Show this material's octave and trim"
               className={`text-[11px] font-semibold uppercase tracking-wider ${
-                selection?.kind === 'node' && selection.id === 'source'
+                selection?.kind === 'material' && selection.id === shownId
                   ? 'text-primary'
                   : 'text-muted-foreground hover:text-foreground'
               }`}
@@ -737,26 +804,36 @@ export default function App() {
               Material
             </button>
             <span className="truncate text-xs text-muted-foreground">
-              {source ? `${source.name} · ${source.seconds.toFixed(1)}s` : ''}
+              {shownRecord
+                ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
+                    readers.length > 0 ? `read by ${readers.join(' and ')}` : 'not wired'
+                  }`
+                : `Nothing is wired into ${shownFor}`}
             </span>
           </div>
           <Waveform
-            peaks={source?.peaks ?? []}
+            peaks={shownWave?.peaks ?? []}
             position={values['grain.position'] ?? 0}
             jitter={values['grain.jitter'] ?? 0}
-            playhead={meter.playing ? meter.playhead : null}
-            trimStart={values['trim.start'] ?? 0}
-            trimEnd={values['trim.end'] ?? 1}
-            envelope={envelope}
-            grains={grains}
+            showGrain={shownIsGrain}
+            playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
+            trimStart={shownRecord?.trim_start ?? 0}
+            trimEnd={shownRecord?.trim_end ?? 1}
+            envelope={shownIsPlayer ? envelope : null}
+            grains={shownIsGrain ? grains : []}
             newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
             selected={picked}
-            totalSamples={source ? Math.round(source.seconds * source.sample_rate) : 0}
+            totalSamples={shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0}
             // Stopped or frozen, the waveform is an inspector; playing, it is
             // still the trim control it has always been.
-            inspecting={grains.length > 0 && (frozen || !meter.playing)}
+            inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
             onTrim={(which, v) => {
-              void setParam(`trim.${which}`, v);
+              if (!shownRecord) return;
+              void changeMaterial(
+                which === 'start'
+                  ? { ...shownRecord, trim_start: v }
+                  : { ...shownRecord, trim_end: v },
+              );
             }}
             onPickGrain={(g) => {
               if (g) void doAudition(g);
@@ -815,6 +892,8 @@ export default function App() {
                   node={node}
                   defs={defs}
                   values={values}
+                  pool={pool}
+                  onWire={wire}
                   selected={false}
                   onSelect={() => {
                     select({ kind: 'node', id: node.id });
@@ -848,6 +927,8 @@ export default function App() {
                       node={node}
                       defs={defs}
                       values={values}
+                      pool={pool}
+                      onWire={wire}
                       selected={selection?.kind === 'node' && selection.id === node.id}
                       onSelect={() => select({ kind: 'node', id: node.id })}
                       onError={setError}
@@ -867,7 +948,7 @@ export default function App() {
               selected={picked}
               playing={meter.playing}
               auditioning={meter.auditioning}
-              sampleRate={source?.sample_rate ?? 48000}
+              sampleRate={shownWave?.sample_rate ?? 48000}
               onFreeze={setFrozen}
               onClear={() => {
                 setGrains([]);
@@ -886,6 +967,9 @@ export default function App() {
                 defs={defs}
                 values={values}
                 ctx={panelCtx}
+                pool={pool}
+                onWire={wire}
+                onMaterialChange={(m) => void changeMaterial(m)}
                 limits={limits}
                 linkedCounts={linkedCounts}
                 onSelect={select}

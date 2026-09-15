@@ -28,7 +28,7 @@ use shard_dsp::params::PARAMS;
 use shard_dsp::ParamBank;
 
 use crate::mapping::MapRef;
-use crate::materials::{Pool, MATERIAL_PARAMS};
+use crate::materials::{Pool, Wires};
 use crate::modulation::{Modulation, Refused};
 use crate::presets::Presets;
 use crate::tracker::Tracker;
@@ -56,10 +56,10 @@ pub struct Document {
 pub struct Patch {
     /// Parameter values by id. A map, not a list, so order never matters.
     pub params: BTreeMap<String, f32>,
-    /// The material in the document's pool this patch plays, by id. Its
-    /// octave and trim rest on the material, not here.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub material: Option<u64>,
+    /// Which material in the document's pool each generator reads, by id.
+    /// Octave and trim rest on the materials, not here.
+    #[serde(default, skip_serializing_if = "Wires::is_empty")]
+    pub wires: Wires,
     /// Node presets, by node and then by name. Document data, so they travel
     /// with the patch. See `presets.rs`.
     #[serde(default, skip_serializing_if = "Presets::is_empty")]
@@ -121,16 +121,14 @@ impl Document {
 }
 
 impl Patch {
-    /// Every value but the material's own rows, which the pool saves.
-    pub fn capture(bank: &ParamBank, material: Option<u64>) -> Self {
+    pub fn capture(bank: &ParamBank, wires: Wires) -> Self {
         Self {
             params: PARAMS
                 .iter()
                 .enumerate()
-                .filter(|(_, p)| !MATERIAL_PARAMS.contains(&p.id))
                 .map(|(i, p)| (p.id.to_string(), bank.get(i)))
                 .collect(),
-            material,
+            wires,
             presets: Presets::default(),
             controller_map: None,
             modulation: Modulation::default(),
@@ -152,7 +150,7 @@ impl Patch {
         }
 
         for p in PARAMS {
-            if !self.params.contains_key(p.id) && !MATERIAL_PARAMS.contains(&p.id) {
+            if !self.params.contains_key(p.id) {
                 report.missing.push(p.id.to_string());
             }
         }
@@ -185,18 +183,15 @@ mod tests {
         }
         let before: Vec<f32> = (0..PARAMS.len()).map(|i| bank.get(i)).collect();
 
-        let back = round_trip(Patch::capture(&bank, None));
+        let back = round_trip(Patch::capture(&bank, Wires::default()));
 
         let fresh = ParamBank::new();
         let report = back.patch.apply(&fresh);
 
-        assert_eq!(report.applied, PARAMS.len() - MATERIAL_PARAMS.len());
+        assert_eq!(report.applied, PARAMS.len());
         assert!(report.unknown.is_empty());
         assert!(report.missing.is_empty());
         for (i, expected) in before.iter().enumerate() {
-            if MATERIAL_PARAMS.contains(&PARAMS[i].id) {
-                continue;
-            }
             assert!(
                 (fresh.get(i) - expected).abs() < 1e-6,
                 "{} was {} not {expected}",
@@ -260,12 +255,16 @@ mod tests {
     }
 
     #[test]
-    fn the_pool_and_the_patchs_material_survive_the_round_trip() {
+    fn the_pool_and_the_patchs_wires_survive_the_round_trip() {
         let bank = ParamBank::new();
         let mut pool = Pool::default();
-        pool.add("x.wav", "/tmp/x.wav");
-        let id = pool.add("y.wav", "/tmp/y.wav");
-        let mut doc = Document::new(Tracker::default(), Patch::capture(&bank, Some(id)));
+        let x = pool.add("x.wav", "/tmp/x.wav");
+        let y = pool.add("y.wav", "/tmp/y.wav");
+        let wires = Wires {
+            material: Some(x),
+            grain: Some(y),
+        };
+        let mut doc = Document::new(Tracker::default(), Patch::capture(&bank, wires));
         doc.pool = pool.clone();
         let text = doc.to_json().unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -273,27 +272,16 @@ mod tests {
             json["materials"].is_array(),
             "the pool sits beside the tracker: {text}"
         );
+        assert_eq!(json["patch"]["wires"]["grain"], y, "wires sit in the patch");
         let back = Document::from_json(&text).unwrap();
         assert_eq!(back.pool, pool);
-        assert_eq!(back.patch.material, Some(id));
-    }
-
-    #[test]
-    fn the_patch_saves_no_row_a_material_owns() {
-        let bank = ParamBank::new();
-        let patch = Patch::capture(&bank, None);
-        for key in MATERIAL_PARAMS {
-            assert!(
-                !patch.params.contains_key(key),
-                "{key} is saved in the patch"
-            );
-        }
+        assert_eq!(back.patch.wires, wires);
     }
 
     #[test]
     fn presets_travel_with_the_patch() {
         let bank = ParamBank::new();
-        let mut patch = Patch::capture(&bank, None);
+        let mut patch = Patch::capture(&bank, Wires::default());
         patch
             .presets
             .save(&bank, &Default::default(), "grain", "cloud")
@@ -309,7 +297,7 @@ mod tests {
         use crate::modulation::{LfoRecord, LinkRecord};
 
         let bank = ParamBank::new();
-        let mut patch = Patch::capture(&bank, None);
+        let mut patch = Patch::capture(&bank, Wires::default());
         patch.modulation.lfos.push(LfoRecord {
             id: 2,
             name: "wander".into(),
@@ -345,8 +333,8 @@ mod tests {
     #[test]
     fn a_patch_with_no_sample_still_loads() {
         let bank = ParamBank::new();
-        let back = round_trip(Patch::capture(&bank, None));
-        assert!(back.patch.material.is_none());
+        let back = round_trip(Patch::capture(&bank, Wires::default()));
+        assert!(back.patch.wires.is_empty());
         assert!(!back.patch.apply(&bank).sample_missing);
     }
 
@@ -363,7 +351,7 @@ mod tests {
             }],
             ..Tracker::default()
         };
-        let text = Document::new(tracker.clone(), Patch::capture(&bank, None))
+        let text = Document::new(tracker.clone(), Patch::capture(&bank, Wires::default()))
             .to_json()
             .unwrap();
         let json: serde_json::Value = serde_json::from_str(&text).unwrap();

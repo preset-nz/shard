@@ -30,6 +30,7 @@ pub mod ringmod;
 pub mod rng;
 pub mod rt;
 pub mod smooth;
+pub mod sources;
 pub mod steps;
 
 pub use crush::{Crush, CrushParams};
@@ -45,4 +46,5 @@ pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;
 pub use ringmod::{RingMod, RingModParams};
 pub use smooth::OnePole;
+pub use sources::{Generator, Reading, ReadingBank};
 pub use steps::{StepClock, StepParams};

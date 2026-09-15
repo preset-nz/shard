@@ -13,10 +13,9 @@
  *
  * **One scope per node.** A node is what the work area draws as a card and
  * the inspector shows when it is selected. Most nodes are one table prefix.
- * Material is split: trim and octave are the material every generator reads,
- * and its switch and gain are Sample, the plain-playback generator. Ids do not
- * change, being a wire format. See
- * `guidance/projects/shard/design/panel-layout.md`.
+ * The `material` prefix is Sample, the plain-playback generator; the files it
+ * and Granular read are materials, with their own octave and trim, outside the
+ * table. See `guidance/projects/shard/design/panel-layout.md`.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import {
@@ -37,8 +36,8 @@ export type Lane = 'generate' | 'process' | 'master';
 /**
  * In signal order. Generators make sound and are summed; processes shape it
  * (Georg, 2026-09-14: generators are not processes, so they get their own).
- * There is no pre-process lane: trim and octave belong to the material every
- * generator reads, and are selected from the sample above the lanes.
+ * There is no pre-process lane: trim and octave belong to each material, and
+ * are edited from the Materials tree.
  */
 export const LANES: Array<{ id: Lane; label: string }> = [
   { id: 'generate', label: 'Generators' },
@@ -49,10 +48,7 @@ export const LANES: Array<{ id: Lane; label: string }> = [
 export interface NodeInfo {
   id: string;
   label: string;
-  /**
-   * Null for a node with no card: the material, selected from the sample, and
-   * Tape, which lives in Settings.
-   */
+  /** Null for a node with no card: Tape, which lives in Settings. */
   lane: Lane | null;
   /**
    * The table prefix its switch, level and presets use, such as `grain`. Null
@@ -65,26 +61,15 @@ export interface NodeInfo {
 
 const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
 
+/**
+ * The nodes a material is wired into, by node id (Georg, 2026-09-15). Each
+ * reads its own; `src-tauri/src/materials.rs` holds the same two names.
+ */
+export const READS_MATERIAL: ReadonlySet<string> = new Set(['material', 'grain']);
+
 /** Every node, in work-area order: each lane's cards in signal order. */
 export const NODES: NodeInfo[] = [
-  // The material itself: how much of it is read, and at what octave. Both
-  // generators read through these, so they are not Sample's own. Selected from
-  // the Materials tree or the sample's title above the lanes. Each material in
-  // the pool keeps its own (`src-tauri/src/materials.rs`).
-  {
-    id: 'source',
-    label: 'Material',
-    lane: null,
-    table: null,
-    owns: (id) => under('trim')(id) || id === 'material.octave',
-  },
-  {
-    id: 'material',
-    label: 'Sample',
-    lane: 'generate',
-    table: 'material',
-    owns: (id) => under('material')(id) && id !== 'material.octave',
-  },
+  { id: 'material', label: 'Sample', lane: 'generate', table: 'material', owns: under('material') },
   { id: 'grain', label: 'Granular', lane: 'generate', table: 'grain', owns: under('grain') },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
