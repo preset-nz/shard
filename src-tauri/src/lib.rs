@@ -26,6 +26,7 @@ use shard_dsp::{Engine, GrainLog, GrainSpawn, ModSet, ParamBank};
 
 mod controllers;
 mod mapping;
+mod materials;
 mod midi;
 mod modulation;
 mod patch;
@@ -75,6 +76,8 @@ pub struct Audio {
     /// The level above the patch: tempo, swing and tracks. Saved in the same
     /// `.shard` file, above the patch.
     tracker: Mutex<tracker::Tracker>,
+    /// The material pool, and which material plays. Taken before `source`.
+    materials: Mutex<materials::Pool>,
     /// The loaded sample, kept so the UI can draw a waveform and so a reload
     /// can replace it. Swapping goes through the queue, never a lock on audio.
     source: Mutex<source::Loaded>,
@@ -361,11 +364,13 @@ fn save_patch(
     ctl: tauri::State<'_, Arc<midi::Controllers>>,
     path: String,
 ) -> Result<(), String> {
-    let sample = {
-        let s = state.source.lock().expect("source poisoned");
-        s.path.clone()
+    // The playing material's octave and trim are in the rows until now.
+    let pool = {
+        let mut pool = state.materials.lock().expect("materials poisoned");
+        pool.settle(&state.bank);
+        pool.clone()
     };
-    let mut p = patch::Patch::capture(&state.bank, sample);
+    let mut p = patch::Patch::capture(&state.bank, pool.active);
     p.presets = state.presets.lock().expect("presets poisoned").clone();
     p.modulation = state
         .modulation
@@ -384,7 +389,8 @@ fn save_patch(
             name: m.name.clone(),
         });
     let tracker = state.tracker.lock().expect("tracker poisoned").clone();
-    let doc = patch::Document::new(tracker, p);
+    let mut doc = patch::Document::new(tracker, p);
+    doc.pool = pool;
     std::fs::write(&path, doc.to_json()?).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -423,17 +429,31 @@ fn load_patch(
     report.refused = state.send_modulation(&p.modulation);
     *state.modulation.lock().expect("modulation poisoned") = p.modulation.clone();
 
-    if let Some(sample) = &p.sample_path {
-        match source::load(sample, state.sample_rate) {
-            Ok(loaded) => {
-                *state.swap.lock().expect("swap poisoned") = Some(loaded.samples.clone());
-                *state.source.lock().expect("source poisoned") = loaded;
+    // The document's pool replaces the old one, and the patch's material
+    // plays. Its octave and trim come with it even when its file has gone, so
+    // saving again keeps them.
+    let mut pool = doc.pool.clone();
+    pool.active = None;
+    match p.material.and_then(|id| pool.get(id).cloned()) {
+        Some(m) => {
+            report.sample_path = Some(m.path.clone());
+            match source::load(&m.path, state.sample_rate) {
+                Ok(loaded) => state.play_source(loaded),
+                // Not an error: the patch is still worth having. The drone
+                // plays, and the UI says which file is missing.
+                Err(_) => {
+                    report.sample_missing = true;
+                    state.play_source(source::startup_drone(state.sample_rate));
+                }
             }
-            // Not an error: the patch is still worth having with a different
-            // sample under it. The UI says which file is missing.
-            Err(_) => report.sample_missing = true,
+            pool.activate(m.id, &state.bank)?;
+        }
+        None => {
+            pool.deactivate(&state.bank);
+            state.play_source(source::startup_drone(state.sample_rate));
         }
     }
+    *state.materials.lock().expect("materials poisoned") = pool;
 
     Ok(report)
 }
@@ -599,21 +619,102 @@ fn source_info(state: tauri::State<'_, Audio>) -> SourceInfo {
     }
 }
 
-/// Decode on this thread, then hand the buffer to the audio thread through a
-/// queue. The audio thread takes it at a block boundary; it never decodes and
-/// never allocates.
+/// A material as the tree lists it.
+#[derive(Serialize)]
+pub struct MaterialView {
+    pub id: u64,
+    pub name: String,
+    pub path: String,
+    /// The file is not where the document said it was.
+    pub missing: bool,
+}
+
+/// The pool in the tree's order, and the material playing.
+#[derive(Serialize)]
+pub struct MaterialsView {
+    pub materials: Vec<MaterialView>,
+    pub active: Option<u64>,
+}
+
+impl MaterialsView {
+    fn of(pool: &materials::Pool) -> Self {
+        Self {
+            materials: pool
+                .materials
+                .iter()
+                .map(|m| MaterialView {
+                    id: m.id,
+                    name: m.name.clone(),
+                    path: m.path.clone(),
+                    missing: !std::path::Path::new(&m.path).exists(),
+                })
+                .collect(),
+            active: pool.active,
+        }
+    }
+}
+
+// The material commands take the materials lock, then the source lock. Each
+// decodes before it changes anything, so a file that will not load leaves the
+// pool and the sound as they were.
+
 #[tauri::command]
-fn load_sample(state: tauri::State<'_, Audio>, path: String) -> Result<SourceInfo, String> {
+fn materials(state: tauri::State<'_, Audio>) -> MaterialsView {
+    MaterialsView::of(&state.materials.lock().expect("materials poisoned"))
+}
+
+/// Add a WAV to the pool and play it, whole and at its own pitch.
+#[tauri::command]
+fn add_material(state: tauri::State<'_, Audio>, path: String) -> Result<MaterialsView, String> {
     let loaded = source::load(&path, state.sample_rate)?;
-    let info = SourceInfo {
-        name: loaded.name.clone(),
-        seconds: loaded.samples.len() as f32 / state.sample_rate,
-        sample_rate: state.sample_rate,
-        peaks: source::peaks(&loaded.samples, 900),
-    };
-    *state.swap.lock().expect("swap poisoned") = Some(loaded.samples.clone());
-    *state.source.lock().expect("source poisoned") = loaded;
-    Ok(info)
+    let mut pool = state.materials.lock().expect("materials poisoned");
+    let id = pool.add(&loaded.name, &path);
+    pool.activate(id, &state.bank)?;
+    state.play_source(loaded);
+    Ok(MaterialsView::of(&pool))
+}
+
+/// Play a material from the pool, with the octave and trim it was left at.
+#[tauri::command]
+fn select_material(state: tauri::State<'_, Audio>, id: u64) -> Result<MaterialsView, String> {
+    let mut pool = state.materials.lock().expect("materials poisoned");
+    if pool.active != Some(id) {
+        let path = pool
+            .get(id)
+            .ok_or_else(|| format!("there is no material {id}"))?
+            .path
+            .clone();
+        let loaded = source::load(&path, state.sample_rate)?;
+        pool.activate(id, &state.bank)?;
+        state.play_source(loaded);
+    }
+    Ok(MaterialsView::of(&pool))
+}
+
+/// Remove a material. Removing the one playing plays its neighbour in the
+/// tree, or the drone when none is left or the neighbour will not load.
+#[tauri::command]
+fn remove_material(state: tauri::State<'_, Audio>, id: u64) -> Result<MaterialsView, String> {
+    let mut pool = state.materials.lock().expect("materials poisoned");
+    let next = pool.neighbour(id);
+    let was_active = pool.active == Some(id);
+    pool.remove(id)?;
+    if was_active {
+        let loaded = next
+            .and_then(|n| pool.get(n))
+            .and_then(|m| source::load(&m.path, state.sample_rate).ok());
+        match (next, loaded) {
+            (Some(n), Some(loaded)) => {
+                pool.activate(n, &state.bank)?;
+                state.play_source(loaded);
+            }
+            _ => {
+                pool.deactivate(&state.bank);
+                state.play_source(source::startup_drone(state.sample_rate));
+            }
+        }
+    }
+    Ok(MaterialsView::of(&pool))
 }
 
 /// Open the device and start the stream.
@@ -997,6 +1098,14 @@ impl Audio {
         Ok(ModulationView::of(&doc, refused))
     }
 
+    /// Hand a decoded sample to the audio thread through the swap slot, and
+    /// keep it here for drawing. The audio thread takes it at a block
+    /// boundary; it never decodes and never allocates.
+    fn play_source(&self, loaded: source::Loaded) {
+        *self.swap.lock().expect("swap poisoned") = Some(loaded.samples.clone());
+        *self.source.lock().expect("source poisoned") = loaded;
+    }
+
     /// The trimmed window in sample indices, mirroring the engine's own
     /// clamping so a drawn curve matches the one being heard.
     fn trim_indices(&self) -> (usize, usize) {
@@ -1271,6 +1380,7 @@ fn build_audio() -> Result<Audio, String> {
         play_request,
         steps,
         tracker: Mutex::new(tracker::Tracker::default()),
+        materials: Mutex::new(materials::Pool::default()),
         source: Mutex::new(source::startup_drone(sample_rate)),
         presets: Mutex::new(presets::Presets::default()),
         modulation: Mutex::new(modulation::Modulation::default()),
@@ -1325,7 +1435,10 @@ pub fn run() {
             save_patch,
             load_patch,
             source_info,
-            load_sample,
+            materials,
+            add_material,
+            select_material,
+            remove_material,
             grain_log,
             audition_grain,
             preset_names,
@@ -1454,6 +1567,19 @@ mod tests {
             "map_missing",
         ] {
             assert!(load.get(key).is_some(), "LoadReport lost `{key}`");
+        }
+
+        let mut pool = materials::Pool::default();
+        pool.add("x.wav", "/nowhere/x.wav");
+        let view = serde_json::to_value(MaterialsView::of(&pool)).expect("MaterialsView");
+        for key in ["materials", "active"] {
+            assert!(view.get(key).is_some(), "MaterialsView lost `{key}`");
+        }
+        for key in ["id", "name", "path", "missing"] {
+            assert!(
+                view["materials"][0].get(key).is_some(),
+                "MaterialView lost `{key}`"
+            );
         }
 
         let refused = serde_json::to_value(modulation::Refused {

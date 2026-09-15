@@ -90,7 +90,28 @@ export const getParams = () => invoke<number[]>('get_params');
 export const setParam = (id: string, value: number) => invoke<void>('set_param', { id, value });
 export const meters = () => invoke<Meters>('meters');
 export const sourceInfo = () => invoke<SourceInfo>('source_info');
-export const loadSample = (path: string) => invoke<SourceInfo>('load_sample', { path });
+
+/** A material as the tree lists it. */
+export interface MaterialView {
+  id: number;
+  name: string;
+  path: string;
+  /** The file is not where the document said it was. */
+  missing: boolean;
+}
+
+/** The material pool in the tree's order, and the one playing. */
+export interface MaterialsView {
+  materials: MaterialView[];
+  active: number | null;
+}
+
+export const materials = () => invoke<MaterialsView>('materials');
+/** Decode a WAV, add it to the pool and play it, whole and at its own pitch. */
+export const addMaterial = (path: string) => invoke<MaterialsView>('add_material', { path });
+/** Play a material with the octave and trim it was left at. */
+export const selectMaterial = (id: number) => invoke<MaterialsView>('select_material', { id });
+export const removeMaterial = (id: number) => invoke<MaterialsView>('remove_material', { id });
 
 /** Everything spawned since the last call. Drains, so poll it steadily. */
 export const grainLog = () => invoke<GrainInfo[]>('grain_log');

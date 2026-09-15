@@ -68,8 +68,9 @@ const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
 /** Every node, in work-area order: each lane's cards in signal order. */
 export const NODES: NodeInfo[] = [
   // The material itself: how much of it is read, and at what octave. Both
-  // generators read through these, so they are not Sample's own. Selected by
-  // clicking the sample's title above the lanes.
+  // generators read through these, so they are not Sample's own. Selected from
+  // the Materials tree or the sample's title above the lanes. Each material in
+  // the pool keeps its own (`src-tauri/src/materials.rs`).
   {
     id: 'source',
     label: 'Material',

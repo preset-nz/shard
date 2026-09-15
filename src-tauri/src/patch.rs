@@ -28,21 +28,26 @@ use shard_dsp::params::PARAMS;
 use shard_dsp::ParamBank;
 
 use crate::mapping::MapRef;
+use crate::materials::{Pool, MATERIAL_PARAMS};
 use crate::modulation::{Modulation, Refused};
 use crate::presets::Presets;
 use crate::tracker::Tracker;
 
 /// Bumped only for a change old builds cannot read. Adding parameters does
 /// not need it, because unknown and missing ids are both handled.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 
-/// The whole file: the tracker, and the patch it plays.
+/// The whole file: the tracker, the material pool, and the patch it plays.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Document {
     pub version: u32,
     /// Absent gives the default tracker: off, 120 bpm, four on the floor.
     #[serde(default)]
     pub tracker: Tracker,
+    /// The material pool, as `materials` and `next_material_id` beside the
+    /// tracker, since a pool outlives any one patch. See `materials.rs`.
+    #[serde(flatten)]
+    pub pool: Pool,
     pub patch: Patch,
 }
 
@@ -51,10 +56,10 @@ pub struct Document {
 pub struct Patch {
     /// Parameter values by id. A map, not a list, so order never matters.
     pub params: BTreeMap<String, f32>,
-    /// Where the material was. Absolute, because this is a personal tool and
-    /// samples live wherever they live.
-    #[serde(default)]
-    pub sample_path: Option<String>,
+    /// The material in the document's pool this patch plays, by id. Its
+    /// octave and trim rest on the material, not here.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub material: Option<u64>,
     /// Node presets, by node and then by name. Document data, so they travel
     /// with the patch. See `presets.rs`.
     #[serde(default, skip_serializing_if = "Presets::is_empty")]
@@ -94,6 +99,7 @@ impl Document {
         Self {
             version: VERSION,
             tracker,
+            pool: Pool::default(),
             patch,
         }
     }
@@ -115,14 +121,16 @@ impl Document {
 }
 
 impl Patch {
-    pub fn capture(bank: &ParamBank, sample_path: Option<String>) -> Self {
+    /// Every value but the material's own rows, which the pool saves.
+    pub fn capture(bank: &ParamBank, material: Option<u64>) -> Self {
         Self {
             params: PARAMS
                 .iter()
                 .enumerate()
+                .filter(|(_, p)| !MATERIAL_PARAMS.contains(&p.id))
                 .map(|(i, p)| (p.id.to_string(), bank.get(i)))
                 .collect(),
-            sample_path,
+            material,
             presets: Presets::default(),
             controller_map: None,
             modulation: Modulation::default(),
@@ -133,10 +141,7 @@ impl Patch {
     /// so a hand-edited patch with a nonsense number cannot put one into the
     /// audio thread.
     pub fn apply(&self, bank: &ParamBank) -> LoadReport {
-        let mut report = LoadReport {
-            sample_path: self.sample_path.clone(),
-            ..Default::default()
-        };
+        let mut report = LoadReport::default();
 
         for (id, value) in &self.params {
             if bank.set_by_id(id, *value) {
@@ -147,7 +152,7 @@ impl Patch {
         }
 
         for p in PARAMS {
-            if !self.params.contains_key(p.id) {
+            if !self.params.contains_key(p.id) && !MATERIAL_PARAMS.contains(&p.id) {
                 report.missing.push(p.id.to_string());
             }
         }
@@ -185,10 +190,13 @@ mod tests {
         let fresh = ParamBank::new();
         let report = back.patch.apply(&fresh);
 
-        assert_eq!(report.applied, PARAMS.len());
+        assert_eq!(report.applied, PARAMS.len() - MATERIAL_PARAMS.len());
         assert!(report.unknown.is_empty());
         assert!(report.missing.is_empty());
         for (i, expected) in before.iter().enumerate() {
+            if MATERIAL_PARAMS.contains(&PARAMS[i].id) {
+                continue;
+            }
             assert!(
                 (fresh.get(i) - expected).abs() < 1e-6,
                 "{} was {} not {expected}",
@@ -252,10 +260,34 @@ mod tests {
     }
 
     #[test]
-    fn the_sample_path_survives_the_round_trip() {
+    fn the_pool_and_the_patchs_material_survive_the_round_trip() {
         let bank = ParamBank::new();
-        let back = round_trip(Patch::capture(&bank, Some("/tmp/x.wav".into())));
-        assert_eq!(back.patch.sample_path.as_deref(), Some("/tmp/x.wav"));
+        let mut pool = Pool::default();
+        pool.add("x.wav", "/tmp/x.wav");
+        let id = pool.add("y.wav", "/tmp/y.wav");
+        let mut doc = Document::new(Tracker::default(), Patch::capture(&bank, Some(id)));
+        doc.pool = pool.clone();
+        let text = doc.to_json().unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert!(
+            json["materials"].is_array(),
+            "the pool sits beside the tracker: {text}"
+        );
+        let back = Document::from_json(&text).unwrap();
+        assert_eq!(back.pool, pool);
+        assert_eq!(back.patch.material, Some(id));
+    }
+
+    #[test]
+    fn the_patch_saves_no_row_a_material_owns() {
+        let bank = ParamBank::new();
+        let patch = Patch::capture(&bank, None);
+        for key in MATERIAL_PARAMS {
+            assert!(
+                !patch.params.contains_key(key),
+                "{key} is saved in the patch"
+            );
+        }
     }
 
     #[test]
@@ -314,7 +346,7 @@ mod tests {
     fn a_patch_with_no_sample_still_loads() {
         let bank = ParamBank::new();
         let back = round_trip(Patch::capture(&bank, None));
-        assert!(back.patch.sample_path.is_none());
+        assert!(back.patch.material.is_none());
         assert!(!back.patch.apply(&bank).sample_missing);
     }
 

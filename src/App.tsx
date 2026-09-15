@@ -2,6 +2,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   addLfo,
+  addMaterial,
   auditionGrain,
   cancelLearn,
   EMPTY_MAPPINGS,
@@ -18,19 +19,22 @@ import {
   lfoLimits,
   linkParam,
   loadPatch,
-  loadSample,
   type MappingsView,
+  type MaterialsView,
   type Meters,
   type ModulationView,
   mapMidi,
   type ParamInfo,
   paramDefs,
   mappings as readMappings,
+  materials as readMaterials,
   meters as readMeters,
   modulation as readModulation,
   removeLfo,
+  removeMaterial,
   type SourceInfo,
   savePatch,
+  selectMaterial,
   setLfo,
   setParam,
   setPlaying,
@@ -41,6 +45,7 @@ import {
 } from '@/audio';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Inspector } from '@/components/Inspector';
+import { MaterialTree } from '@/components/MaterialTree';
 import { Meter } from '@/components/Meter';
 import { ModulatorTree } from '@/components/ModulatorTree';
 import { NodeCard } from '@/components/NodeCard';
@@ -89,6 +94,8 @@ export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
   const [values, setValues] = useState<ParamValues>({});
   const [source, setSource] = useState<SourceInfo | null>(null);
+  /** The material pool, as Rust last answered with it. */
+  const [pool, setPool] = useState<MaterialsView>({ materials: [], active: null });
   const [meter, setMeter] = useState<Meters>({
     peak: 0,
     reduction: 1,
@@ -186,6 +193,7 @@ export default function App() {
         });
         setValues(next);
         setSource(await sourceInfo());
+        setPool(await readMaterials());
         setMod(await readModulation());
         setLimits(await lfoLimits());
         setTrackerView(await getTracker());
@@ -347,6 +355,7 @@ export default function App() {
       const report = await loadPatch(path);
       setPatchName(path.split('/').pop() ?? path);
       setSource(await sourceInfo());
+      setPool(await readMaterials());
       setMod(await readModulation());
       // The document's tracker replaces the one on screen, and no answer to
       // an edit made before the load may put the old one back.
@@ -383,18 +392,39 @@ export default function App() {
     }
   }, [setMode]);
 
-  const pickFile = useCallback(async () => {
+  /** Run one material command, then draw the pool and the sample now playing. */
+  const editMaterials = useCallback(async (run: () => Promise<MaterialsView>) => {
+    try {
+      setPool(await run());
+      setSource(await sourceInfo());
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  /** Add one or more WAVs to the pool. The last one that loads plays. */
+  const pickFiles = useCallback(async () => {
     try {
       const picked = await open({
-        multiple: false,
+        multiple: true,
         filters: [{ name: 'Audio', extensions: ['wav'] }],
       });
-      if (typeof picked !== 'string') return;
-      setSource(await loadSample(picked));
-      // A trim from the previous sample means nothing against a new one.
-      await setParam('trim.start', 0);
-      await setParam('trim.end', 1);
-      setError(null);
+      if (!picked || picked.length === 0) return;
+      const failed: string[] = [];
+      let view: MaterialsView | null = null;
+      for (const path of picked) {
+        try {
+          view = await addMaterial(path);
+        } catch (e) {
+          failed.push(String(e));
+        }
+      }
+      if (view) {
+        setPool(view);
+        setSource(await sourceInfo());
+      }
+      setError(failed.length > 0 ? failed.join(' · ') : null);
     } catch (e) {
       setError(String(e));
     }
@@ -616,10 +646,10 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={pickFile}
+          onClick={pickFiles}
           className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
         >
-          Load WAV
+          Add WAV
         </button>
       </header>
 
@@ -638,6 +668,20 @@ export default function App() {
       <div className="flex min-h-0 flex-1">
         {mode === 'soundscape' && (
           <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
+            <MaterialTree
+              pool={pool}
+              inspecting={selection?.kind === 'node' && selection.id === 'source'}
+              onSelect={(id) =>
+                void editMaterials(async () => {
+                  const view = await selectMaterial(id);
+                  // Show what it plays with: its octave and trim.
+                  select({ kind: 'node', id: 'source' });
+                  return view;
+                })
+              }
+              onAdd={() => void pickFiles()}
+              onRemove={(id) => void editMaterials(() => removeMaterial(id))}
+            />
             <ModulatorTree
               lfos={mod.lfos}
               selected={selectedLfo}

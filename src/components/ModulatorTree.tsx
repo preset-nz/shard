@@ -8,9 +8,8 @@ import {
 } from '@/components/ui/context-menu';
 
 /**
- * The left-hand tree, as far as it goes today: one category, Modulators,
- * listing the patch's LFOs. Click one to edit it in the panel; right-click to
- * remove it.
+ * Modulators, the left-hand tree's second category under Materials: the
+ * patch's LFOs. Click one to edit it in the panel; right-click to remove it.
  *
  * A rough sketch ahead of the panel redesign and the node API's real tree.
  */
