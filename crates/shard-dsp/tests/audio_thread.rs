@@ -200,36 +200,42 @@ fn one_shot_steps_never_touch_the_allocator() {
     // Under the steps a pass plays once and stops, the cloud stops throwing
     // grains between passes, and switching the steps on hands the loop to a
     // tail. A short source and sparse steps, so every pass plays out before
-    // the next, with the reel reversing along the way.
-    let mut e = Engine::new(SR, 256);
-    e.set_source(tone(2_000));
-    let bank = ParamBank::new();
-    bank.set_by_id("grain.on", 1.0);
-    e.set_playing(true);
-    let mut out = vec![0.0f32; 512];
-
-    let ((), caught) = no_alloc(|| {
-        for block in 0..1_000 {
-            let reverse = if block % 400 < 200 { 0.0 } else { 1.0 };
-            bank.set_by_id("tape.reverse", reverse);
-            // Pitched to both ends of the range, so each pass reads at a
-            // different ratio from the tail it hands over.
-            let mut pitches = [0; shard_dsp::steps::STEPS];
-            pitches[0] = 24;
-            pitches[2] = -24;
-            e.set_steps(StepParams {
-                on: block % 100 >= 20,
-                pattern: 0b0101,
-                pitches,
-                ..Default::default()
-            });
-            e.process_block(&mut out, &bank);
+    // the next, with the reel reversing along the way. Then again with nothing
+    // wired into Sample, where the cloud's window is the clock.
+    for wired in [true, false] {
+        let mut e = Engine::new(SR, 256);
+        e.set_source(tone(2_000));
+        if !wired {
+            drop(e.swap_source(Generator::Player, Vec::new()));
         }
-    });
-    assert_eq!(
-        caught, 0,
-        "one-shot steps touched the allocator {caught} time(s)"
-    );
+        let bank = ParamBank::new();
+        bank.set_by_id("grain.on", 1.0);
+        e.set_playing(true);
+        let mut out = vec![0.0f32; 512];
+
+        let ((), caught) = no_alloc(|| {
+            for block in 0..1_000 {
+                let reverse = if block % 400 < 200 { 0.0 } else { 1.0 };
+                bank.set_by_id("tape.reverse", reverse);
+                // Pitched to both ends of the range, so each pass reads at a
+                // different ratio from the tail it hands over.
+                let mut pitches = [0; shard_dsp::steps::STEPS];
+                pitches[0] = 24;
+                pitches[2] = -24;
+                e.set_steps(StepParams {
+                    on: block % 100 >= 20,
+                    pattern: 0b0101,
+                    pitches,
+                    ..Default::default()
+                });
+                e.process_block(&mut out, &bank);
+            }
+        });
+        assert_eq!(
+            caught, 0,
+            "one-shot steps touched the allocator {caught} time(s), Sample wired: {wired}"
+        );
+    }
 }
 
 #[test]

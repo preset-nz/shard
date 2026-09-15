@@ -703,7 +703,6 @@ impl Engine {
         //
         // Each generator reads its own material, through that material's
         // octave and trim (Georg, 2026-09-15), handed in by `set_readings`.
-        let read_ratio = self.player_reading.octaves().exp2();
         let grain_semis = 12.0 * self.grain_reading.octaves();
 
         let (lo, hi) = self.player_reading.window(self.player_source.len());
@@ -713,8 +712,23 @@ impl Engine {
         // the wrong place the moment the trim moved off zero.
         self.granular
             .set_source_window(grain_lo, self.grain_source.len());
-        let source = &self.player_source[lo..hi];
         let grain_source = &self.grain_source[grain_lo..grain_hi];
+        // The player is the clock as well as the Sample: a step starts its
+        // pass, the pass ends at the edge of its window, the cloud throws
+        // grains while it sounds, and both envelopes read it. With nothing
+        // wired into Sample there was no edge to reach, so a pass never ended
+        // and the cloud kept throwing grains between the steps. The pass runs
+        // through the cloud's window instead, at the cloud's octave, and plays
+        // nothing of its own.
+        let player_wired = self.player_source.len() >= 2;
+        let (source, read_ratio) = if player_wired {
+            (
+                &self.player_source[lo..hi],
+                self.player_reading.octaves().exp2(),
+            )
+        } else {
+            (grain_source, self.grain_reading.octaves().exp2())
+        };
         let span = self.player_source.len().max(1) as f32;
         let window_len = source.len() as f32;
 
@@ -783,7 +797,13 @@ impl Engine {
                     * fade;
                 self.tail_left -= 1.0;
             }
-            let material = dry * material_level;
+            // With nothing wired, the pass was only the clock, and what it
+            // read was the cloud's material.
+            let material = if player_wired {
+                dry * material_level
+            } else {
+                0.0
+            };
             // The cloud follows the pass: it throws grains while one sounds,
             // and between steps lets the grains it has thrown play out.
             p.spawning = self.player.sounding();
@@ -876,8 +896,12 @@ impl Engine {
             }
         }
 
-        self.trimmed_play_position =
-            (lo as f32 + self.player.position(source.len()) * source.len() as f32) / span;
+        // A playhead for the Sample's material, so none when nothing is wired.
+        self.trimmed_play_position = if player_wired {
+            (lo as f32 + self.player.position(source.len()) * source.len() as f32) / span
+        } else {
+            0.0
+        };
 
         // A cloud switched off is cleared once its fade has landed, so turning
         // it back on starts fresh rather than resuming grains frozen mid-window.
@@ -1551,6 +1575,50 @@ mod tests {
         // The pass ends at 0.25 s and the last grain 180 ms after it.
         assert_eq!(loudest(120..395), 0.0, "sound between the steps");
         assert!(loudest(400..440) > 0.1, "the bar came round in silence");
+    }
+
+    #[test]
+    fn with_nothing_wired_into_sample_a_step_plays_the_cloud_once() {
+        // An empty player never reached the edge of a window, so its pass
+        // never ended and the cloud threw grains between the steps. The
+        // cloud's window is the clock instead: one pass a step, and without
+        // the steps it keeps going rather than falling silent.
+        let peaks = |on: bool| {
+            let mut e = Engine::new(48_000.0, 64);
+            drop(e.swap_source(Generator::Grain, tone(12_000)));
+            let bank = ParamBank::new();
+            bank.set_by_id("grain.on", 1.0);
+            e.set_steps(StepParams {
+                on,
+                length: 16,
+                pattern: 1,
+                ..Default::default()
+            });
+            e.set_playing(true);
+            let mut out = vec![0.0; 480];
+            (0..480)
+                .map(|_| {
+                    e.process_block(&mut out, &bank);
+                    out.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+                })
+                .collect::<Vec<f32>>()
+        };
+        let loudest =
+            |p: &[f32], r: core::ops::Range<usize>| p[r].iter().copied().fold(0.0, f32::max);
+        let stepped = peaks(true);
+        assert!(loudest(&stepped, 0..40) > 0.1, "the step never sounded");
+        assert_eq!(loudest(&stepped, 120..395), 0.0, "sound between the steps");
+        assert!(
+            loudest(&stepped, 400..440) > 0.1,
+            "the bar came round in silence"
+        );
+        let free = peaks(false);
+        assert!(
+            (120..395)
+                .step_by(25)
+                .all(|b| loudest(&free, b..b + 25) > 0.1),
+            "the cloud alone fell silent without the steps"
+        );
     }
 
     #[test]
