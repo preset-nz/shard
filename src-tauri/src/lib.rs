@@ -446,7 +446,10 @@ fn load_patch(
                     state.play_source(source::startup_drone(state.sample_rate));
                 }
             }
-            pool.activate(m.id, &state.bank)?;
+            // Infallible, since `m` came from this pool. A `?` here would
+            // leave the document half-applied.
+            pool.activate(m.id, &state.bank)
+                .expect("the material was read from this pool");
         }
         None => {
             pool.deactivate(&state.bank);
@@ -669,7 +672,8 @@ fn add_material(state: tauri::State<'_, Audio>, path: String) -> Result<Material
     let loaded = source::load(&path, state.sample_rate)?;
     let mut pool = state.materials.lock().expect("materials poisoned");
     let id = pool.add(&loaded.name, &path);
-    pool.activate(id, &state.bank)?;
+    pool.activate(id, &state.bank)
+        .expect("a material just added is in the pool");
     state.play_source(loaded);
     Ok(MaterialsView::of(&pool))
 }
@@ -705,7 +709,8 @@ fn remove_material(state: tauri::State<'_, Audio>, id: u64) -> Result<MaterialsV
             .and_then(|m| source::load(&m.path, state.sample_rate).ok());
         match (next, loaded) {
             (Some(n), Some(loaded)) => {
-                pool.activate(n, &state.bank)?;
+                pool.activate(n, &state.bank)
+                    .expect("the neighbour was read from this pool");
                 state.play_source(loaded);
             }
             _ => {
