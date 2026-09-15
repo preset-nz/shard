@@ -6,7 +6,13 @@
 pub struct Loaded {
     pub name: String,
     pub samples: Vec<f32>,
+    /// The waveform as drawn, worked out once at decode rather than on every
+    /// redraw.
+    pub peaks: Vec<f32>,
 }
+
+/// How many peaks a waveform is drawn from.
+const PEAKS: usize = 900;
 
 /// Mono, at the engine's rate. Multi-channel files are summed.
 pub fn load(path: &str, target_rate: f32) -> Result<Loaded, String> {
@@ -67,7 +73,12 @@ pub fn load(path: &str, target_rate: f32) -> Result<Loaded, String> {
         .map(|s| s.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.to_string());
 
-    Ok(Loaded { name, samples })
+    let peaks = peaks(&samples, PEAKS);
+    Ok(Loaded {
+        name,
+        samples,
+        peaks,
+    })
 }
 
 /// Two seconds of detuned drone, so the app makes sound the moment it opens
@@ -82,9 +93,10 @@ pub fn startup_drone(sample_rate: f32) -> Loaded {
                 + (core::f32::consts::TAU * 220.7 * t).sin() * 0.2;
             body * (0.4 + 0.6 * (core::f32::consts::TAU * 0.25 * t).sin().abs())
         })
-        .collect();
+        .collect::<Vec<f32>>();
     Loaded {
         name: "built-in drone".into(),
+        peaks: peaks(&samples, PEAKS),
         samples,
     }
 }

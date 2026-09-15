@@ -19,6 +19,13 @@ cpal = "0.15"
 hound = "3"
 shard-dsp = { path = "crates/shard-dsp" }
 
+# Decoding a WAV is a tight loop over every sample. Unoptimised, a three-minute
+# stereo file took 2.05 s to decode, against 0.13 s at opt-level 1 (measured
+# 2026-09-15). hound's sample reader is generic, so it compiles into `shard`
+# itself, and optimising the hound package alone changed nothing.
+[profile.dev.package.shard]
+opt-level = 1
+
 [profile.release]
 lto = true
 codegen-units = 1
