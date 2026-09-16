@@ -15,7 +15,7 @@ rather than working around it.
 
 ## Architecture
 
-Two crates, and the boundary between them is the important part.
+Three crates, and the boundary around the first is the important part.
 
 - `crates/shard-dsp` — the engine. **No audio device, no file I/O, no UI, no
   async, no dependencies.** If something here needs a crate, it probably
@@ -23,6 +23,12 @@ Two crates, and the boundary between them is the important part.
   card.
 - `crates/shard-play` — a CLI that makes the engine audible. Owns cpal, hound
   and argument parsing.
+- `crates/shard-probe` — a MIDI probe, and not part of the app. `just probe`
+  lists ports, `just probe "listen 30"` prints what a controller sends, and
+  `just probe "send <port> B0,2C,05"` sends raw hex back. Every controller so
+  far has needed measuring and every assumption made without it has been
+  wrong, so this is kept rather than rewritten each time. The LPD8 table and
+  the whole Launch Control 3 protocol were measured with it.
 
 A Tauri and React shell is intended, matching Oblique, Strata and Fault
 (Tauri 2, Vite, React, TypeScript, shadcn/ui, zustand, biome). It does not
