@@ -3511,6 +3511,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shard-probe"
+version = "0.1.0"
+dependencies = [
+ "midir",
+]
+
+[[package]]
 name = "shlex"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

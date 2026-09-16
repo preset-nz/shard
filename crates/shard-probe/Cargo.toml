@@ -1,0 +1,12 @@
+[package]
+name = "shard-probe"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# A MIDI probe, and nothing else. No audio, no engine: this exists to answer
+# "what does this controller actually send, and what does it do when I send
+# something back", which the LPD8 table and the whole Launch Control 3
+# protocol in `controller-mapping.md` were measured with.
+[dependencies]
+midir.workspace = true

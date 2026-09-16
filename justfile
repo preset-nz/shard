@@ -16,6 +16,12 @@ install:
     pnpm install
     cargo fetch
 
+# What a controller sends, and what it does when you send something back.
+# No args lists the ports; `just probe "listen 30"`; `just probe "send <port> 90,3C,7F"`.
+[group('dev')]
+probe args="":
+    cargo run --quiet -p shard-probe -- {{args}}
+
 # The app.
 [group('dev')]
 run:
