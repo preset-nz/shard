@@ -335,6 +335,13 @@ impl Registry {
         let c = self.control_mut(id)?;
         c.role = role;
         c.role_settled = true;
+        // A pad is always absolute. Without this the invariant only holds
+        // one way: `set_mode` refuses a relative mode on a pad, but calling
+        // a relative knob a pad would leave the mode behind, where `play`
+        // ignores it and the panel does not draw the select to fix it.
+        if role == Role::Pad {
+            c.mode = Mode::Absolute;
+        }
         Ok(())
     }
 
@@ -521,6 +528,12 @@ impl Registry {
     }
 }
 
+/// Note the trap for endless encoders: one in two's complement, turned
+/// slowly anticlockwise, only ever sends 1 and 127, and 127 is in the pad
+/// set. Nothing later rescues it, because a middle value never arrives, so
+/// it stays a pad until you say otherwise in the panel. Inferring harder
+/// does not help — the encoding is exactly what cannot be inferred — so the
+/// panel's mode tooltip explains it instead.
 fn infer_role(kind: Kind, first_value: u8) -> Role {
     match kind {
         Kind::Note => Role::Pad,
@@ -810,6 +823,17 @@ mod tests {
         r.observe("LPD8", &on(9, 36, 100));
         assert!(r.set_mode(1, Mode::TwosComplement).is_err());
         assert!(r.set_mode(1, Mode::Absolute).is_ok());
+        assert_eq!(r.controls[0].mode, Mode::Absolute);
+    }
+
+    #[test]
+    fn calling_an_encoder_a_pad_takes_its_mode_with_it() {
+        let mut r = Registry::default();
+        r.observe("LC3", &cc(0, 13, 65));
+        r.set_mode(1, Mode::TwosComplement).unwrap();
+        // Otherwise the mode is stranded: play ignores a pad's parameter
+        // mapping, and the panel only draws the mode select for a knob.
+        r.set_role(1, Role::Pad).unwrap();
         assert_eq!(r.controls[0].mode, Mode::Absolute);
     }
 

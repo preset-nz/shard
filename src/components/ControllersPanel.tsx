@@ -347,7 +347,7 @@ function ChannelGroup({
                   <SelectTrigger
                     size="sm"
                     className="h-6 w-32 text-xs"
-                    title="A pot sends where it is; an endless encoder sends how far it moved. Pick an encoding, then turn it one click anticlockwise: the change on the right reads −1 when it is the right one."
+                    title="A pot sends where it is; an endless encoder sends how far it moved. Pick an encoding, then turn it one click anticlockwise: the change on the right reads −1 when it is the right one. If an encoder arrived here as a pad, that is why: turned anticlockwise first it only ever sends 1 and 127, which is what a pad in CC mode looks like. Set it back to knob."
                   >
                     <SelectValue />
                   </SelectTrigger>
