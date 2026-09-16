@@ -366,6 +366,11 @@ export interface ControllersView {
   controls: ControlView[];
   roles: string[];
   modes: string[];
+  /** The control being calibrated, and what to tell the person to do. */
+  calibrating: number | null;
+  instruction: string | null;
+  /** What calibration last worked out, in plain words. */
+  found: { seq: number; text: string } | null;
   /** What went wrong with `controllers.json` at startup, if anything. */
   trouble: string | null;
 }
@@ -377,6 +382,9 @@ export const setControlRole = (id: number, role: string) =>
   invoke<ControllersView>('set_control_role', { id, role });
 export const setControlMode = (id: number, mode: string) =>
   invoke<ControllersView>('set_control_mode', { id, mode });
+export const calibrateControl = (id: number) =>
+  invoke<ControllersView>('calibrate_control', { id });
+export const cancelCalibrate = () => invoke<ControllersView>('cancel_calibrate');
 export const renameBank = (port: string, channel: number, name: string) =>
   invoke<ControllersView>('rename_bank', { port, channel, name });
 export const forgetControl = (id: number) => invoke<ControllersView>('forget_control', { id });

@@ -126,6 +126,121 @@ impl Mode {
     }
 }
 
+/// How many messages one direction needs before pot and encoder are told
+/// apart. Three, not two, so a pot would have to repeat itself three times
+/// running to be mistaken for one.
+pub const SAMPLES: usize = 3;
+
+/// Every encoding a knob might be speaking, in the order they are tried.
+const RELATIVE: [Mode; 3] = [Mode::SignedBit, Mode::TwosComplement, Mode::BinaryOffset];
+
+/// Whether a run of messages from turning one way came from an encoder.
+///
+/// **A pot's number moves and an encoder's does not.** Turn a pot three
+/// clicks and it says 66, 67, 68, because it is reporting where it now is.
+/// Turn an encoder three clicks and it says 1, 1, 1, because it is reporting
+/// that it moved, and it moved the same amount each time. That is structural,
+/// not a threshold to tune.
+pub fn looks_relative(run: &[u8]) -> bool {
+    run.len() >= SAMPLES && run.windows(2).all(|w| w[0] == w[1])
+}
+
+/// Which encoding fits a known right turn and a known left turn.
+///
+/// Knowing the direction is the whole trick. Passively, a 65 could be a
+/// right turn under binary offset or a left turn under signed bit, which is
+/// why control-plane.md §5 forbids inferring from traffic. Once you have
+/// *asked* for a right turn and then a left turn, only one encoding reads
+/// the first as positive and the second as negative. Where more than one
+/// does, the smallest movement wins, because one click should read as one.
+///
+/// `None` means this pair settles nothing — a message that trailed in from
+/// the right turn, most likely — so keep waiting rather than guessing.
+pub fn encoding_for(right: u8, left: u8) -> Option<Mode> {
+    let mut best: Option<(Mode, i16)> = None;
+    for m in RELATIVE {
+        let (Some(r), Some(l)) = (m.delta(right), m.delta(left)) else {
+            continue;
+        };
+        if r > 0 && l < 0 {
+            let cost = i16::from(r) - i16::from(l);
+            if best.is_none_or(|(_, c)| cost < c) {
+                best = Some((m, cost));
+            }
+        }
+    }
+    best.map(|(m, _)| m)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Step {
+    Right,
+    Left,
+}
+
+/// Working out what a knob is by asking it, rather than asking you.
+///
+/// Nobody should have to know what "two's complement" means to use a knob.
+/// Turn it right a few clicks, then left, and the answer falls out — this is
+/// control-plane.md §5's "turn-left test", with the app reading the result
+/// instead of the person.
+#[derive(Debug, Clone)]
+pub struct Calibration {
+    pub control: u64,
+    pub step: Step,
+    right: Vec<u8>,
+}
+
+impl Calibration {
+    pub fn new(control: u64) -> Calibration {
+        Calibration {
+            control,
+            step: Step::Right,
+            right: Vec::new(),
+        }
+    }
+
+    /// What to say to the person right now.
+    pub fn instruction(&self) -> &'static str {
+        match self.step {
+            Step::Right => "Turn it a few clicks to the right.",
+            Step::Left => "Now turn it back to the left.",
+        }
+    }
+
+    /// One message from the control being calibrated. `Some` once it knows,
+    /// `None` while it still wants turning.
+    pub fn feed(&mut self, value: u8) -> Option<Mode> {
+        match self.step {
+            Step::Right => {
+                self.right.push(value);
+                if self.right.len() < SAMPLES {
+                    return None;
+                }
+                if !looks_relative(&self.right) {
+                    return Some(Mode::Absolute);
+                }
+                self.step = Step::Left;
+                None
+            }
+            // A message that settles nothing is one that trailed in from the
+            // right turn. Ignore it and wait for a real left turn.
+            Step::Left => encoding_for(self.right[0], value),
+        }
+    }
+}
+
+/// What calibration found, in words that do not assume you read the manual.
+pub fn describe_mode(name: &str, mode: Mode) -> String {
+    match mode {
+        Mode::Absolute => {
+            format!("{name} is a pot: it sends where it is, so it takes over by pickup.")
+        }
+        m => format!("{name} is an endless encoder, reading {}.", m.name()),
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
     /// The port name CoreMIDI gives it. Identity, never edited.
@@ -881,6 +996,70 @@ mod tests {
         back.forget_device("LC3").unwrap();
         assert_eq!(back.bank_name("LC3", 4), "Ch 5");
         assert_eq!(back.bank_name("LPD8", 0), "Program 1");
+    }
+
+    #[test]
+    fn a_pot_and_an_encoder_are_told_apart_by_whether_the_number_moves() {
+        // A pot reports where it is, so three clicks are three numbers.
+        assert!(!looks_relative(&[66, 67, 68]));
+        // An encoder reports that it moved, so three clicks are one number.
+        assert!(looks_relative(&[1, 1, 1]));
+        // Not enough to say yet.
+        assert!(!looks_relative(&[1, 1]));
+        // A pot that happens to repeat twice is still not an encoder.
+        assert!(!looks_relative(&[40, 40, 41]));
+    }
+
+    #[test]
+    fn a_right_turn_then_a_left_turn_names_the_encoding() {
+        assert_eq!(encoding_for(1, 65), Some(Mode::SignedBit));
+        assert_eq!(encoding_for(1, 127), Some(Mode::TwosComplement));
+        assert_eq!(encoding_for(65, 63), Some(Mode::BinaryOffset));
+        // Three clicks each way lands on the same answer.
+        assert_eq!(encoding_for(3, 125), Some(Mode::TwosComplement));
+        assert_eq!(encoding_for(3, 67), Some(Mode::SignedBit));
+        assert_eq!(encoding_for(67, 61), Some(Mode::BinaryOffset));
+    }
+
+    #[test]
+    fn a_message_that_settles_nothing_is_ignored_rather_than_guessed() {
+        // The same value twice means the second one trailed in from the
+        // right turn; no encoding reads one number as both directions.
+        for v in [1u8, 65, 127, 3] {
+            assert_eq!(encoding_for(v, v), None, "{v} decided something");
+        }
+    }
+
+    #[test]
+    fn calibration_walks_right_then_left_and_answers() {
+        let mut c = Calibration::new(7);
+        assert_eq!(c.step, Step::Right);
+        assert_eq!(c.feed(1), None);
+        assert_eq!(c.feed(1), None);
+        // Three the same: an encoder. Now it wants the other direction.
+        assert_eq!(c.feed(1), None);
+        assert_eq!(c.step, Step::Left);
+        // A trailing right click teaches it nothing and is not an answer.
+        assert_eq!(c.feed(1), None);
+        assert_eq!(c.feed(127), Some(Mode::TwosComplement));
+    }
+
+    #[test]
+    fn calibration_calls_a_pot_a_pot_without_asking_for_a_left_turn() {
+        let mut c = Calibration::new(7);
+        assert_eq!(c.feed(40), None);
+        assert_eq!(c.feed(41), None);
+        assert_eq!(c.feed(42), Some(Mode::Absolute));
+        // It never needed the second step.
+        assert_eq!(c.step, Step::Right);
+    }
+
+    #[test]
+    fn what_calibration_says_never_assumes_you_read_the_manual() {
+        let pot = describe_mode("K1", Mode::Absolute);
+        assert!(pot.contains("pot") && pot.contains("pickup"), "{pot}");
+        let enc = describe_mode("Send A 1", Mode::TwosComplement);
+        assert!(enc.contains("endless encoder"), "{enc}");
     }
 
     #[test]

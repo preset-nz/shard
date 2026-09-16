@@ -4,6 +4,8 @@ import {
   addMap,
   type ControllersView,
   type ControlView,
+  calibrateControl,
+  cancelCalibrate,
   controllers,
   type DeviceView,
   forgetControl,
@@ -21,6 +23,10 @@ import {
   ContextMenu,
   ContextMenuContent,
   ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuSub,
+  ContextMenuSubContent,
+  ContextMenuSubTrigger,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { Input } from '@/components/ui/input';
@@ -153,10 +159,25 @@ export function ControllersPanel({
     </p>
   ) : null;
 
+  // Calibration is a conversation: it says what to do, then what it found.
+  const sayRow =
+    view.instruction || view.found ? (
+      <p
+        className={
+          view.instruction
+            ? 'mx-3 rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-500'
+            : 'mx-3 rounded border border-border px-2 py-1.5 text-xs text-muted-foreground'
+        }
+      >
+        {view.instruction ?? view.found?.text}
+      </p>
+    ) : null;
+
   return (
     <div className="space-y-3">
       {mapRow}
       {troubleRow}
+      {sayRow}
       {view.devices.length === 0 ? (
         <p className="px-3 py-2 text-xs text-muted-foreground">
           No MIDI device seen yet. Plug one in and it appears here.
@@ -169,6 +190,7 @@ export function ControllersPanel({
             controls={view.controls.filter((c) => c.device === d.port)}
             roles={view.roles}
             modes={view.modes}
+            calibrating={view.calibrating}
             open={folds[d.port] ?? d.connected}
             onFold={(o) => setFolds((f) => ({ ...f, [d.port]: o }))}
             apply={apply}
@@ -185,6 +207,7 @@ function DeviceGroup({
   controls,
   roles,
   modes,
+  calibrating,
   open,
   onFold,
   apply,
@@ -193,6 +216,7 @@ function DeviceGroup({
   controls: ControlView[];
   roles: string[];
   modes: string[];
+  calibrating: number | null;
   open: boolean;
   onFold: (open: boolean) => void;
   apply: (p: Promise<ControllersView>) => void;
@@ -260,6 +284,7 @@ function DeviceGroup({
             controls={inChannel}
             roles={roles}
             modes={modes}
+            calibrating={calibrating}
             apply={apply}
           />
         ))
@@ -292,6 +317,7 @@ function ChannelGroup({
   controls,
   roles,
   modes,
+  calibrating,
   apply,
 }: {
   port: string;
@@ -302,6 +328,7 @@ function ChannelGroup({
   controls: ControlView[];
   roles: string[];
   modes: string[];
+  calibrating: number | null;
   apply: (p: Promise<ControllersView>) => void;
 }) {
   return (
@@ -343,24 +370,26 @@ function ChannelGroup({
                 </SelectContent>
               </Select>
               {c.role === 'knob' ? (
-                <Select value={c.mode} onValueChange={(m) => apply(setControlMode(c.id, m))}>
-                  <SelectTrigger
-                    size="sm"
-                    className="h-6 w-32 text-xs"
-                    title="A pot sends where it is; an endless encoder sends how far it moved. Pick an encoding, then turn it one click anticlockwise: the change on the right reads −1 when it is the right one. If an encoder arrived here as a pad, that is why: turned anticlockwise first it only ever sends 1 and 127, which is what a pad in CC mode looks like. Set it back to knob."
-                  >
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {modes.map((m) => (
-                      <SelectItem key={m} value={m} className="text-xs">
-                        {m}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <button
+                  type="button"
+                  className={`h-6 w-28 shrink-0 rounded border px-1.5 text-[11px] ${
+                    calibrating === c.id
+                      ? 'border-amber-400/60 bg-amber-400/10 text-amber-500'
+                      : 'border-border text-muted-foreground hover:text-foreground'
+                  }`}
+                  title={
+                    calibrating === c.id
+                      ? 'Click to stop.'
+                      : 'A pot sends where it is; an endless encoder sends how far it moved, and needs no pickup. Click and turn it, and shard works out which it is.'
+                  }
+                  onClick={() =>
+                    apply(calibrating === c.id ? cancelCalibrate() : calibrateControl(c.id))
+                  }
+                >
+                  {calibrating === c.id ? 'Turn it…' : c.mode === 'absolute' ? 'Pot' : 'Endless'}
+                </button>
               ) : (
-                <span className="w-32 shrink-0" />
+                <span className="w-28 shrink-0" />
               )}
               <span className="w-14 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
                 {c.kind} {c.number}
@@ -373,6 +402,26 @@ function ChannelGroup({
             </div>
           </ContextMenuTrigger>
           <ContextMenuContent>
+            <ContextMenuItem
+              disabled={c.role !== 'knob'}
+              onSelect={() => apply(calibrateControl(c.id))}
+            >
+              Work out what this is
+            </ContextMenuItem>
+            <ContextMenuSub>
+              <ContextMenuSubTrigger disabled={c.role !== 'knob'}>
+                Set by hand
+              </ContextMenuSubTrigger>
+              <ContextMenuSubContent>
+                {modes.map((m) => (
+                  <ContextMenuItem key={m} onSelect={() => apply(setControlMode(c.id, m))}>
+                    {m === 'absolute' ? 'pot (absolute)' : m}
+                    {c.mode === m ? ' ✓' : ''}
+                  </ContextMenuItem>
+                ))}
+              </ContextMenuSubContent>
+            </ContextMenuSub>
+            <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => apply(forgetControl(c.id))}>
               Forget control
             </ContextMenuItem>

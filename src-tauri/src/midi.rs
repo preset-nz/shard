@@ -22,7 +22,7 @@ use midir::{Ignore, MidiInput, MidiInputConnection};
 use shard_dsp::params::{index_of, PARAMS};
 use shard_dsp::ParamBank;
 
-use crate::controllers::{Activity, Registry, Role};
+use crate::controllers::{describe_mode, Activity, Calibration, Registry, Role};
 use crate::mapping::{Pickup, Target, Turn};
 
 const RESCAN_EVERY: Duration = Duration::from_secs(1);
@@ -44,12 +44,30 @@ impl Learn {
     }
 }
 
+/// Calibration: working out whether a knob is a pot or an endless encoder by
+/// turning it, rather than by asking the person which encoding it speaks.
+#[derive(Debug, Default)]
+pub struct Calibrate {
+    pub active: Option<Calibration>,
+    /// The last thing it said, numbered so the UI can tell a new one.
+    pub report: Option<(u64, String)>,
+    pub reports: u64,
+}
+
+impl Calibrate {
+    pub fn say(&mut self, text: String) {
+        self.reports += 1;
+        self.report = Some((self.reports, text));
+    }
+}
+
 /// Shared with the Tauri commands. Lock order: `registry`, `pickup`,
-/// `learn`, `activity`.
+/// `learn`, `calibrate`, `activity`.
 pub struct Controllers {
     pub registry: Mutex<Registry>,
     pub pickup: Mutex<Pickup>,
     pub learn: Mutex<Learn>,
+    pub calibrate: Mutex<Calibrate>,
     pub activity: Mutex<Activity>,
     /// Ports open right now, by name. Written by the MIDI thread.
     pub connected: Mutex<Vec<String>>,
@@ -110,6 +128,7 @@ impl Controllers {
             registry: Mutex::new(registry),
             pickup: Mutex::new(Pickup::default()),
             learn: Mutex::new(Learn::default()),
+            calibrate: Mutex::new(Calibrate::default()),
             activity: Mutex::new(Activity::default()),
             connected: Mutex::new(Vec::new()),
             path,
@@ -178,6 +197,44 @@ fn handle(shared: &Controllers, m: &Message) {
     let Some(ev) = event else {
         return;
     };
+
+    // Calibration takes the message rather than playing it, so working out
+    // what a knob is does not drag whatever it is mapped to along with it.
+    let mut cal = shared.calibrate.lock().expect("calibrate poisoned");
+    if cal.active.as_ref().is_some_and(|c| c.control == ev.control) {
+        let found = cal.active.as_mut().expect("just checked").feed(ev.value);
+        if let Some(mode) = found {
+            cal.active = None;
+            let said = match registry.set_mode(ev.control, mode) {
+                Ok(()) => {
+                    let name = registry
+                        .control(ev.control)
+                        .map(|c| c.name.clone())
+                        .unwrap_or_default();
+                    if let Err(e) = shared.save(&registry) {
+                        eprintln!("shard: could not save controllers: {e}");
+                    }
+                    describe_mode(&name, mode)
+                }
+                Err(e) => e,
+            };
+            cal.say(said);
+            // It was a stranger before and it is a stranger now.
+            shared
+                .pickup
+                .lock()
+                .expect("pickup poisoned")
+                .forget(ev.control);
+        }
+        drop(cal);
+        shared
+            .activity
+            .lock()
+            .expect("activity poisoned")
+            .note(&ev, Instant::now());
+        return;
+    }
+    drop(cal);
 
     // Learning takes the message rather than playing it.
     let mut learn = shared.learn.lock().expect("learn poisoned");

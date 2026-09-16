@@ -831,11 +831,22 @@ pub struct ControlView {
 }
 
 #[derive(Serialize)]
+pub struct CalibrateReport {
+    pub seq: u64,
+    pub text: String,
+}
+
+#[derive(Serialize)]
 pub struct ControllersView {
     pub devices: Vec<DeviceView>,
     pub controls: Vec<ControlView>,
     pub roles: &'static [&'static str],
     pub modes: &'static [&'static str],
+    /// The control being calibrated, and what to tell the person to do.
+    pub calibrating: Option<u64>,
+    pub instruction: Option<&'static str>,
+    /// What calibration last worked out, in plain words.
+    pub found: Option<CalibrateReport>,
     /// What went wrong with `controllers.json` at startup, if anything. The
     /// panel says it, because starting with no controllers otherwise looks
     /// like the app forgot them on purpose.
@@ -847,6 +858,7 @@ impl ControllersView {
         let registry = c.registry.lock().expect("registry poisoned");
         let activity = c.activity.lock().expect("activity poisoned");
         let connected = c.connected.lock().expect("connected poisoned");
+        let cal = c.calibrate.lock().expect("calibrate poisoned");
         let now = Instant::now();
         ControllersView {
             devices: registry
@@ -887,6 +899,12 @@ impl ControllersView {
                 .collect(),
             roles: &controllers::Role::NAMES,
             modes: &controllers::Mode::NAMES,
+            calibrating: cal.active.as_ref().map(|c| c.control),
+            instruction: cal.active.as_ref().map(|c| c.instruction()),
+            found: cal.report.as_ref().map(|(seq, text)| CalibrateReport {
+                seq: *seq,
+                text: text.clone(),
+            }),
             trouble: c.trouble.lock().expect("trouble poisoned").clone(),
         }
     }
@@ -943,6 +961,38 @@ fn set_control_mode(
     // An encoder that was a pot may have left a slot armed behind it.
     state.pickup.lock().expect("pickup poisoned").forget(id);
     Ok(ControllersView::of(&state))
+}
+
+/// Work out whether a knob is a pot or an endless encoder by turning it.
+/// The alternative is asking the person which of three 7-bit encodings their
+/// hardware speaks, which is not a reasonable question.
+#[tauri::command]
+fn calibrate_control(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+) -> Result<ControllersView, String> {
+    {
+        let registry = state.registry.lock().expect("registry poisoned");
+        let c = registry
+            .control(id)
+            .ok_or_else(|| format!("no control {id}"))?;
+        if c.role != controllers::Role::Knob {
+            return Err(format!("{} is a pad, so there is nothing to turn", c.name));
+        }
+    }
+    let mut cal = state.calibrate.lock().expect("calibrate poisoned");
+    cal.active = Some(controllers::Calibration::new(id));
+    // The last answer was about a different knob. Do not leave it standing
+    // next to a question about this one.
+    cal.report = None;
+    drop(cal);
+    Ok(ControllersView::of(&state))
+}
+
+#[tauri::command]
+fn cancel_calibrate(state: tauri::State<'_, Arc<midi::Controllers>>) -> ControllersView {
+    state.calibrate.lock().expect("calibrate poisoned").active = None;
+    ControllersView::of(&state)
 }
 
 /// Name a device's channel, so the control list reads as sections. Blank
@@ -1672,6 +1722,8 @@ pub fn run() {
             rename_control,
             set_control_role,
             set_control_mode,
+            calibrate_control,
+            cancel_calibrate,
             rename_bank,
             forget_control,
             rename_device,
@@ -1851,10 +1903,21 @@ mod tests {
             }],
             roles: &controllers::Role::NAMES,
             modes: &controllers::Mode::NAMES,
+            calibrating: None,
+            instruction: None,
+            found: None,
             trouble: None,
         })
         .expect("ControllersView is serialisable");
-        for key in ["devices", "controls", "roles", "modes", "trouble"] {
+        for key in [
+            "devices",
+            "controls",
+            "roles",
+            "modes",
+            "calibrating",
+            "found",
+            "trouble",
+        ] {
             assert!(cv.get(key).is_some(), "ControllersView lost `{key}`");
         }
         for key in ["port", "name", "connected"] {
