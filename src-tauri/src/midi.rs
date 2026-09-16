@@ -214,7 +214,7 @@ fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
     let Some(target) = map.mappings.get(&control) else {
         return;
     };
-    let Some(role) = registry.control(control).map(|c| c.role) else {
+    let Some((role, mode)) = registry.control(control).map(|c| (c.role, c.mode)) else {
         return;
     };
     match (target, role) {
@@ -224,11 +224,14 @@ fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
             };
             let def = &PARAMS[index];
             let base = shared.bank.get(index);
+            // `None` for a pot, which arms; `Some(delta)` for an endless
+            // encoder, which has no position and never does.
+            let delta = mode.delta(value);
             let turn = shared
                 .pickup
                 .lock()
                 .expect("pickup poisoned")
-                .turn(control, value, def, base);
+                .turn(control, value, delta, def, base);
             if let Turn::Write(v) = turn {
                 shared.bank.set(index, v);
             }

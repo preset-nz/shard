@@ -55,11 +55,105 @@ impl Role {
     }
 }
 
+/// Whether a control sends a position or a change.
+///
+/// A pot or a fader has somewhere it physically is, and says so: that is
+/// `Absolute`, and pickup exists to stop it jumping. An endless encoder has
+/// no position at all and sends how far it just moved, in one of three
+/// encodings that look alike on a slow turn. **Never inferred.** A right turn
+/// under `BinaryOffset` sends 65, which is a left turn under `SignedBit`, so
+/// guessing from traffic is circular — control-plane.md §5 warns about this
+/// and it is right. Set it by hand, then turn the encoder one click left: the
+/// panel shows the decoded change, and the correct encoding reads −1.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mode {
+    #[default]
+    Absolute,
+    /// 1..63 up, 65..127 down, the sign in bit 6. Behringer "rel-1".
+    SignedBit,
+    /// 1..63 up, 127..65 down. Two's complement.
+    TwosComplement,
+    /// 64 is no change, above is up, below is down. Behringer "rel-3".
+    BinaryOffset,
+}
+
+impl Mode {
+    pub const NAMES: [&'static str; 4] = [
+        "absolute",
+        "signed bit",
+        "two's complement",
+        "binary offset",
+    ];
+
+    pub fn parse(s: &str) -> Option<Mode> {
+        match s {
+            "absolute" => Some(Mode::Absolute),
+            "signed bit" => Some(Mode::SignedBit),
+            "two's complement" => Some(Mode::TwosComplement),
+            "binary offset" => Some(Mode::BinaryOffset),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        Mode::NAMES[match self {
+            Mode::Absolute => 0,
+            Mode::SignedBit => 1,
+            Mode::TwosComplement => 2,
+            Mode::BinaryOffset => 3,
+        }]
+    }
+
+    /// True for an endless encoder, which never arms pickup.
+    pub fn is_relative(self) -> bool {
+        self != Mode::Absolute
+    }
+
+    /// How far this message says the encoder moved, or `None` when the
+    /// control sends a position instead.
+    pub fn delta(self, value: u8) -> Option<i8> {
+        let v = i16::from(value & 0x7F);
+        let d = match self {
+            Mode::Absolute => return None,
+            Mode::SignedBit if v >= 64 => 64 - v,
+            Mode::SignedBit => v,
+            Mode::TwosComplement if v >= 64 => v - 128,
+            Mode::TwosComplement => v,
+            Mode::BinaryOffset => v - 64,
+        };
+        Some(d as i8)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Device {
     /// The port name CoreMIDI gives it. Identity, never edited.
     pub port: String,
     pub name: String,
+}
+
+/// A named channel on a device.
+///
+/// **A channel is how these boxes spell a bank.** The LPD8's four programs
+/// come out on channels 1, 2, 1 and 4; the Launch Control's templates do the
+/// same. Nothing announces the switch, so the channel is the only evidence,
+/// and "ch 5" tells you nothing a month later. Naming it turns the long flat
+/// list of controls into something you can read: "LC3 · Mixer · Send A 1".
+///
+/// This is not a page in the [`Map`] sense. A map is a set of bindings you
+/// switch between in the app; a bank is a face of the hardware.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Bank {
+    pub device: String,
+    pub channel: u8,
+    pub name: String,
+}
+
+/// What a channel is called when you have not named it. One-based, the way
+/// every piece of hardware and every manual counts channels.
+pub fn default_bank_name(channel: u8) -> String {
+    format!("Ch {}", channel + 1)
 }
 
 /// Where a message came from, ignoring its value. Two messages with the same
@@ -78,6 +172,10 @@ pub struct Control {
     #[serde(flatten)]
     pub address: Address,
     pub role: Role,
+    /// Absolute unless you say otherwise. A new field on an existing file
+    /// reads as `absolute`, which is what every control was before this.
+    #[serde(default)]
+    pub mode: Mode,
     pub name: String,
     /// True once you or a value other than 0 and 127 has settled the role.
     /// Until then a CC that has only sent 0 and 127 may still be flipped to
@@ -101,6 +199,11 @@ pub struct Registry {
     pub next_map_id: u64,
     #[serde(default)]
     pub active: Option<u64>,
+    /// Names for the channels you have bothered to name. A channel with no
+    /// entry draws as `Ch N`; there is no point storing a row per channel
+    /// that is only ever called what it was already called.
+    #[serde(default)]
+    pub banks: Vec<Bank>,
 }
 
 fn one() -> u64 {
@@ -117,6 +220,7 @@ impl Default for Registry {
             maps: Vec::new(),
             next_map_id: 1,
             active: None,
+            banks: Vec::new(),
         }
     }
 }
@@ -187,6 +291,7 @@ impl Registry {
                     id,
                     address,
                     role,
+                    mode: Mode::Absolute,
                     name,
                     role_settled: role == Role::Knob,
                 });
@@ -233,6 +338,17 @@ impl Registry {
         Ok(())
     }
 
+    /// Say whether a control is a pot or an endless encoder. A pad has no
+    /// position to send either way, so the question only applies to knobs.
+    pub fn set_mode(&mut self, id: u64, mode: Mode) -> Result<(), String> {
+        let c = self.control_mut(id)?;
+        if c.role != Role::Knob && mode.is_relative() {
+            return Err(format!("{} is a pad, so it sends no position", c.name));
+        }
+        c.mode = mode;
+        Ok(())
+    }
+
     pub fn forget_control(&mut self, id: u64) -> Result<(), String> {
         let n = self.controls.len();
         self.controls.retain(|c| c.id != id);
@@ -273,6 +389,7 @@ impl Registry {
             .map(|c| c.id)
             .collect();
         self.controls.retain(|c| c.address.device != port);
+        self.banks.retain(|b| b.device != port);
         for m in &mut self.maps {
             m.mappings.retain(|c, _| !gone.contains(c));
         }
@@ -281,6 +398,34 @@ impl Registry {
 
     pub fn control(&self, id: u64) -> Option<&Control> {
         self.controls.iter().find(|c| c.id == id)
+    }
+
+    /// What this device's channel is called.
+    pub fn bank_name(&self, device: &str, channel: u8) -> String {
+        self.banks
+            .iter()
+            .find(|b| b.device == device && b.channel == channel)
+            .map(|b| b.name.clone())
+            .unwrap_or_else(|| default_bank_name(channel))
+    }
+
+    /// Name a channel, or hand it back its default name by clearing it.
+    pub fn rename_bank(&mut self, device: &str, channel: u8, name: &str) -> Result<(), String> {
+        let name = name.trim();
+        if name.chars().count() > MAX_NAME {
+            return Err(format!("a name is at most {MAX_NAME} characters"));
+        }
+        self.banks
+            .retain(|b| !(b.device == device && b.channel == channel));
+        // Blank, or the name it would have anyway, stores nothing.
+        if !name.is_empty() && name != default_bank_name(channel) {
+            self.banks.push(Bank {
+                device: device.to_string(),
+                channel,
+                name: name.to_string(),
+            });
+        }
+        Ok(())
     }
 
     pub fn active_map(&self) -> Option<&Map> {
@@ -626,6 +771,92 @@ mod tests {
             Target::Param("grain.size".into())
         );
         assert_eq!(back.next_map_id, 3);
+    }
+
+    #[test]
+    fn each_encoding_decodes_one_click_each_way() {
+        // The turn-left test: one click anticlockwise is −1 under the right
+        // encoding, and nothing like it under the other two.
+        assert_eq!(Mode::SignedBit.delta(1), Some(1));
+        assert_eq!(Mode::SignedBit.delta(65), Some(-1));
+        assert_eq!(Mode::TwosComplement.delta(1), Some(1));
+        assert_eq!(Mode::TwosComplement.delta(127), Some(-1));
+        assert_eq!(Mode::BinaryOffset.delta(65), Some(1));
+        assert_eq!(Mode::BinaryOffset.delta(63), Some(-1));
+        assert_eq!(Mode::BinaryOffset.delta(64), Some(0));
+        // A pot has no change to report, only a position.
+        assert_eq!(Mode::Absolute.delta(64), None);
+        // Faster turns carry further, and the two 7-bit schemes disagree
+        // about which way a big value leans. That is the whole reason this
+        // is set by hand.
+        assert_eq!(Mode::SignedBit.delta(70), Some(-6));
+        assert_eq!(Mode::TwosComplement.delta(70), Some(-58));
+    }
+
+    #[test]
+    fn every_mode_name_round_trips() {
+        for name in Mode::NAMES {
+            let m = Mode::parse(name).expect(name);
+            assert_eq!(m.name(), name);
+        }
+        assert!(Mode::parse("endless").is_none());
+        assert!(!Mode::Absolute.is_relative());
+        assert!(Mode::TwosComplement.is_relative());
+    }
+
+    #[test]
+    fn a_pad_cannot_be_an_endless_encoder() {
+        let mut r = Registry::default();
+        r.observe("LPD8", &on(9, 36, 100));
+        assert!(r.set_mode(1, Mode::TwosComplement).is_err());
+        assert!(r.set_mode(1, Mode::Absolute).is_ok());
+        assert_eq!(r.controls[0].mode, Mode::Absolute);
+    }
+
+    #[test]
+    fn a_control_keeps_its_mode_across_a_save() {
+        let mut r = Registry::default();
+        r.observe("LC3", &cc(0, 13, 65));
+        r.set_mode(1, Mode::TwosComplement).unwrap();
+        let back = Registry::parse(&r.to_json()).unwrap();
+        assert_eq!(back.controls[0].mode, Mode::TwosComplement);
+    }
+
+    #[test]
+    fn a_channel_is_named_once_and_only_when_it_differs() {
+        let mut r = Registry::default();
+        r.observe("LC3", &cc(4, 13, 40));
+        assert_eq!(r.bank_name("LC3", 4), "Ch 5");
+        assert!(r.banks.is_empty());
+
+        r.rename_bank("LC3", 4, "Mixer").unwrap();
+        assert_eq!(r.bank_name("LC3", 4), "Mixer");
+        assert_eq!(r.banks.len(), 1);
+        // Another device's channel 5 is a different channel.
+        assert_eq!(r.bank_name("LPD8", 4), "Ch 5");
+
+        // Blank hands back the default, and stores nothing.
+        r.rename_bank("LC3", 4, "  ").unwrap();
+        assert_eq!(r.bank_name("LC3", 4), "Ch 5");
+        assert!(r.banks.is_empty());
+        // So does naming it what it was already called.
+        r.rename_bank("LC3", 4, "Ch 5").unwrap();
+        assert!(r.banks.is_empty());
+        assert!(r.rename_bank("LC3", 4, &"x".repeat(41)).is_err());
+    }
+
+    #[test]
+    fn channel_names_round_trip_and_a_forgotten_device_takes_them() {
+        let mut r = Registry::default();
+        r.observe("LC3", &cc(4, 13, 40));
+        r.observe("LPD8", &cc(0, 1, 40));
+        r.rename_bank("LC3", 4, "Mixer").unwrap();
+        r.rename_bank("LPD8", 0, "Program 1").unwrap();
+        let mut back = Registry::parse(&r.to_json()).unwrap();
+        assert_eq!(back.bank_name("LC3", 4), "Mixer");
+        back.forget_device("LC3").unwrap();
+        assert_eq!(back.bank_name("LC3", 4), "Ch 5");
+        assert_eq!(back.bank_name("LPD8", 0), "Program 1");
     }
 
     #[test]

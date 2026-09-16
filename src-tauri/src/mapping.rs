@@ -120,10 +120,41 @@ pub enum Turn {
     Waiting,
 }
 
+/// One detent of an endless encoder: one 7-bit step of a continuous
+/// parameter, one step of a stepped one.
+///
+/// **Clamped, never wrapped.** An encoder that rolls the cutoff off the top
+/// and back to 20 Hz will do it during a take.
+fn nudge(def: &ParamDef, base: f32, delta: i8) -> f32 {
+    let d = f32::from(delta);
+    let per = match def.taper {
+        // Stepped ranges are short, so a detent is a step, not 1/127 of one.
+        Taper::Stepped(n) => 1.0 / (n.max(2) - 1) as f32,
+        _ => STEP,
+    };
+    def.denormalise((def.normalise(base) + d * per).clamp(0.0, 1.0))
+}
+
 impl Pickup {
     /// A knob on `def` sent `value`, and the bank holds `base`. Decides whether
     /// the knob has caught the value.
-    pub fn turn(&mut self, control: u64, value: u8, def: &ParamDef, base: f32) -> Turn {
+    ///
+    /// `delta` is `Some` for an endless encoder, which never arms: it has no
+    /// position to disagree with the value, so every message is a change from
+    /// wherever the value already is.
+    pub fn turn(
+        &mut self,
+        control: u64,
+        value: u8,
+        delta: Option<i8>,
+        def: &ParamDef,
+        base: f32,
+    ) -> Turn {
+        if let Some(d) = delta {
+            // Nothing to remember: there is no knob position to track.
+            self.slots.remove(&control);
+            return Turn::Write(nudge(def, base, d));
+        }
         let t = f32::from(value.min(127)) / 127.0;
         if matches!(def.taper, Taper::Stepped(_)) {
             return Turn::Write(def.denormalise(t));
@@ -153,9 +184,16 @@ impl Pickup {
         }
     }
 
-    /// Whether `control` is armed, and where its knob is if known.
-    pub fn state(&self, control: u64, def: &ParamDef, base: f32) -> (bool, Option<f32>) {
-        if matches!(def.taper, Taper::Stepped(_)) {
+    /// Whether `control` is armed, and where its knob is if known. An
+    /// endless encoder is never armed and has no mark to draw.
+    pub fn state(
+        &self,
+        control: u64,
+        relative: bool,
+        def: &ParamDef,
+        base: f32,
+    ) -> (bool, Option<f32>) {
+        if relative || matches!(def.taper, Taper::Stepped(_)) {
             return (false, None);
         }
         match self.slots.get(&control) {
@@ -212,15 +250,15 @@ mod tests {
         let d = def("grain.size");
         let base = d.denormalise(0.5);
         let mut p = Pickup::default();
-        assert_eq!(p.turn(1, 10, d, base), Turn::Waiting);
-        assert_eq!(p.turn(1, 30, d, base), Turn::Waiting);
-        assert_eq!(p.state(1, d, base), (true, Some(30.0 / 127.0)));
+        assert_eq!(p.turn(1, 10, None, d, base), Turn::Waiting);
+        assert_eq!(p.turn(1, 30, None, d, base), Turn::Waiting);
+        assert_eq!(p.state(1, false, d, base), (true, Some(30.0 / 127.0)));
         // A jump straight across the value catches, and the bank now holds
         // what the knob wrote.
-        let Turn::Write(v) = p.turn(1, 90, d, base) else {
+        let Turn::Write(v) = p.turn(1, 90, None, d, base) else {
             panic!("a jump across the value catches");
         };
-        assert!(!p.state(1, d, v).0);
+        assert!(!p.state(1, false, d, v).0);
     }
 
     #[test]
@@ -228,12 +266,12 @@ mod tests {
         let d = def("grain.size");
         let base = d.denormalise(0.5);
         let mut p = Pickup::default();
-        assert_eq!(p.turn(1, 120, d, base), Turn::Waiting);
-        assert!(matches!(p.turn(1, 20, d, base), Turn::Write(_)));
+        assert_eq!(p.turn(1, 120, None, d, base), Turn::Waiting);
+        assert!(matches!(p.turn(1, 20, None, d, base), Turn::Write(_)));
 
         let mut p = Pickup::default();
         // 64/127 is within a step of 0.5, so a first message can catch.
-        assert!(matches!(p.turn(2, 64, d, base), Turn::Write(_)));
+        assert!(matches!(p.turn(2, 64, None, d, base), Turn::Write(_)));
     }
 
     #[test]
@@ -241,15 +279,15 @@ mod tests {
         let d = def("grain.size");
         let mut p = Pickup::default();
         let base = d.denormalise(0.5);
-        let Turn::Write(v) = p.turn(1, 64, d, base) else {
+        let Turn::Write(v) = p.turn(1, 64, None, d, base) else {
             panic!("should catch");
         };
         // Base is now what the knob wrote; the next message applies.
-        assert!(matches!(p.turn(1, 70, d, v), Turn::Write(_)));
+        assert!(matches!(p.turn(1, 70, None, d, v), Turn::Write(_)));
         // The slider moved it far away: armed again.
         let elsewhere = d.denormalise(0.1);
-        assert_eq!(p.turn(1, 72, d, elsewhere), Turn::Waiting);
-        assert!(p.state(1, d, elsewhere).0);
+        assert_eq!(p.turn(1, 72, None, d, elsewhere), Turn::Waiting);
+        assert!(p.state(1, false, d, elsewhere).0);
     }
 
     #[test]
@@ -257,10 +295,10 @@ mod tests {
         for d in PARAMS {
             let mut p = Pickup::default();
             // Caught by construction: base sits where the knob is.
-            let at_min = p.turn(1, 0, d, d.min);
+            let at_min = p.turn(1, 0, None, d, d.min);
             assert_eq!(at_min, Turn::Write(d.min), "{}", d.id);
             let mut p = Pickup::default();
-            let at_max = p.turn(1, 127, d, d.max);
+            let at_max = p.turn(1, 127, None, d, d.max);
             assert_eq!(at_max, Turn::Write(d.max), "{}", d.id);
         }
     }
@@ -270,15 +308,66 @@ mod tests {
         let d = def("grain.window");
         let mut p = Pickup::default();
         for v in [3u8, 40, 90, 127] {
-            let Turn::Write(x) = p.turn(1, v, d, 2.0) else {
+            let Turn::Write(x) = p.turn(1, v, None, d, 2.0) else {
                 panic!("stepped writes at once");
             };
             assert_eq!(x, x.round());
         }
-        assert_eq!(p.state(1, d, 2.0), (false, None));
+        assert_eq!(p.state(1, false, d, 2.0), (false, None));
         let sw = def("grain.on");
-        assert_eq!(p.turn(2, 63, sw, 0.0), Turn::Write(0.0));
-        assert_eq!(p.turn(2, 64, sw, 0.0), Turn::Write(1.0));
+        assert_eq!(p.turn(2, 63, None, sw, 0.0), Turn::Write(0.0));
+        assert_eq!(p.turn(2, 64, None, sw, 0.0), Turn::Write(1.0));
+    }
+
+    #[test]
+    fn an_endless_encoder_never_arms_and_nudges_from_the_value() {
+        let d = def("grain.size");
+        let mut p = Pickup::default();
+        let base = d.denormalise(0.5);
+        // A pot at 10 would be nowhere near the value and would wait. An
+        // encoder has no position, so the same message is one step up.
+        let Turn::Write(up) = p.turn(1, 10, Some(1), d, base) else {
+            panic!("an encoder writes at once");
+        };
+        assert!(up > base, "one click up raises it");
+        assert_eq!(p.state(1, true, d, base), (false, None));
+
+        // Down by the same amount comes back to where it started.
+        let Turn::Write(back) = p.turn(1, 127, Some(-1), d, up) else {
+            panic!("an encoder writes at once");
+        };
+        assert!((back - base).abs() < 1e-3, "{back} should be {base}");
+    }
+
+    #[test]
+    fn an_encoder_clamps_at_the_ends_rather_than_wrapping() {
+        for d in PARAMS {
+            let mut p = Pickup::default();
+            let Turn::Write(v) = p.turn(1, 1, Some(-127), d, d.min) else {
+                panic!("writes");
+            };
+            assert_eq!(v, d.min, "{} fell off the bottom", d.id);
+            let Turn::Write(v) = p.turn(1, 1, Some(127), d, d.max) else {
+                panic!("writes");
+            };
+            assert_eq!(v, d.max, "{} rolled over the top", d.id);
+        }
+    }
+
+    #[test]
+    fn one_detent_moves_a_stepped_parameter_exactly_one_step() {
+        let d = def("grain.window");
+        let mut p = Pickup::default();
+        let Turn::Write(v) = p.turn(1, 1, Some(1), d, d.min) else {
+            panic!("writes");
+        };
+        assert_eq!(v, d.min + 1.0);
+        // And a switch flips with one click rather than needing 127.
+        let sw = def("grain.on");
+        let Turn::Write(on) = p.turn(2, 1, Some(1), sw, 0.0) else {
+            panic!("writes");
+        };
+        assert_eq!(on, 1.0);
     }
 
     #[test]
@@ -286,8 +375,8 @@ mod tests {
         let d = def("grain.size");
         let base = d.denormalise(0.5);
         let mut p = Pickup::default();
-        p.turn(1, 64, d, base);
+        p.turn(1, 64, None, d, base);
         p.rearm_all();
-        assert_eq!(p.state(1, d, base), (true, None));
+        assert_eq!(p.state(1, false, d, base), (true, None));
     }
 }
