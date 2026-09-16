@@ -1,7 +1,9 @@
 import type { FieldRendererProps } from '@preset.nz/facets';
+import { Fragment } from 'react';
 import {
   denormalise,
   format,
+  type KnobInfo,
   type MappingsView,
   type ModulationView,
   normalise,
@@ -19,6 +21,24 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { Slider } from '@/components/ui/slider';
+
+/**
+ * Knobs under a heading of "device · channel", which is the namespace these
+ * boxes actually have: the LPD8's programs and the Launch Control's templates
+ * are channels, and forty controls in one flat list say nothing about which
+ * face of which box they are on. Order follows the list, so controls stay put
+ * as they are learned.
+ */
+function groupKnobs(knobs: KnobInfo[]): [string, KnobInfo[]][] {
+  const by = new Map<string, KnobInfo[]>();
+  for (const k of knobs) {
+    const where = `${k.device} · ${k.bank}`;
+    const got = by.get(where);
+    if (got) got.push(k);
+    else by.set(where, [k]);
+  }
+  return [...by.entries()];
+}
 
 /**
  * One parameter: label, value and slider, and its link to an LFO.
@@ -203,11 +223,19 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         <ContextMenuSub>
           <ContextMenuSubTrigger>Control</ContextMenuSubTrigger>
           <ContextMenuSubContent className="max-h-80 overflow-y-auto">
-            {c.midi.knobs.map((k) => (
-              <ContextMenuItem key={k.id} onSelect={() => c.onMapMidi(def.id, k.id)}>
-                {k.name}
-                {mapped?.control === k.id ? ' ✓' : ''}
-              </ContextMenuItem>
+            {groupKnobs(c.midi.knobs).map(([where, knobs]) => (
+              <Fragment key={where}>
+                <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                  {where}
+                </ContextMenuLabel>
+                {knobs.map((k) => (
+                  <ContextMenuItem key={k.id} onSelect={() => c.onMapMidi(def.id, k.id)}>
+                    {k.name}
+                    {k.relative ? ' ∞' : ''}
+                    {mapped?.control === k.id ? ' ✓' : ''}
+                  </ContextMenuItem>
+                ))}
+              </Fragment>
             ))}
             {c.midi.knobs.length === 0 && (
               <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">

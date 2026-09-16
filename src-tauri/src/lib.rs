@@ -815,11 +815,19 @@ pub struct ControlView {
     pub number: u8,
     /// "knob" | "pad"
     pub role: &'static str,
+    /// "absolute" for a pot, or the encoding for an endless encoder.
+    pub mode: &'static str,
+    /// What this channel is called: "Ch 5", or the name you gave it.
+    pub bank: String,
     pub name: String,
     /// Moved within the last quarter second.
     pub active: bool,
     /// The last value it sent, 0 to 127, once it has sent one.
     pub last: Option<u8>,
+    /// For an endless encoder, what that last value decoded to. This is the
+    /// turn-left test: one click anticlockwise reads −1 under the right
+    /// encoding and something absurd under the wrong one.
+    pub delta: Option<i8>,
 }
 
 #[derive(Serialize)]
@@ -827,6 +835,7 @@ pub struct ControllersView {
     pub devices: Vec<DeviceView>,
     pub controls: Vec<ControlView>,
     pub roles: &'static [&'static str],
+    pub modes: &'static [&'static str],
     /// What went wrong with `controllers.json` at startup, if anything. The
     /// panel says it, because starting with no controllers otherwise looks
     /// like the app forgot them on purpose.
@@ -867,13 +876,17 @@ impl ControllersView {
                             controllers::Role::Knob => "knob",
                             controllers::Role::Pad => "pad",
                         },
+                        mode: k.mode.name(),
+                        bank: registry.bank_name(&k.address.device, k.address.channel),
                         name: k.name.clone(),
                         active,
                         last,
+                        delta: last.and_then(|v| k.mode.delta(v)),
                     }
                 })
                 .collect(),
             roles: &controllers::Role::NAMES,
+            modes: &controllers::Mode::NAMES,
             trouble: c.trouble.lock().expect("trouble poisoned").clone(),
         }
     }
@@ -914,6 +927,34 @@ fn set_control_role(
 ) -> Result<ControllersView, String> {
     let role = controllers::Role::parse(&role).ok_or_else(|| format!("unknown role: {role}"))?;
     edit_controllers(&state, |r| r.set_role(id, role))?;
+    Ok(ControllersView::of(&state))
+}
+
+/// Say whether a knob is a pot or an endless encoder, and in which encoding.
+/// Never inferred: see `controllers::Mode`.
+#[tauri::command]
+fn set_control_mode(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    id: u64,
+    mode: String,
+) -> Result<ControllersView, String> {
+    let mode = controllers::Mode::parse(&mode).ok_or_else(|| format!("unknown mode: {mode}"))?;
+    edit_controllers(&state, |r| r.set_mode(id, mode))?;
+    // An encoder that was a pot may have left a slot armed behind it.
+    state.pickup.lock().expect("pickup poisoned").forget(id);
+    Ok(ControllersView::of(&state))
+}
+
+/// Name a device's channel, so the control list reads as sections. Blank
+/// hands it back its default, "Ch N".
+#[tauri::command]
+fn rename_bank(
+    state: tauri::State<'_, Arc<midi::Controllers>>,
+    port: String,
+    channel: u8,
+    name: String,
+) -> Result<ControllersView, String> {
+    edit_controllers(&state, |r| r.rename_bank(&port, channel, &name))?;
     Ok(ControllersView::of(&state))
 }
 
@@ -969,6 +1010,12 @@ pub struct KnobInfo {
     pub id: u64,
     pub name: String,
     pub device: String,
+    /// The channel's name. Device plus bank is the namespace the menu groups
+    /// by, so a list of forty controls reads as a few short sections.
+    pub bank: String,
+    /// True for an endless encoder, so a row can say so rather than draw a
+    /// ghost mark it will never move.
+    pub relative: bool,
 }
 
 #[derive(Serialize)]
@@ -1008,7 +1055,11 @@ impl MappingsView {
                     .control(*control)
                     .map(|k| k.name.clone())
                     .unwrap_or_default();
-                let (armed, knob) = pickup.state(*control, &PARAMS[index], c.bank.get(index));
+                let relative = registry
+                    .control(*control)
+                    .is_some_and(|k| k.mode.is_relative());
+                let (armed, knob) =
+                    pickup.state(*control, relative, &PARAMS[index], c.bank.get(index));
                 mappings.insert(
                     id.clone(),
                     MappingView {
@@ -1046,6 +1097,8 @@ impl MappingsView {
                         .find(|d| d.port == k.address.device)
                         .map(|d| d.name.clone())
                         .unwrap_or_else(|| k.address.device.clone()),
+                    bank: registry.bank_name(&k.address.device, k.address.channel),
+                    relative: k.mode.is_relative(),
                 })
                 .collect(),
             mappings,
@@ -1618,6 +1671,8 @@ pub fn run() {
             controllers,
             rename_control,
             set_control_role,
+            set_control_mode,
+            rename_bank,
             forget_control,
             rename_device,
             forget_device,
@@ -1787,15 +1842,19 @@ mod tests {
                 kind: "cc",
                 number: 1,
                 role: "knob",
+                mode: "absolute",
+                bank: "Ch 1".into(),
                 name: "K1".into(),
                 active: false,
                 last: None,
+                delta: None,
             }],
             roles: &controllers::Role::NAMES,
+            modes: &controllers::Mode::NAMES,
             trouble: None,
         })
         .expect("ControllersView is serialisable");
-        for key in ["devices", "controls", "roles", "trouble"] {
+        for key in ["devices", "controls", "roles", "modes", "trouble"] {
             assert!(cv.get(key).is_some(), "ControllersView lost `{key}`");
         }
         for key in ["port", "name", "connected"] {
@@ -1823,6 +1882,8 @@ mod tests {
                 id: 1,
                 name: "K1".into(),
                 device: "LPD8".into(),
+                bank: "Ch 1".into(),
+                relative: false,
             }],
             mappings: [(
                 "grain.size".to_string(),
@@ -1845,7 +1906,7 @@ mod tests {
         for key in ["active", "maps", "knobs", "mappings", "learning", "report"] {
             assert!(mv.get(key).is_some(), "MappingsView lost `{key}`");
         }
-        for key in ["id", "name", "device"] {
+        for key in ["id", "name", "device", "bank", "relative"] {
             assert!(mv["knobs"][0].get(key).is_some(), "KnobInfo lost `{key}`");
         }
         for key in ["control", "control_name", "armed", "knob"] {

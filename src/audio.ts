@@ -345,17 +345,27 @@ export interface ControlView {
   kind: 'cc' | 'note';
   number: number;
   role: 'knob' | 'pad';
+  /** 'absolute' for a pot, or the encoding for an endless encoder. */
+  mode: string;
+  /** What this channel is called: 'Ch 5', or the name you gave it. */
+  bank: string;
   name: string;
   /** Moved within the last quarter second. */
   active: boolean;
   /** The last value it sent, 0 to 127. */
   last: number | null;
+  /**
+   * For an endless encoder, what that last value decoded to. The turn-left
+   * test: one click anticlockwise reads −1 under the right encoding.
+   */
+  delta: number | null;
 }
 
 export interface ControllersView {
   devices: DeviceView[];
   controls: ControlView[];
   roles: string[];
+  modes: string[];
   /** What went wrong with `controllers.json` at startup, if anything. */
   trouble: string | null;
 }
@@ -365,6 +375,10 @@ export const renameControl = (id: number, name: string) =>
   invoke<ControllersView>('rename_control', { id, name });
 export const setControlRole = (id: number, role: string) =>
   invoke<ControllersView>('set_control_role', { id, role });
+export const setControlMode = (id: number, mode: string) =>
+  invoke<ControllersView>('set_control_mode', { id, mode });
+export const renameBank = (port: string, channel: number, name: string) =>
+  invoke<ControllersView>('rename_bank', { port, channel, name });
 export const forgetControl = (id: number) => invoke<ControllersView>('forget_control', { id });
 export const renameDevice = (port: string, name: string) =>
   invoke<ControllersView>('rename_device', { port, name });
@@ -390,6 +404,10 @@ export interface KnobInfo {
   id: number;
   name: string;
   device: string;
+  /** The channel's name. Device plus bank is the namespace the menu groups by. */
+  bank: string;
+  /** An endless encoder, which never arms and draws no ghost mark. */
+  relative: boolean;
 }
 
 export interface LearnReport {
