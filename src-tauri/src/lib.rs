@@ -31,6 +31,7 @@ mod midi;
 mod modulation;
 mod patch;
 mod presets;
+mod profile;
 mod source;
 mod tracker;
 
@@ -1680,8 +1681,11 @@ pub fn run() {
                 .app_config_dir()
                 .map_err(|e| e.to_string())?
                 .join("controllers.json");
-            let bank = Arc::clone(&app.state::<Audio>().bank);
-            let shared = Arc::new(midi::Controllers::load(path, bank));
+            let audio = app.state::<Audio>();
+            let bank = Arc::clone(&audio.bank);
+            let play_request = Arc::clone(&audio.play_request);
+            let playing = Arc::clone(&audio.playing);
+            let shared = Arc::new(midi::Controllers::load(path, bank, play_request, playing));
             midi::start(Arc::clone(&shared));
             app.manage(shared);
             Ok(())
@@ -1737,8 +1741,16 @@ pub fn run() {
             add_map,
             rename_map,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application")
+        .run(|_app, event| {
+            // Hand a profiled surface back before quitting, so the device
+            // returns to standalone rather than sitting in a DAW mode that
+            // nothing is driving. A crash cannot do this; a clean exit can.
+            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+                midi::release_surfaces();
+            }
+        });
 }
 
 #[cfg(test)]

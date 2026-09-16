@@ -18,12 +18,13 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use midir::{Ignore, MidiInput, MidiInputConnection};
+use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
 use shard_dsp::params::{index_of, PARAMS};
 use shard_dsp::ParamBank;
 
 use crate::controllers::{describe_mode, Activity, Calibration, Registry, Role};
 use crate::mapping::{Pickup, Target, Turn};
+use crate::profile::{self, Does, Profile};
 
 const RESCAN_EVERY: Duration = Duration::from_secs(1);
 
@@ -81,6 +82,11 @@ pub struct Controllers {
     keep_file: AtomicBool,
     /// The hand's values. A caught knob writes here, like the UI does.
     pub bank: Arc<ParamBank>,
+    /// The transport, shared with the audio thread. `request` is what was
+    /// asked for; `playing` is what the engine actually did, and a light is
+    /// drawn from the second one.
+    pub play_request: Arc<AtomicBool>,
+    pub playing: Arc<AtomicBool>,
 }
 
 impl Controllers {
@@ -91,7 +97,12 @@ impl Controllers {
     /// to appear saves. Without this, one unparseable byte — or a future
     /// `VERSION` bump, which `parse` rejects outright — would silently take
     /// every device, control and map with it a second after launch.
-    pub fn load(path: PathBuf, bank: Arc<ParamBank>) -> Controllers {
+    pub fn load(
+        path: PathBuf,
+        bank: Arc<ParamBank>,
+        play_request: Arc<AtomicBool>,
+        playing: Arc<AtomicBool>,
+    ) -> Controllers {
         let (registry, trouble, keep_file) = match std::fs::read_to_string(&path) {
             // No file is the first run, and there is nothing to lose.
             Err(_) => (Registry::default(), None, false),
@@ -135,6 +146,8 @@ impl Controllers {
             trouble: Mutex::new(trouble),
             keep_file: AtomicBool::new(keep_file),
             bank,
+            play_request,
+            playing,
         }
     }
 
@@ -160,6 +173,14 @@ struct Message {
     bytes: Vec<u8>,
 }
 
+/// The channel and number of a control change, or `None` for anything else.
+fn decode_cc(bytes: &[u8]) -> Option<(u8, u8)> {
+    match bytes {
+        [status, number, _] if status >> 4 == 0xB => Some((status & 0x0F, number & 0x7F)),
+        _ => None,
+    }
+}
+
 /// Spawn the MIDI thread. Returns at once; the thread lives as long as the app.
 pub fn start(shared: Arc<Controllers>) {
     std::thread::Builder::new()
@@ -168,20 +189,127 @@ pub fn start(shared: Arc<Controllers>) {
         .expect("midi thread spawns");
 }
 
+/// How often the surface is redrawn from state. A light must follow the
+/// transport, not the press, so it is compared rather than pushed.
+const FEEDBACK_EVERY: Duration = Duration::from_millis(40);
+
+/// Everything the MIDI thread owns that is not shared.
+#[derive(Default)]
+struct Surfaces {
+    /// Open output ports, by the *output* port name.
+    out: BTreeMap<String, MidiOutputConnection>,
+    /// The last transport state drawn on each profiled device, so nothing is
+    /// sent while nothing has changed.
+    drawn: BTreeMap<String, bool>,
+}
+
 fn run(shared: Arc<Controllers>) {
     let (tx, rx): (Sender<Message>, Receiver<Message>) = mpsc::channel();
     let mut open: BTreeMap<String, MidiInputConnection<()>> = BTreeMap::new();
+    let mut surfaces = Surfaces::default();
     let mut next_scan = Instant::now();
+    let mut next_feedback = Instant::now();
     loop {
-        if Instant::now() >= next_scan {
-            rescan(&shared, &tx, &mut open);
-            next_scan = Instant::now() + RESCAN_EVERY;
+        let now = Instant::now();
+        if now >= next_scan {
+            rescan(&shared, &tx, &mut open, &mut surfaces);
+            next_scan = now + RESCAN_EVERY;
         }
-        let wait = next_scan.saturating_duration_since(Instant::now());
+        if now >= next_feedback {
+            draw(&shared, &mut surfaces);
+            next_feedback = now + FEEDBACK_EVERY;
+        }
+        let wait = next_scan
+            .min(next_feedback)
+            .saturating_duration_since(Instant::now());
         match rx.recv_timeout(wait) {
             Ok(m) => handle(&shared, &m),
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return,
+        }
+    }
+}
+
+/// Redraw every profiled surface from the transport.
+///
+/// **Compared, not pushed.** The spacebar, the UI and a patch load all move
+/// the transport without touching a pad, so a light driven by the press lies
+/// the first time one of them does. This reads `playing` — what the engine
+/// actually did — rather than `play_request`, which is only what was asked.
+fn draw(shared: &Controllers, surfaces: &mut Surfaces) {
+    let playing = shared.playing.load(Ordering::Relaxed);
+    for p in profile::PROFILES {
+        let Some(conn) = surfaces.out.get_mut(p.output) else {
+            continue;
+        };
+        if surfaces.drawn.get(p.output) == Some(&playing) {
+            continue;
+        }
+        let colour = if playing {
+            profile::PLAYING
+        } else {
+            profile::STOPPED
+        };
+        let mut ok = true;
+        for c in p.claims {
+            if matches!(c.does, Does::TransportToggle) {
+                ok &= conn.send(&p.light(c.led, colour)).is_ok();
+            }
+        }
+        if ok {
+            surfaces.drawn.insert(p.output.to_string(), playing);
+        }
+    }
+}
+
+/// Open a profiled device's output and put it into the mode that makes it
+/// answer. Without this the Launch Control 3 has no LEDs, no screen and a
+/// silent DAW port.
+fn wake(p: &'static Profile, surfaces: &mut Surfaces) {
+    if surfaces.out.contains_key(p.output) {
+        return;
+    }
+    let Ok(out) = MidiOutput::new("shard") else {
+        return;
+    };
+    let found = out
+        .ports()
+        .iter()
+        .find(|port| out.port_name(port).is_ok_and(|n| n == p.output))
+        .cloned();
+    let Some(port) = found else {
+        return;
+    };
+    match out.connect(&port, "shard out") {
+        Ok(mut conn) => {
+            for m in p.on_connect {
+                let _ = conn.send(m);
+            }
+            eprintln!("shard: {} woke on {:?}", p.name, p.output);
+            surfaces.out.insert(p.output.to_string(), conn);
+            // Nothing has been drawn yet, so the next tick draws.
+            surfaces.drawn.remove(p.output);
+        }
+        Err(e) => eprintln!("shard: could not open MIDI out {:?}: {e}", p.output),
+    }
+}
+
+/// Hand a profiled device back to whatever else wants it.
+pub fn release_surfaces() {
+    for p in profile::PROFILES {
+        let Ok(out) = MidiOutput::new("shard") else {
+            continue;
+        };
+        let found = out
+            .ports()
+            .iter()
+            .find(|port| out.port_name(port).is_ok_and(|n| n == p.output))
+            .cloned();
+        let Some(port) = found else { continue };
+        if let Ok(mut conn) = out.connect(&port, "shard out") {
+            for m in p.on_disconnect {
+                let _ = conn.send(m);
+            }
         }
     }
 }
@@ -197,6 +325,30 @@ fn handle(shared: &Controllers, m: &Message) {
     let Some(ev) = event else {
         return;
     };
+
+    // A profiled surface answers for its own controls, ahead of the map. The
+    // registry still learned it, so it is visible in Settings, but binding it
+    // by hand would fight the profile.
+    if let Some(claim) = profile::for_input(&m.port)
+        .and_then(|p| decode_cc(&m.bytes).and_then(|(ch, cc)| p.claim(ch, cc)))
+    {
+        // A press, not a release: a toggle that fired on both would undo
+        // itself. The target decides what a press means (decision 5).
+        if !ev.released && ev.value > 0 {
+            match claim.does {
+                Does::TransportToggle => {
+                    let now = shared.playing.load(Ordering::Relaxed);
+                    shared.play_request.store(!now, Ordering::Relaxed);
+                }
+            }
+        }
+        shared
+            .activity
+            .lock()
+            .expect("activity poisoned")
+            .note(&ev, Instant::now());
+        return;
+    }
 
     // Calibration takes the message rather than playing it, so working out
     // what a knob is does not drag whatever it is mapped to along with it.
@@ -304,6 +456,7 @@ fn rescan(
     shared: &Controllers,
     tx: &Sender<Message>,
     open: &mut BTreeMap<String, MidiInputConnection<()>>,
+    surfaces: &mut Surfaces,
 ) {
     let Ok(mut probe) = MidiInput::new("shard") else {
         return;
@@ -315,6 +468,12 @@ fn rescan(
         .filter_map(|p| probe.port_name(p).ok())
         .collect();
     open.retain(|name, _| names.contains(name));
+    // A device that has gone takes its output with it.
+    surfaces.out.retain(|out, _| {
+        profile::PROFILES
+            .iter()
+            .any(|p| p.output == out && names.contains(&p.input.to_string()))
+    });
     for (port, name) in ports.iter().zip(names.iter()) {
         if open.contains_key(name) {
             continue;
@@ -342,6 +501,10 @@ fn rescan(
         match conn {
             Ok(c) => {
                 open.insert(name.clone(), c);
+                // A profiled device is put into the mode that makes it answer.
+                if let Some(p) = profile::for_input(name) {
+                    wake(p, surfaces);
+                }
                 let mut registry = shared.registry.lock().expect("registry poisoned");
                 if registry.see_device(name) {
                     if let Err(e) = shared.save(&registry) {
@@ -368,7 +531,68 @@ mod tests {
     }
 
     fn load(path: &std::path::Path) -> Controllers {
-        Controllers::load(path.to_path_buf(), Arc::new(ParamBank::new()))
+        Controllers::load(
+            path.to_path_buf(),
+            Arc::new(ParamBank::new()),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicBool::new(false)),
+        )
+    }
+
+    /// A claimed control toggles the transport off `playing`, not off the
+    /// press, and only on the press.
+    #[test]
+    fn button_eight_toggles_the_transport_and_ignores_the_release() {
+        let path = scratch("claim").join("controllers.json");
+        let c = load(&path);
+        let press = Message {
+            port: "LC3 1 DAW Out".into(),
+            bytes: vec![0xB0, 44, 127],
+        };
+        let release = Message {
+            port: "LC3 1 DAW Out".into(),
+            bytes: vec![0xB0, 44, 0],
+        };
+
+        handle(&c, &press);
+        assert!(c.play_request.load(Ordering::Relaxed), "a press starts it");
+        // The release must not undo the press.
+        handle(&c, &release);
+        assert!(c.play_request.load(Ordering::Relaxed));
+
+        // The engine caught up; the next press stops it.
+        c.playing.store(true, Ordering::Relaxed);
+        handle(&c, &press);
+        assert!(
+            !c.play_request.load(Ordering::Relaxed),
+            "the next press stops it"
+        );
+    }
+
+    /// The same bytes from a device with no profile are ordinary traffic and
+    /// reach the map instead.
+    #[test]
+    fn an_unprofiled_device_sending_the_same_cc_touches_no_transport() {
+        let path = scratch("unclaimed").join("controllers.json");
+        let c = load(&path);
+        handle(
+            &c,
+            &Message {
+                port: "LPD8".into(),
+                bytes: vec![0xB0, 44, 127],
+            },
+        );
+        assert!(!c.play_request.load(Ordering::Relaxed));
+        // It was still learned, so it shows up in Settings.
+        assert_eq!(c.registry.lock().unwrap().controls.len(), 1);
+    }
+
+    #[test]
+    fn a_control_change_is_decoded_and_nothing_else_is() {
+        assert_eq!(decode_cc(&[0xB0, 44, 127]), Some((0, 44)));
+        assert_eq!(decode_cc(&[0xBF, 13, 64]), Some((15, 13)));
+        assert_eq!(decode_cc(&[0x90, 44, 127]), None);
+        assert_eq!(decode_cc(&[0xB0, 44]), None);
     }
 
     #[test]
