@@ -162,15 +162,26 @@ export function ControllersPanel({
   // Calibration is a conversation: it says what to do, then what it found.
   const sayRow =
     view.instruction || view.found ? (
-      <p
+      <div
         className={
           view.instruction
-            ? 'mx-3 rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-500'
-            : 'mx-3 rounded border border-border px-2 py-1.5 text-xs text-muted-foreground'
+            ? 'mx-3 flex items-center gap-2 rounded border border-amber-400/40 bg-amber-400/10 px-2 py-1.5 text-xs text-amber-500'
+            : 'mx-3 flex items-center gap-2 rounded border border-border px-2 py-1.5 text-xs text-muted-foreground'
         }
       >
-        {view.instruction ?? view.found?.text}
-      </p>
+        <span className="flex-1">{view.instruction ?? view.found?.text}</span>
+        {view.instruction ? (
+          // The row's own button says "Turn it…", but it may be scrolled out
+          // of sight, and this banner never is.
+          <button
+            type="button"
+            className="shrink-0 rounded px-1.5 py-0.5 hover:bg-amber-400/20"
+            onClick={() => apply(cancelCalibrate())}
+          >
+            Stop
+          </button>
+        ) : null}
+      </div>
     ) : null;
 
   return (
