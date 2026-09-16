@@ -1,9 +1,11 @@
-import { Plus } from 'lucide-react';
+import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import {
   addMap,
   type ControllersView,
+  type ControlView,
   controllers,
+  type DeviceView,
   forgetControl,
   forgetDevice,
   type MappingsView,
@@ -37,8 +39,19 @@ import {
  * Right-click a device or a control to forget it. Stories 1 and 2 of
  * `controller-mapping.md`.
  *
+ * **Devices fold.** Two controllers is the ordinary case once a second one
+ * arrives, and a 24-knob device would otherwise bury an 8-knob one. A group
+ * opens when its device is connected and closes when it is not, until you
+ * say otherwise; its header carries the state, the control count, and a dot
+ * that lights when anything inside it moves, so you can tell which box a
+ * knob is on without unfolding either.
+ *
  * Above the devices sits the map: which of the named, app-wide maps the
- * knobs play through. Switching arms every knob again.
+ * knobs play through. Switching arms every knob again. Maps are app-wide and
+ * a control is addressed by its device, so a second controller learns its own
+ * controls and takes nothing from the first. Only a *target* is exclusive:
+ * learning a knob onto a parameter another knob already reaches moves it, and
+ * says so.
  */
 export function ControllersPanel({
   open,
@@ -50,6 +63,8 @@ export function ControllersPanel({
   onError: (message: string) => void;
 }) {
   const [view, setView] = useState<ControllersView | null>(null);
+  /** Folds you set by hand, by port. Unset means "follow the connection". */
+  const [folds, setFolds] = useState<Record<string, boolean>>({});
 
   // Poll only while visible. Ten times a second is enough for a dot.
   useEffect(() => {
@@ -117,100 +132,150 @@ export function ControllersPanel({
     </div>
   );
 
-  if (view.devices.length === 0) {
-    return (
-      <div className="space-y-3">
-        {mapRow}
-        <p className="px-3 py-2 text-xs text-muted-foreground">
-          No MIDI device seen yet. Plug one in and it appears here.
-        </p>
-      </div>
-    );
-  }
+  // Starting with no controllers looks like the app forgot them on purpose,
+  // so say what actually happened to the file.
+  const troubleRow = view.trouble ? (
+    <p className="mx-3 rounded border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-500">
+      {view.trouble}
+    </p>
+  ) : null;
 
   return (
     <div className="space-y-3">
       {mapRow}
-      {view.devices.map((d) => {
-        const controls = view.controls.filter((c) => c.device === d.port);
-        return (
-          <div key={d.port}>
-            <ContextMenu>
+      {troubleRow}
+      {view.devices.length === 0 ? (
+        <p className="px-3 py-2 text-xs text-muted-foreground">
+          No MIDI device seen yet. Plug one in and it appears here.
+        </p>
+      ) : (
+        view.devices.map((d) => (
+          <DeviceGroup
+            key={d.port}
+            device={d}
+            controls={view.controls.filter((c) => c.device === d.port)}
+            roles={view.roles}
+            open={folds[d.port] ?? d.connected}
+            onFold={(o) => setFolds((f) => ({ ...f, [d.port]: o }))}
+            apply={apply}
+          />
+        ))
+      )}
+    </div>
+  );
+}
+
+/** One controller: a header that reads folded, and its controls. */
+function DeviceGroup({
+  device: d,
+  controls,
+  roles,
+  open,
+  onFold,
+  apply,
+}: {
+  device: DeviceView;
+  controls: ControlView[];
+  roles: string[];
+  open: boolean;
+  onFold: (open: boolean) => void;
+  apply: (p: Promise<ControllersView>) => void;
+}) {
+  const moving = controls.some((c) => c.active);
+  const Chevron = open ? ChevronDown : ChevronRight;
+  return (
+    <div>
+      <ContextMenu>
+        <ContextMenuTrigger asChild>
+          <div className="flex items-center gap-1.5 px-3">
+            <button
+              type="button"
+              className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={open ? 'Fold' : 'Unfold'}
+              aria-expanded={open}
+              onClick={() => onFold(!open)}
+            >
+              <Chevron className="size-3.5" />
+            </button>
+            <span
+              className={
+                moving
+                  ? 'size-1.5 shrink-0 rounded-full bg-amber-400'
+                  : d.connected
+                    ? 'size-1.5 shrink-0 rounded-full bg-emerald-400'
+                    : 'size-1.5 shrink-0 rounded-full bg-muted-foreground/40'
+              }
+              title={d.connected ? 'Connected' : 'Not connected'}
+            />
+            <NameField value={d.name} onCommit={(n) => apply(renameDevice(d.port, n))} />
+            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.port}</span>
+            <span
+              className={
+                d.connected
+                  ? 'w-28 shrink-0 text-right text-[10px] text-emerald-400'
+                  : 'w-28 shrink-0 text-right text-[10px] text-muted-foreground'
+              }
+            >
+              {d.connected ? 'Connected' : 'Not connected'}
+            </span>
+            <span className="w-16 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+              {controls.length === 1 ? '1 control' : `${controls.length} controls`}
+            </span>
+          </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent>
+          <ContextMenuItem onSelect={() => apply(forgetDevice(d.port))}>
+            Forget device and its controls
+          </ContextMenuItem>
+        </ContextMenuContent>
+      </ContextMenu>
+      {!open ? null : controls.length === 0 ? (
+        <p className="px-3 py-1 pl-9 text-xs text-muted-foreground">
+          Touch a knob or pad and it appears here.
+        </p>
+      ) : (
+        <div className="mt-1">
+          {controls.map((c) => (
+            <ContextMenu key={c.id}>
               <ContextMenuTrigger asChild>
-                <div className="flex items-center gap-2 px-3">
+                <div className="flex items-center gap-2 py-0.5 pr-3 pl-9">
                   <span
                     className={
-                      d.connected
-                        ? 'size-1.5 rounded-full bg-emerald-400'
-                        : 'size-1.5 rounded-full bg-muted-foreground/40'
+                      c.active
+                        ? 'size-1.5 shrink-0 rounded-full bg-amber-400'
+                        : 'size-1.5 shrink-0 rounded-full bg-muted-foreground/25'
                     }
-                    title={d.connected ? 'Connected' : 'Not connected'}
                   />
-                  <NameField value={d.name} onCommit={(n) => apply(renameDevice(d.port, n))} />
-                  <span className="shrink-0 font-mono text-[10px] text-muted-foreground">
-                    {d.port}
+                  <NameField value={c.name} onCommit={(n) => apply(renameControl(c.id, n))} />
+                  <Select value={c.role} onValueChange={(r) => apply(setControlRole(c.id, r))}>
+                    <SelectTrigger size="sm" className="h-6 w-20 text-xs">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {roles.map((r) => (
+                        <SelectItem key={r} value={r} className="text-xs">
+                          {r}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <span className="w-24 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
+                    ch {c.channel + 1} {c.kind} {c.number}
+                  </span>
+                  <span className="w-7 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+                    {c.last ?? ''}
                   </span>
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
-                <ContextMenuItem onSelect={() => apply(forgetDevice(d.port))}>
-                  Forget device and its controls
+                <ContextMenuItem onSelect={() => apply(forgetControl(c.id))}>
+                  Forget control
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
-            {controls.length === 0 ? (
-              <p className="px-3 py-1 text-xs text-muted-foreground">
-                Touch a knob or pad and it appears here.
-              </p>
-            ) : (
-              <div className="mt-1">
-                {controls.map((c) => (
-                  <ContextMenu key={c.id}>
-                    <ContextMenuTrigger asChild>
-                      <div className="flex items-center gap-2 px-3 py-0.5">
-                        <span
-                          className={
-                            c.active
-                              ? 'size-1.5 rounded-full bg-amber-400'
-                              : 'size-1.5 rounded-full bg-muted-foreground/25'
-                          }
-                        />
-                        <NameField value={c.name} onCommit={(n) => apply(renameControl(c.id, n))} />
-                        <Select
-                          value={c.role}
-                          onValueChange={(r) => apply(setControlRole(c.id, r))}
-                        >
-                          <SelectTrigger size="sm" className="h-6 w-20 text-xs">
-                            <SelectValue />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {view.roles.map((r) => (
-                              <SelectItem key={r} value={r} className="text-xs">
-                                {r}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <span className="w-24 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-                          ch {c.channel + 1} {c.kind} {c.number}
-                        </span>
-                        <span className="w-7 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                          {c.last ?? ''}
-                        </span>
-                      </div>
-                    </ContextMenuTrigger>
-                    <ContextMenuContent>
-                      <ContextMenuItem onSelect={() => apply(forgetControl(c.id))}>
-                        Forget control
-                      </ContextMenuItem>
-                    </ContextMenuContent>
-                  </ContextMenu>
-                ))}
-              </div>
-            )}
-          </div>
-        );
-      })}
+          ))}
+        </div>
+      )}
     </div>
   );
 }

@@ -827,6 +827,10 @@ pub struct ControllersView {
     pub devices: Vec<DeviceView>,
     pub controls: Vec<ControlView>,
     pub roles: &'static [&'static str],
+    /// What went wrong with `controllers.json` at startup, if anything. The
+    /// panel says it, because starting with no controllers otherwise looks
+    /// like the app forgot them on purpose.
+    pub trouble: Option<String>,
 }
 
 impl ControllersView {
@@ -870,6 +874,7 @@ impl ControllersView {
                 })
                 .collect(),
             roles: &controllers::Role::NAMES,
+            trouble: c.trouble.lock().expect("trouble poisoned").clone(),
         }
     }
 }
@@ -1787,9 +1792,10 @@ mod tests {
                 last: None,
             }],
             roles: &controllers::Role::NAMES,
+            trouble: None,
         })
         .expect("ControllersView is serialisable");
-        for key in ["devices", "controls", "roles"] {
+        for key in ["devices", "controls", "roles", "trouble"] {
             assert!(cv.get(key).is_some(), "ControllersView lost `{key}`");
         }
         for key in ["port", "name", "connected"] {

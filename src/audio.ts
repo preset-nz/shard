@@ -356,6 +356,8 @@ export interface ControllersView {
   devices: DeviceView[];
   controls: ControlView[];
   roles: string[];
+  /** What went wrong with `controllers.json` at startup, if anything. */
+  trouble: string | null;
 }
 
 export const controllers = () => invoke<ControllersView>('controllers');
