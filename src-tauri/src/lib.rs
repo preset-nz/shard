@@ -803,6 +803,8 @@ pub struct DeviceView {
     pub port: String,
     pub name: String,
     pub connected: bool,
+    /// The profile's name when shard drives this device, else `None`.
+    pub surface: Option<&'static str>,
 }
 
 /// A control as Settings → Controllers lists it, with its activity.
@@ -869,6 +871,9 @@ impl ControllersView {
                     port: d.port.clone(),
                     name: d.name.clone(),
                     connected: connected.contains(&d.port),
+                    // A device shard drives rather than learns. Its controls
+                    // are not listed because they are not yours to map.
+                    surface: profile::for_input(&d.port).map(|p| p.name),
                 })
                 .collect(),
             controls: registry
@@ -1898,6 +1903,7 @@ mod tests {
                 port: "LPD8".into(),
                 name: "LPD8".into(),
                 connected: true,
+                surface: None,
             }],
             controls: vec![ControlView {
                 id: 1,
@@ -1932,7 +1938,7 @@ mod tests {
         ] {
             assert!(cv.get(key).is_some(), "ControllersView lost `{key}`");
         }
-        for key in ["port", "name", "connected"] {
+        for key in ["port", "name", "connected", "surface"] {
             assert!(
                 cv["devices"][0].get(key).is_some(),
                 "DeviceView lost `{key}`"

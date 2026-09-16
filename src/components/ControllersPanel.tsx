@@ -234,20 +234,27 @@ function DeviceGroup({
 }) {
   const moving = controls.some((c) => c.active);
   const Chevron = open ? ChevronDown : ChevronRight;
+  // A surface is driven, not learned: there is nothing to unfold, nothing to
+  // name and nothing to map, so the row only reports that it is there.
+  const surface = d.surface !== null;
   return (
     <div>
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div className="flex items-center gap-1.5 px-3">
-            <button
-              type="button"
-              className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-              title={open ? 'Fold' : 'Unfold'}
-              aria-expanded={open}
-              onClick={() => onFold(!open)}
-            >
-              <Chevron className="size-3.5" />
-            </button>
+            {surface ? (
+              <span className="size-3.5 shrink-0" />
+            ) : (
+              <button
+                type="button"
+                className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+                title={open ? 'Fold' : 'Unfold'}
+                aria-expanded={open}
+                onClick={() => onFold(!open)}
+              >
+                <Chevron className="size-3.5" />
+              </button>
+            )}
             <span
               className={
                 moving
@@ -258,7 +265,11 @@ function DeviceGroup({
               }
               title={d.connected ? 'Connected' : 'Not connected'}
             />
-            <NameField value={d.name} onCommit={(n) => apply(renameDevice(d.port, n))} />
+            {surface ? (
+              <span className="flex-1 truncate px-1.5 text-xs">{d.surface}</span>
+            ) : (
+              <NameField value={d.name} onCommit={(n) => apply(renameDevice(d.port, n))} />
+            )}
             <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.port}</span>
             <span
               className={
@@ -269,18 +280,33 @@ function DeviceGroup({
             >
               {d.connected ? 'Connected' : 'Not connected'}
             </span>
-            <span className="w-16 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-              {controls.length === 1 ? '1 control' : `${controls.length} controls`}
+            <span
+              className={
+                surface
+                  ? 'w-28 shrink-0 text-right text-[10px] text-primary'
+                  : 'w-28 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground'
+              }
+              title={
+                surface
+                  ? `Shard drives this device: it wakes it, maps it and lights it. Its controls are not learned or mapped by hand.`
+                  : undefined
+              }
+            >
+              {surface
+                ? 'Control surface'
+                : controls.length === 1
+                  ? '1 control'
+                  : `${controls.length} controls`}
             </span>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem onSelect={() => apply(forgetDevice(d.port))}>
+          <ContextMenuItem disabled={surface} onSelect={() => apply(forgetDevice(d.port))}>
             Forget device and its controls
           </ContextMenuItem>
         </ContextMenuContent>
       </ContextMenu>
-      {!open ? null : controls.length === 0 ? (
+      {surface ? null : !open ? null : controls.length === 0 ? (
         <p className="px-3 py-1 pl-9 text-xs text-muted-foreground">
           Touch a knob or pad and it appears here.
         </p>

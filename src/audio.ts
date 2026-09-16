@@ -335,6 +335,8 @@ export interface DeviceView {
   port: string;
   name: string;
   connected: boolean;
+  /** The profile's name when shard drives this device, else null. */
+  surface: string | null;
 }
 
 /** One knob or pad, learned the first time it was touched. */

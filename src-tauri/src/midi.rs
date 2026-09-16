@@ -135,6 +135,20 @@ impl Controllers {
         if let Some(t) = &trouble {
             eprintln!("shard: {}: {t}", path.display());
         }
+        // Controls belonging to a device shard now drives are not yours to
+        // map, so they do not belong in the file. Self-healing rather than a
+        // migration: a device that gains a profile sheds its learned controls
+        // the next time shard starts.
+        let mut registry = registry;
+        let shed: Vec<u64> = registry
+            .controls
+            .iter()
+            .filter(|c| profile::for_input(&c.address.device).is_some())
+            .map(|c| c.id)
+            .collect();
+        for id in shed {
+            let _ = registry.forget_control(id);
+        }
         Controllers {
             registry: Mutex::new(registry),
             pickup: Mutex::new(Pickup::default()),
@@ -315,6 +329,33 @@ pub fn release_surfaces() {
 }
 
 fn handle(shared: &Controllers, m: &Message) {
+    // A profiled surface is not a set of controls to map, so its controls are
+    // never learned: shard already knows what they are and answers for them.
+    // The device itself is registered, so Settings can say it is there.
+    if let Some(p) = profile::for_input(&m.port) {
+        let mut registry = shared.registry.lock().expect("registry poisoned");
+        if registry.see_device(&m.port) {
+            if let Err(e) = shared.save(&registry) {
+                eprintln!("shard: could not save controllers: {e}");
+            }
+        }
+        drop(registry);
+        let claim = decode_cc(&m.bytes).and_then(|(ch, cc)| p.claim(ch, cc));
+        // A press, not a release: a toggle that fired on both would undo
+        // itself. The target decides what a press means (decision 5).
+        if let Some(claim) = claim {
+            if m.bytes.get(2).is_some_and(|v| *v > 0) {
+                match claim.does {
+                    Does::TransportToggle => {
+                        let now = shared.playing.load(Ordering::Relaxed);
+                        shared.play_request.store(!now, Ordering::Relaxed);
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     let mut registry = shared.registry.lock().expect("registry poisoned");
     let (event, changed) = registry.observe(&m.port, &m.bytes);
     if changed {
@@ -325,30 +366,6 @@ fn handle(shared: &Controllers, m: &Message) {
     let Some(ev) = event else {
         return;
     };
-
-    // A profiled surface answers for its own controls, ahead of the map. The
-    // registry still learned it, so it is visible in Settings, but binding it
-    // by hand would fight the profile.
-    if let Some(claim) = profile::for_input(&m.port)
-        .and_then(|p| decode_cc(&m.bytes).and_then(|(ch, cc)| p.claim(ch, cc)))
-    {
-        // A press, not a release: a toggle that fired on both would undo
-        // itself. The target decides what a press means (decision 5).
-        if !ev.released && ev.value > 0 {
-            match claim.does {
-                Does::TransportToggle => {
-                    let now = shared.playing.load(Ordering::Relaxed);
-                    shared.play_request.store(!now, Ordering::Relaxed);
-                }
-            }
-        }
-        shared
-            .activity
-            .lock()
-            .expect("activity poisoned")
-            .note(&ev, Instant::now());
-        return;
-    }
 
     // Calibration takes the message rather than playing it, so working out
     // what a knob is does not drag whatever it is mapped to along with it.
@@ -567,6 +584,43 @@ mod tests {
             !c.play_request.load(Ordering::Relaxed),
             "the next press stops it"
         );
+    }
+
+    #[test]
+    fn a_surface_registers_itself_but_none_of_its_controls() {
+        let path = scratch("surface").join("controllers.json");
+        let c = load(&path);
+        for bytes in [vec![0xB0, 44, 127], vec![0xBF, 13, 65], vec![0xB0, 39, 127]] {
+            handle(
+                &c,
+                &Message {
+                    port: "LC3 1 DAW Out".into(),
+                    bytes,
+                },
+            );
+        }
+        let r = c.registry.lock().unwrap();
+        // Visible in Settings...
+        assert_eq!(r.devices.len(), 1);
+        assert_eq!(r.devices[0].port, "LC3 1 DAW Out");
+        // ...but its controls are shard's to drive, not yours to map.
+        assert!(r.controls.is_empty(), "a surface learns no controls");
+    }
+
+    /// A device that gains a profile sheds the controls learned before it had
+    /// one, rather than leaving them to clutter Settings for ever.
+    #[test]
+    fn a_file_holding_a_surface_s_old_controls_sheds_them_on_load() {
+        let path = scratch("shed").join("controllers.json");
+        let mut r = Registry::default();
+        r.observe("LC3 1 DAW Out", &[0xB0, 44, 127]);
+        r.observe("LPD8", &[0xB0, 1, 40]);
+        std::fs::write(&path, r.to_json()).unwrap();
+
+        let c = load(&path);
+        let r = c.registry.lock().unwrap();
+        assert_eq!(r.controls.len(), 1, "only the LPD8's control survives");
+        assert_eq!(r.controls[0].address.device, "LPD8");
     }
 
     /// The same bytes from a device with no profile are ordinary traffic and
