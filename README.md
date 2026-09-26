@@ -53,10 +53,6 @@ licence gate.
 
 ---
 
-## Licensing
+## Licence
 
-Shard is [MIT](LICENSE).
-
-Its dependencies are permissive only, with no copyleft anywhere in the tree,
-and `just check` fails on anything else. That rules out the MPL-2.0 decoder
-that reads MP3, FLAC and OGG, which is why material is WAV.
+[MIT](LICENSE).
