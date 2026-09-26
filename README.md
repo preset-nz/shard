@@ -5,6 +5,8 @@ Sample-shaping and sound-scaping.
 A desktop app for macOS. Material goes through a grain cloud and a chain of
 effects that break it, played from steps or left to run as a soundscape.
 
+![Shard in sound scaping mode: materials and modulators on the left, the waveform with its grains, generators, process and master below, and the selected node's controls on the right](docs/screenshot.png)
+
 ---
 
 ## Play it
