@@ -107,8 +107,8 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
   const mark = source && heard !== undefined ? normalise(def, heard) : null;
   const mapped = c.midi.mappings[def.id];
   const learning = c.midi.learning === def.id;
-  // The arrangement's rows follow no LFO (Georg, 2026-09-26: later) and take
-  // no knob until the controller map learns their table.
+  // The arrangement's rows follow no LFO yet (Georg, 2026-09-26: later),
+  // though a knob maps to them like any other row.
   const arrangement = isArrangement(def.id);
 
   return (
@@ -226,7 +226,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         </ContextMenuItem>
         {arrangement && (
           <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-            The arrangement's controls follow no LFO or knob yet.
+            The arrangement's controls follow no LFO yet.
           </ContextMenuLabel>
         )}
         {!arrangement && c.mod.lfos.length === 0 && (
@@ -236,7 +236,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         )}
         <ContextMenuSeparator />
         <ContextMenuSub>
-          <ContextMenuSubTrigger disabled={arrangement}>Control</ContextMenuSubTrigger>
+          <ContextMenuSubTrigger>Control</ContextMenuSubTrigger>
           <ContextMenuSubContent className="max-h-80 overflow-y-auto">
             {groupKnobs(c.midi.knobs).map(([where, knobs]) => (
               <Fragment key={where}>

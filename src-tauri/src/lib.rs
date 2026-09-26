@@ -1143,7 +1143,7 @@ impl MappingsView {
         if let Some(map) = active {
             for (control, target) in &map.mappings {
                 let mapping::Target::Param(id) = target;
-                let Some(index) = shard_dsp::params::index_of(id) else {
+                let Some((bank, index)) = c.locate(id) else {
                     continue;
                 };
                 let name = registry
@@ -1154,7 +1154,7 @@ impl MappingsView {
                     .control(*control)
                     .is_some_and(|k| k.mode.is_relative());
                 let (armed, knob) =
-                    pickup.state(*control, relative, &PARAMS[index], c.bank.get(index));
+                    pickup.state(*control, relative, &bank.defs()[index], bank.get(index));
                 mappings.insert(
                     id.clone(),
                     MappingView {
@@ -1218,7 +1218,7 @@ fn mappings(state: tauri::State<'_, Arc<midi::Controllers>>) -> MappingsView {
 /// Wait for the next control to move and bind it to `id`.
 #[tauri::command]
 fn learn_midi(state: tauri::State<'_, Arc<midi::Controllers>>, id: String) -> Result<(), String> {
-    if shard_dsp::params::index_of(&id).is_none() {
+    if state.locate(&id).is_none() {
         return Err(format!("unknown parameter: {id}"));
     }
     state.learn.lock().expect("learn poisoned").waiting = Some(mapping::Target::Param(id));
@@ -1232,7 +1232,7 @@ fn map_midi(
     id: String,
     control: u64,
 ) -> Result<(), String> {
-    if shard_dsp::params::index_of(&id).is_none() {
+    if state.locate(&id).is_none() {
         return Err(format!("unknown parameter: {id}"));
     }
     let said = {
@@ -1737,9 +1737,16 @@ pub fn run() {
                 .join("controllers.json");
             let audio = app.state::<Audio>();
             let bank = Arc::clone(&audio.bank);
+            let arrangement = Arc::clone(&audio.arrangement);
             let play_request = Arc::clone(&audio.play_request);
             let playing = Arc::clone(&audio.playing);
-            let shared = Arc::new(midi::Controllers::load(path, bank, play_request, playing));
+            let shared = Arc::new(midi::Controllers::load(
+                path,
+                bank,
+                arrangement,
+                play_request,
+                playing,
+            ));
             midi::start(Arc::clone(&shared));
             app.manage(shared);
             Ok(())

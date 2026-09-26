@@ -19,7 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
-use shard_dsp::params::{index_of, PARAMS};
+use shard_dsp::arrangement;
 use shard_dsp::ParamBank;
 
 use crate::controllers::{describe_mode, Activity, Calibration, Registry, Role};
@@ -82,6 +82,8 @@ pub struct Controllers {
     keep_file: AtomicBool,
     /// The hand's values. A caught knob writes here, like the UI does.
     pub bank: Arc<ParamBank>,
+    /// The arrangement's values, for a knob mapped to an `arrangement.` id.
+    pub arrangement: Arc<ParamBank>,
     /// The transport, shared with the audio thread. `request` is what was
     /// asked for; `playing` is what the engine actually did, and a light is
     /// drawn from the second one.
@@ -100,6 +102,7 @@ impl Controllers {
     pub fn load(
         path: PathBuf,
         bank: Arc<ParamBank>,
+        arrangement: Arc<ParamBank>,
         play_request: Arc<AtomicBool>,
         playing: Arc<AtomicBool>,
     ) -> Controllers {
@@ -160,9 +163,21 @@ impl Controllers {
             trouble: Mutex::new(trouble),
             keep_file: AtomicBool::new(keep_file),
             bank,
+            arrangement,
             play_request,
             playing,
         }
+    }
+
+    /// The bank that holds `id`, and where in it: the arrangement's for an
+    /// `arrangement.` id, the patch's otherwise.
+    pub fn locate(&self, id: &str) -> Option<(&ParamBank, usize)> {
+        let bank = if id.starts_with(arrangement::PREFIX) {
+            &self.arrangement
+        } else {
+            &self.bank
+        };
+        bank.index(id).map(|i| (bank.as_ref(), i))
     }
 
     /// Write the registry out. Called after every change, on whichever thread
@@ -445,11 +460,11 @@ fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
     };
     match (target, role) {
         (Target::Param(id), Role::Knob) => {
-            let Some(index) = index_of(id) else {
+            let Some((bank, index)) = shared.locate(id) else {
                 return;
             };
-            let def = &PARAMS[index];
-            let base = shared.bank.get(index);
+            let def = &bank.defs()[index];
+            let base = bank.get(index);
             // `None` for a pot, which arms; `Some(delta)` for an endless
             // encoder, which has no position and never does.
             let delta = mode.delta(value);
@@ -459,7 +474,7 @@ fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
                 .expect("pickup poisoned")
                 .turn(control, value, delta, def, base);
             if let Turn::Write(v) = turn {
-                shared.bank.set(index, v);
+                bank.set(index, v);
             }
         }
         // Pads reach nothing until story 3.
@@ -551,6 +566,7 @@ mod tests {
         Controllers::load(
             path.to_path_buf(),
             Arc::new(ParamBank::new()),
+            Arc::new(ParamBank::for_table(arrangement::params())),
             Arc::new(AtomicBool::new(false)),
             Arc::new(AtomicBool::new(false)),
         )
@@ -712,5 +728,16 @@ mod tests {
         assert!(c.trouble.lock().unwrap().is_some());
         assert!(c.save(&c.registry.lock().unwrap()).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{ not json");
+    }
+
+    #[test]
+    fn a_knob_finds_the_arrangements_rows_in_the_arrangements_bank() {
+        let dir = scratch("locate");
+        let c = load(&dir.join("controllers.json"));
+        let (bank, i) = c.locate("arrangement.crush.mix").expect("arrangement row");
+        assert_eq!(bank.defs()[i].id, "arrangement.crush.mix");
+        let (bank, i) = c.locate("crush.mix").expect("patch row");
+        assert_eq!(bank.defs()[i].id, "crush.mix");
+        assert!(c.locate("arrangement.crush.env.amount").is_none());
     }
 }
