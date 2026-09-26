@@ -1,26 +1,10 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import {
-  type LfoLimits,
-  type LfoRecord,
-  type MaterialsView,
-  type MaterialView,
-  type ParamInfo,
-  setParam,
-} from '@/audio';
+import type { LfoLimits, LfoRecord, MaterialsView, MaterialView, ParamInfo } from '@/audio';
 import { LfoEditor } from '@/components/LfoEditor';
 import { MaterialEditor } from '@/components/MaterialEditor';
-import { MaterialPicker } from '@/components/MaterialPicker';
-import { NodeSwitch } from '@/components/NodeCard';
-import { NodePresets } from '@/components/NodePresets';
+import { isNodeOn, NodeHeader, WithNodePresets } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
-import {
-  nodeById,
-  type ParamValues,
-  READS_MATERIAL,
-  rowsOf,
-  scopeKeyFor,
-  switchIdOf,
-} from '@/scope';
+import { nodeById, type ParamValues, rowsOf, scopeKeyFor } from '@/scope';
 import type { Selection } from '@/stores/selection';
 
 /**
@@ -28,8 +12,8 @@ import type { Selection } from '@/stores/selection';
  *
  * A node shows its rows, and under them a **Linked** block with every LFO
  * those rows follow, folded down to rate and shape, so a node and what moves
- * it can be tuned together (Georg, 2026-09-14). A generator also picks its
- * material. A material shows its octave and trim, and an LFO its full editor.
+ * it can be tuned together (Georg, 2026-09-14). A generator's material picker is
+ * a row of its scope. A material shows its octave and trim, and an LFO its full editor.
  */
 export function Inspector({
   selection,
@@ -37,7 +21,6 @@ export function Inspector({
   values,
   ctx,
   pool,
-  onWire,
   onMaterialChange,
   limits,
   linkedCounts,
@@ -52,7 +35,6 @@ export function Inspector({
   values: ParamValues;
   ctx: ParamRowContext;
   pool: MaterialsView;
-  onWire: (node: string, material: number | null) => void;
   onMaterialChange: (next: MaterialView) => void;
   limits: LfoLimits | null;
   /** How many parameters follow each LFO, by id. */
@@ -94,8 +76,7 @@ export function Inspector({
 
   const node = nodeById(selection.id);
   if (!node) return null;
-  const sw = switchIdOf(defs, node);
-  const on = sw ? (values[sw] ?? 1) >= 0.5 : true;
+  const on = isNodeOn(defs, values, node);
 
   // Every LFO this node's rows follow, once each, in the tree's order.
   const followed = new Set(
@@ -105,47 +86,27 @@ export function Inspector({
   );
   const linked = ctx.mod.lfos.filter((l) => followed.has(l.id));
 
-  const body = (
-    <section>
-      <div className="flex items-center gap-2 px-3 pt-3">
-        <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          {node.label}
-        </span>
-        {sw && (
-          <NodeSwitch
-            label={node.label}
-            on={on}
-            onSwitch={(next) => void setParam(sw, next ? 1 : 0)}
-          />
-        )}
-      </div>
-      {READS_MATERIAL.has(node.id) && (
-        <div className="px-3 pt-2">
-          <MaterialPicker node={node.id} pool={pool} onWire={onWire} />
-        </div>
-      )}
-      {/* Dimmed when off, but still editable: set it up, then switch it in. */}
-      <div className={on ? '' : 'opacity-50'}>
-        <PropertyPanel key={node.id} scopeKey={scopeKeyFor(node.id)} selection={values} ctx={ctx} />
-      </div>
-    </section>
-  );
-
   return (
     <>
-      {node.table ? (
-        <NodePresets
-          node={node.table}
-          label={node.label}
-          onError={onError}
-          onNote={onNote}
-          onApplied={onPresetApplied}
-        >
-          {body}
-        </NodePresets>
-      ) : (
-        body
-      )}
+      <WithNodePresets
+        node={node}
+        onError={onError}
+        onNote={onNote}
+        onPresetApplied={onPresetApplied}
+      >
+        <section>
+          <NodeHeader node={node} defs={defs} values={values} className="px-3 pt-3" />
+          {/* Dimmed when off, but still editable: set it up, then switch it in. */}
+          <div className={on ? '' : 'opacity-50'}>
+            <PropertyPanel
+              key={node.id}
+              scopeKey={scopeKeyFor(node.id)}
+              selection={values}
+              ctx={ctx}
+            />
+          </div>
+        </section>
+      </WithNodePresets>
       {linked.length > 0 && limits && (
         <div className="border-t border-border">
           <div className="px-3 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">

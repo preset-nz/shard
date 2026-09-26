@@ -1,4 +1,6 @@
+import type { FieldRendererProps } from '@preset.nz/facets';
 import type { MaterialsView } from '@/audio';
+import type { ParamRowContext } from '@/components/ParamRow';
 import {
   Select,
   SelectContent,
@@ -53,4 +55,15 @@ export function MaterialPicker({
       </SelectContent>
     </Select>
   );
+}
+
+/**
+ * The picker as the facets kind `material`, so a generator's schema holds it
+ * like any other row. The wiring lives outside the parameter table, so it
+ * reads the pool from the panel's context rather than from the scope's values.
+ */
+export function MaterialField({ field, ctx }: FieldRendererProps) {
+  const { node } = field as unknown as { node: string };
+  const c = ctx as ParamRowContext;
+  return <MaterialPicker node={node} pool={c.pool} onWire={c.onWire} />;
 }

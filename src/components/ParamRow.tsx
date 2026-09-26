@@ -5,6 +5,7 @@ import {
   format,
   type KnobInfo,
   type MappingsView,
+  type MaterialsView,
   type ModulationView,
   normalise,
   type ParamInfo,
@@ -72,6 +73,9 @@ export interface ParamRowContext {
   heard: Record<string, number>;
   /** The active controller map. */
   midi: MappingsView;
+  /** The materials, and which generator reads which, for the `material` field. */
+  pool: MaterialsView;
+  onWire: (node: string, material: number | null) => void;
   onLink: (id: string, lfo: number, lo: number, hi: number) => void;
   onUnlink: (id: string) => void;
   onLearn: (id: string) => void;

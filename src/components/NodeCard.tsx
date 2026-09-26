@@ -1,15 +1,9 @@
-import {
-  denormalise,
-  format,
-  type MaterialsView,
-  normalise,
-  type ParamInfo,
-  setParam,
-} from '@/audio';
-import { MaterialPicker } from '@/components/MaterialPicker';
+import { PropertyPanel } from '@preset.nz/facets';
+import type { ReactNode } from 'react';
+import { type ParamInfo, setParam } from '@/audio';
 import { NodePresets } from '@/components/NodePresets';
-import { Slider } from '@/components/ui/slider';
-import { levelIdOf, type NodeInfo, type ParamValues, READS_MATERIAL, switchIdOf } from '@/scope';
+import type { ParamRowContext } from '@/components/ParamRow';
+import { type NodeInfo, type ParamValues, scopeKeyFor, switchIdOf } from '@/scope';
 
 /** A node's on/off switch. Switching keeps every setting. */
 export function NodeSwitch({
@@ -41,51 +35,33 @@ export function NodeSwitch({
   );
 }
 
+/** Whether a node is switched on. A node with no switch always is. */
+export function isNodeOn(defs: ParamInfo[], values: ParamValues, node: NodeInfo): boolean {
+  const sw = switchIdOf(defs, node);
+  return sw ? (values[sw] ?? 1) >= 0.5 : true;
+}
+
 /**
- * One node in the work area: its title, its level, and its switch.
- *
- * Generated from the table: the level is the node's first row by the
- * parameter pattern (Gain for a generator, Mix for an effect), so a new node
- * needs no card of its own. A generator that reads a material also picks
- * which, in both modes. Click the title to show the node in the inspector;
- * right-click the card for its presets. Solo arrives with roadmap row 14.
+ * A node's name and switch, the same on its card and in the inspector. With
+ * `onSelect` the name is a button that opens the node; without, a heading.
  */
-export function NodeCard({
+export function NodeHeader({
   node,
   defs,
   values,
-  pool,
-  selected,
   onSelect,
-  onWire,
-  onError,
-  onNote,
-  onPresetApplied,
+  className = '',
 }: {
   node: NodeInfo;
   defs: ParamInfo[];
   values: ParamValues;
-  pool: MaterialsView;
-  selected: boolean;
-  onSelect: () => void;
-  onWire: (node: string, material: number | null) => void;
-  onError: (message: string | null) => void;
-  onNote: (message: string | null) => void;
-  onPresetApplied: () => void;
+  onSelect?: () => void;
+  className?: string;
 }) {
   const sw = switchIdOf(defs, node);
-  const levelId = levelIdOf(defs, node);
-  const level = levelId ? defs.find((d) => d.id === levelId) : undefined;
-  const on = sw ? (values[sw] ?? 1) >= 0.5 : true;
-
-  const card = (
-    <div
-      data-node-card
-      className={`rounded-md border px-2.5 py-2 transition-colors ${
-        selected ? 'border-primary bg-primary/5' : 'border-border'
-      } ${on ? '' : 'opacity-60'}`}
-    >
-      <div className="flex items-center gap-2">
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      {onSelect ? (
         <button
           type="button"
           onMouseDown={(e) => e.preventDefault()}
@@ -94,48 +70,114 @@ export function NodeCard({
         >
           {node.label}
         </button>
-        {sw && (
-          <NodeSwitch
-            label={node.label}
-            on={on}
-            onSwitch={(next) => void setParam(sw, next ? 1 : 0)}
-          />
-        )}
-      </div>
-      {READS_MATERIAL.has(node.id) && (
-        <MaterialPicker node={node.id} pool={pool} onWire={onWire} className="mt-2" />
+      ) : (
+        <span className="flex-1 truncate text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+          {node.label}
+        </span>
       )}
-      {level && (
-        <div className="mt-2 flex items-center gap-2">
-          <Slider
-            min={0}
-            max={1}
-            step={0.001}
-            value={[normalise(level, values[level.id] ?? level.default)]}
-            onValueChange={([t]) => void setParam(level.id, denormalise(level, t))}
-            className="flex-1"
-            aria-label={`${node.label} ${level.name}`}
-          />
-          <span className="w-10 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
-            {format(level, values[level.id] ?? level.default)}
-          </span>
-        </div>
+      {sw && (
+        <NodeSwitch
+          label={node.label}
+          on={isNodeOn(defs, values, node)}
+          onSwitch={(next) => void setParam(sw, next ? 1 : 0)}
+        />
       )}
     </div>
   );
+}
 
-  return node.table ? (
+/** Right-click for the node's presets, when it has a table prefix to save. */
+export function WithNodePresets({
+  node,
+  onError,
+  onNote,
+  onPresetApplied,
+  className,
+  children,
+}: {
+  node: NodeInfo;
+  onError: (message: string | null) => void;
+  onNote: (message: string | null) => void;
+  onPresetApplied: () => void;
+  /** Passed to the presets wrapper; its default rules a line under the node. */
+  className?: string;
+  children: ReactNode;
+}) {
+  if (!node.table) return <>{children}</>;
+  return (
     <NodePresets
       node={node.table}
       label={node.label}
-      className=""
+      className={className}
       onError={onError}
       onNote={onNote}
       onApplied={onPresetApplied}
     >
-      {card}
+      {children}
     </NodePresets>
-  ) : (
-    card
+  );
+}
+
+/**
+ * One node in the work area: the operator folded down.
+ *
+ * The card is the node's summary view, not a control of its own: the same
+ * header as the inspector, and below it the facets summary scope, which holds
+ * the material a generator reads and the node's level (Gain for a generator,
+ * Mix for an effect). So the level on a card links to an LFO, takes a MIDI
+ * knob and shows where modulation has moved it, as the inspector's row does.
+ * A new node needs no card of its own. Click the title to open the whole
+ * node in the inspector; right-click the card for its presets. Solo arrives
+ * with roadmap row 14.
+ */
+export function NodeCard({
+  node,
+  defs,
+  values,
+  ctx,
+  selected,
+  onSelect,
+  onError,
+  onNote,
+  onPresetApplied,
+}: {
+  node: NodeInfo;
+  defs: ParamInfo[];
+  values: ParamValues;
+  ctx: ParamRowContext;
+  selected: boolean;
+  onSelect: () => void;
+  onError: (message: string | null) => void;
+  onNote: (message: string | null) => void;
+  onPresetApplied: () => void;
+}) {
+  const on = isNodeOn(defs, values, node);
+  return (
+    <WithNodePresets
+      node={node}
+      onError={onError}
+      onNote={onNote}
+      onPresetApplied={onPresetApplied}
+      className=""
+    >
+      <div
+        data-node-card
+        className={`rounded-md border transition-colors ${
+          selected ? 'border-primary bg-primary/5' : 'border-border'
+        }`}
+      >
+        <NodeHeader
+          node={node}
+          defs={defs}
+          values={values}
+          onSelect={onSelect}
+          className="px-3 pt-2"
+        />
+        {/* Dimmed when off, but still editable, as in the inspector. */}
+        <div className={on ? '' : 'opacity-50'}>
+          <PropertyPanel scopeKey={scopeKeyFor(node.id, 'summary')} selection={values} ctx={ctx} />
+        </div>
+      </div>
+    </WithNodePresets>
   );
 }

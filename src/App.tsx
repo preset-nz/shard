@@ -596,6 +596,8 @@ export default function App() {
     mod,
     heard,
     midi,
+    pool,
+    onWire: wire,
     onLink: (id, lfo, lo, hi) => void editMod(() => linkParam(id, lfo, lo, hi)),
     onUnlink: (id) => void editMod(() => unlinkParam(id)),
     onLearn: (id) => void learnMidi(id).catch((e) => setError(String(e))),
@@ -892,8 +894,7 @@ export default function App() {
                   node={node}
                   defs={defs}
                   values={values}
-                  pool={pool}
-                  onWire={wire}
+                  ctx={panelCtx}
                   selected={false}
                   onSelect={() => {
                     select({ kind: 'node', id: node.id });
@@ -927,8 +928,7 @@ export default function App() {
                       node={node}
                       defs={defs}
                       values={values}
-                      pool={pool}
-                      onWire={wire}
+                      ctx={panelCtx}
                       selected={selection?.kind === 'node' && selection.id === node.id}
                       onSelect={() => select({ kind: 'node', id: node.id })}
                       onError={setError}
@@ -968,7 +968,6 @@ export default function App() {
                 values={values}
                 ctx={panelCtx}
                 pool={pool}
-                onWire={wire}
                 onMaterialChange={(m) => void changeMaterial(m)}
                 limits={limits}
                 linkedCounts={linkedCounts}

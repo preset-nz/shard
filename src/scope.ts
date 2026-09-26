@@ -11,11 +11,18 @@
  * selector rather than a slider, because interpolating between enum values
  * produces a number that means nothing.
  *
- * **One scope per node.** A node is what the work area draws as a card and
+ * **Scopes follow nodes.** A node is what the work area draws as a card and
  * the inspector shows when it is selected. Most nodes are one table prefix.
  * The `material` prefix is Sample, the plain-playback generator; the files it
  * and Granular read are materials, with their own octave and trim, outside the
  * table. See `guidance/projects/shard/design/panel-layout.md`.
+ *
+ * **Two views of each node.** The inspector draws the full scope; the
+ * work-area card draws the summary, which is the same operator folded down to
+ * its material and its level. Both are built here from the same rows, so a
+ * card is never a separate control with its own behaviour: its level links to
+ * an LFO and takes a MIDI knob exactly as the inspector's does. Choosing which
+ * rows a summary shows belongs in facets itself, once a second app wants it.
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import {
@@ -28,6 +35,7 @@ import {
   setParam,
   WINDOW_NAMES,
 } from '@/audio';
+import { MaterialField } from '@/components/MaterialPicker';
 import { ParamRow } from '@/components/ParamRow';
 
 /** Where a node's card sits in the work area. */
@@ -100,9 +108,12 @@ export function nodeById(id: string): NodeInfo | null {
   return NODES.find((n) => n.id === id) ?? null;
 }
 
-/** The facets scope key for one node. */
-export function scopeKeyFor(node: string): string {
-  return `shard.params.${node}`;
+/** Which of a node's two scopes: the inspector's, or the card's. */
+export type NodeView = 'full' | 'summary';
+
+/** The facets scope key for one view of one node. */
+export function scopeKeyFor(node: string, view: NodeView = 'full'): string {
+  return view === 'full' ? `shard.params.${node}` : `shard.params.${node}.summary`;
 }
 
 /** A node's on/off switch, when the table gives it one: `grain.on`. */
@@ -174,11 +185,19 @@ function fieldFor(p: ParamInfo) {
   };
 }
 
-/** The schema for one node. Untitled: the inspector's header carries the name. */
-export function buildSchema(defs: ParamInfo[], node: NodeInfo): PropertySchema {
+/**
+ * The schema for one view of a node. Untitled: the header carries the name.
+ * A generator that reads a material leads with its picker in both views.
+ */
+export function buildSchema(defs: ParamInfo[], node: NodeInfo, view: NodeView): PropertySchema {
+  const level = levelIdOf(defs, node);
+  const rows = rowsOf(defs, node).filter((p) => view === 'full' || p.id === level);
+  const picker = READS_MATERIAL.has(node.id)
+    ? [{ kind: 'material', id: `${node.id}.wire`, path: `${node.id}.wire`, node: node.id }]
+    : [];
   return {
     version: 1,
-    groups: [{ id: node.id, rows: rowsOf(defs, node).map((p) => fieldFor(p)) }],
+    groups: [{ id: node.id, rows: [...picker, ...rows.map((p) => fieldFor(p))] }],
   };
 }
 
@@ -189,36 +208,39 @@ export function buildSchema(defs: ParamInfo[], node: NodeInfo): PropertySchema {
 export function registerParamScope(defs: ParamInfo[]) {
   const byId = new Map(defs.map((d) => [d.id, d]));
   registerFieldRenderer('param', ParamRow);
+  registerFieldRenderer('material', MaterialField);
 
   for (const node of NODES) {
-    registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(node.id), {
-      schema: buildSchema(defs, node),
+    for (const view of ['full', 'summary'] as const) {
+      registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(node.id, view), {
+        schema: buildSchema(defs, node, view),
 
-      read: (values) => {
-        const out: Record<string, unknown> = {};
-        for (const d of defs) {
-          const v = values[d.id] ?? d.default;
-          out[d.id] = isSwitch(d)
-            ? v >= 0.5
+        read: (values) => {
+          const out: Record<string, unknown> = {};
+          for (const d of defs) {
+            const v = values[d.id] ?? d.default;
+            out[d.id] = isSwitch(d)
+              ? v >= 0.5
+              : d.taper === 'stepped'
+                ? String(Math.round(v))
+                : normalise(d, v);
+          }
+          return out;
+        },
+
+        write: (path, value) => {
+          const d = byId.get(path);
+          if (!d) return;
+          const real = isSwitch(d)
+            ? value
+              ? 1
+              : 0
             : d.taper === 'stepped'
-              ? String(Math.round(v))
-              : normalise(d, v);
-        }
-        return out;
-      },
-
-      write: (path, value) => {
-        const d = byId.get(path);
-        if (!d) return;
-        const real = isSwitch(d)
-          ? value
-            ? 1
-            : 0
-          : d.taper === 'stepped'
-            ? Number(value)
-            : denormalise(d, Number(value));
-        void setParam(d.id, real);
-      },
-    });
+              ? Number(value)
+              : denormalise(d, Number(value));
+          void setParam(d.id, real);
+        },
+      });
+    }
   }
 }
