@@ -16,7 +16,8 @@
         "width": 1100,
         "height": 780,
         "dragDropEnabled": true,
-        "backgroundColor": "#0e0e12"
+        "backgroundColor": "#0e0e12",
+        "theme": "Dark"
       }
     ],
     "security": {
