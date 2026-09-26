@@ -6,3 +6,6 @@ src-tauri/gen/
 !assets/*.wav
 .DS_Store
 assets/
+/THIRD-PARTY-LICENSES
+/dist-friends-build/
+.idea/

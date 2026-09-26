@@ -71,4 +71,33 @@ fmt:
 
 [group('build')]
 build:
+    #!/usr/bin/env bash
+    set -euo pipefail
     pnpm tauri build
+    # Reseal the ad-hoc signature over the whole bundle. Oblique found
+    # tauri-bundler's signature can fail `codesign --verify`, which a
+    # downloaded copy shows as "app is damaged" (Oblique Epic 14).
+    product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
+    codesign --deep --force --sign - "target/release/bundle/macos/${product}.app"
+
+# The friends build: the .app, a README with the Gatekeeper fix, and the
+# third-party notices, zipped for a GitHub release. Oblique's recipe.
+[group('build')]
+package: build
+    #!/usr/bin/env bash
+    set -euo pipefail
+    ./scripts/generate-third-party-licenses.py
+    product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
+    version=$(node -p "require('./src-tauri/tauri.conf.json').version")
+    outdir="dist-friends-build"
+    rm -rf "$outdir"
+    mkdir -p "$outdir"
+    cp -R "target/release/bundle/macos/${product}.app" "$outdir/"
+    sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
+    cp THIRD-PARTY-LICENSES LICENSE "$outdir/"
+    # ditto, not zip, for the .app: plain zip drops the metadata the
+    # signature depends on, which is another way to get "app is damaged".
+    (cd "$outdir" && \
+        ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
+        zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-LICENSES)
+    echo "Packaged: $outdir/${product}-v${version}.zip"
