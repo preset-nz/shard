@@ -26,6 +26,7 @@
  */
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import {
+  ARRANGEMENT_PREFIX,
   DRIVE_TYPES,
   denormalise,
   FILTER_TYPES,
@@ -231,7 +232,11 @@ export function isSwitch(p: ParamInfo): boolean {
   return p.taper === 'stepped' && p.steps === 2 && p.min === 0 && p.max === 1;
 }
 
-/** Names for the stepped rows whose steps are choices rather than numbers. */
+/**
+ * Names for the stepped rows whose steps are choices rather than numbers.
+ * The arrangement borrows these rows, so its ids are looked up without their
+ * prefix.
+ */
 const STEP_NAMES: Record<string, string[]> = {
   'grain.window': WINDOW_NAMES,
   'filter.type': FILTER_TYPES,
@@ -247,7 +252,7 @@ function fieldFor(p: ParamInfo) {
 
   if (p.taper === 'stepped') {
     const n = Math.max(1, p.steps ?? 1);
-    const names = STEP_NAMES[p.id] ?? null;
+    const names = STEP_NAMES[p.id.replace(ARRANGEMENT_PREFIX, '')] ?? null;
     return {
       ...base,
       kind: 'select' as const,
