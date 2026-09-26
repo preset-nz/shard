@@ -2,7 +2,7 @@
 //!
 //! A patch is an instrument, a sound with no clock. The tracker decides when
 //! it plays (Georg, 2026-09-14: "so the tracker is one level up from the
-//! patch"). It holds what belongs to the song rather than to a sound: the
+//! patch"). It holds what belongs to the arrangement rather than to a sound: the
 //! tempo, the swing, and tracks of steps. Loading a different patch leaves
 //! the beat alone, and a patch never carries a pattern.
 //!
@@ -110,7 +110,7 @@ impl Tracker {
         self
     }
 
-    /// What the engine plays: the first track, at the song's tempo and swing.
+    /// What the engine plays: the first track, at the arrangement's tempo and swing.
     pub fn params(&self) -> StepParams {
         let t = self.tracks.first().copied().unwrap_or_default();
         StepParams {

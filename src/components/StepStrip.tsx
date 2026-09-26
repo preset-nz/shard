@@ -16,7 +16,7 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
 /**
  * The tracker: the level above the patch (Georg, 2026-09-14).
  *
- * Tempo and swing belong to the song, the steps to its one track, and none of
+ * Tempo and swing belong to the arrangement, the steps to its one track, and none of
  * it to the patch, so none of it is a parameter row. One button per
  * sixteenth, the step playing ringed. Buttons keep a sixteenth's width
  * whatever the length, so four steps read as one beat rather than a bar

@@ -308,7 +308,7 @@ export interface Track {
 }
 
 /**
- * The level above the patch: the song's tempo and swing, and its tracks. One
+ * The level above the patch: the arrangement's tempo and swing, and its tracks. One
  * track today, playing the document's one patch.
  */
 export interface Tracker {

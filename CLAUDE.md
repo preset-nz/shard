@@ -62,7 +62,7 @@ taper is both a value mapping and a hint about what control to draw.
 Keep the table small. Do not add a parameter the DSP does not read.
 
 **The table is the patch, and the tracker is the level above it.** Tempo,
-swing and tracks of steps belong to the song, not to a sound, so they are not
+swing and tracks of steps belong to the arrangement, not to a sound, so they are not
 parameters: they live in `src-tauri/src/tracker.rs`, save above the patch in
 the `.shard` document, and reach the engine through `steps::StepBank` and
 `Engine::set_steps`, once a block. A value that should survive loading a
