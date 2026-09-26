@@ -19,7 +19,8 @@ use tauri::Manager;
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use serde::Serialize;
-use shard_dsp::params::{Taper, Unit, PARAMS};
+use shard_dsp::arrangement;
+use shard_dsp::params::{ParamDef, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::steps::StepBank;
 use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, ReadingBank};
@@ -49,6 +50,10 @@ type SourceSlots = [Option<Vec<f32>>; 2];
 /// Shared between the UI thread and the audio thread.
 pub struct Audio {
     bank: Arc<ParamBank>,
+    /// The arrangement's values: its chain over the patch, the patch's
+    /// fader and the limiter. Not the patch's, so loading a patch leaves them
+    /// alone; saved above the patch. Read by the audio thread once a block.
+    arrangement: Arc<ParamBank>,
     /// Every parameter as the engine last heard it, LFOs included. Written by
     /// the audio thread once a block; the bank above stays the hand's.
     heard: Arc<ParamBank>,
@@ -215,8 +220,36 @@ impl ModulationView {
 
 #[tauri::command]
 fn param_defs() -> Vec<ParamInfo> {
-    PARAMS
-        .iter()
+    infos(PARAMS)
+}
+
+/// The arrangement's table, as `param_defs` gives the patch's.
+#[tauri::command]
+fn arrangement_defs() -> Vec<ParamInfo> {
+    infos(arrangement::params())
+}
+
+#[tauri::command]
+fn get_arrangement(state: tauri::State<'_, Audio>) -> Vec<f32> {
+    let bank = &state.arrangement;
+    (0..bank.defs().len()).map(|i| bank.get(i)).collect()
+}
+
+#[tauri::command]
+fn set_arrangement_param(
+    state: tauri::State<'_, Audio>,
+    id: String,
+    value: f32,
+) -> Result<(), String> {
+    if state.arrangement.set_by_id(&id, value) {
+        Ok(())
+    } else {
+        Err(format!("unknown arrangement parameter: {id}"))
+    }
+}
+
+fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
+    defs.iter()
         .map(|p| ParamInfo {
             id: p.id,
             name: p.name,
@@ -402,6 +435,7 @@ fn save_patch(
     let tracker = state.tracker.lock().expect("tracker poisoned").clone();
     let mut doc = patch::Document::new(tracker, p);
     doc.pool = pool;
+    doc.arrangement = patch::capture_arrangement(&state.arrangement);
     std::fs::write(&path, doc.to_json()?).map_err(|e| format!("{path}: {e}"))
 }
 
@@ -428,10 +462,15 @@ fn load_patch(
         .iter()
         .filter_map(|m| state.load_record(m).ok().map(|l| (m.id, l)))
         .collect();
-    // The tracker comes with the document, above the patch.
+    // The tracker and the arrangement's chain come with the document, above
+    // the patch.
     apply_tracker(&state, doc.tracker.clone());
     let p = &doc.patch;
     let mut report = p.apply(&state.bank);
+    report.unknown.extend(patch::apply_arrangement(
+        &doc.arrangement,
+        &state.arrangement,
+    ));
     // A patch names its map. One this Mac does not have leaves the active
     // map alone and is reported, like an unknown id.
     if let Some(want) = &p.controller_map {
@@ -1379,6 +1418,7 @@ impl Audio {
 
 fn build_audio() -> Result<Audio, String> {
     let bank = Arc::new(ParamBank::new());
+    let arrangement = Arc::new(ParamBank::for_table(arrangement::params()));
     let heard = Arc::new(ParamBank::new());
     let peak = Arc::new(AtomicU32::new(0));
     let reduction = Arc::new(AtomicU32::new(1.0f32.to_bits()));
@@ -1420,6 +1460,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_playhead = Arc::clone(&playhead);
     let audio_step = Arc::clone(&step);
     let audio_steps = Arc::clone(&steps);
+    let audio_arrangement = Arc::clone(&arrangement);
     let audio_readings = Arc::clone(&readings);
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
@@ -1537,7 +1578,14 @@ fn build_audio() -> Result<Audio, String> {
                                     return;
                                 }
                                 // The tracker, once a block, as the bank is.
-                                engine.set_steps(audio_steps.load());
+                                let steps = audio_steps.load();
+                                engine.set_steps(steps);
+                                // The arrangement, the same way. Sound scaping
+                                // hears the patch alone, and the mode is what
+                                // switches the steps, so the steps being off is
+                                // the patch alone. One line of coupling, here in
+                                // the host rather than in the engine.
+                                engine.set_arrangement(&audio_arrangement, !steps.on);
                                 // How each generator reads its material, the same way.
                                 let (player, grain) = audio_readings.load();
                                 engine.set_readings(player, grain);
@@ -1631,6 +1679,7 @@ fn build_audio() -> Result<Audio, String> {
 
     Ok(Audio {
         bank,
+        arrangement,
         heard,
         peak,
         reduction,
@@ -1699,6 +1748,9 @@ pub fn run() {
             param_defs,
             get_params,
             set_param,
+            arrangement_defs,
+            get_arrangement,
+            set_arrangement_param,
             meters,
             set_playing,
             tracker,

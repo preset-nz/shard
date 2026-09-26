@@ -8,6 +8,10 @@
 //! samples stay where they are, so a document is a few kilobytes of text you
 //! can read and diff.
 //!
+//! **The arrangement's chain sits above the patch too,** as `arrangement`:
+//! its drive, crush, ring, filter and output, the patch's fader and the
+//! limiter, by id like the patch's values. See `shard_dsp::arrangement`.
+//!
 //! One patch today. Several patches inline in the same file is the node API's
 //! decision 23, and tracks name the patch they play when that lands.
 //!
@@ -48,6 +52,10 @@ pub struct Document {
     /// tracker, since a pool outlives any one patch. See `materials.rs`.
     #[serde(flatten)]
     pub pool: Pool,
+    /// The arrangement's values by id, above the patch. Absent gives its
+    /// defaults: every arrangement effect off, unity gains, the limiter on.
+    #[serde(default)]
+    pub arrangement: BTreeMap<String, f32>,
     pub patch: Patch,
 }
 
@@ -100,6 +108,7 @@ impl Document {
             version: VERSION,
             tracker,
             pool: Pool::default(),
+            arrangement: BTreeMap::new(),
             patch,
         }
     }
@@ -118,6 +127,29 @@ impl Document {
         }
         Ok(doc)
     }
+}
+
+/// Every arrangement value by id, for saving.
+pub fn capture_arrangement(bank: &ParamBank) -> BTreeMap<String, f32> {
+    bank.defs()
+        .iter()
+        .enumerate()
+        .map(|(i, p)| (p.id.to_string(), bank.get(i)))
+        .collect()
+}
+
+/// Replace the arrangement with a document's. Every row starts from its
+/// default, so a document without an arrangement gets the default one rather
+/// than whatever was open before. Answers with the ids it did not know.
+pub fn apply_arrangement(values: &BTreeMap<String, f32>, bank: &ParamBank) -> Vec<String> {
+    for (i, p) in bank.defs().iter().enumerate() {
+        bank.set(i, p.default);
+    }
+    values
+        .iter()
+        .filter(|(id, value)| !bank.set_by_id(id, **value))
+        .map(|(id, _)| id.clone())
+        .collect()
 }
 
 impl Patch {
@@ -383,5 +415,34 @@ mod tests {
             Document::from_json(&text).unwrap().tracker,
             Tracker::default()
         );
+    }
+
+    #[test]
+    fn the_arrangement_sits_above_the_patch_and_round_trips() {
+        let arr = ParamBank::for_table(shard_dsp::arrangement::params());
+        arr.set_by_id("arrangement.crush.on", 1.0);
+        arr.set_by_id("arrangement.track.gain", 0.25);
+        let mut doc = Document::new(Tracker::default(), patch_of("{}"));
+        doc.arrangement = capture_arrangement(&arr);
+        let text = doc.to_json().unwrap();
+        let back = Document::from_json(&text).unwrap();
+
+        let fresh = ParamBank::for_table(shard_dsp::arrangement::params());
+        fresh.set_by_id("arrangement.filter.on", 1.0);
+        let unknown = apply_arrangement(&back.arrangement, &fresh);
+        assert!(unknown.is_empty(), "{unknown:?}");
+        for (i, p) in arr.defs().iter().enumerate() {
+            assert_eq!(fresh.get(i), arr.get(i), "{}", p.id);
+        }
+    }
+
+    #[test]
+    fn a_document_without_an_arrangement_gets_the_default_one() {
+        let doc = Document::from_json(&round_trip(patch_of("{}")).to_json().unwrap()).unwrap();
+        let bank = ParamBank::for_table(shard_dsp::arrangement::params());
+        bank.set_by_id("arrangement.crush.on", 1.0);
+        apply_arrangement(&BTreeMap::new(), &bank);
+        assert!(doc.arrangement.is_empty());
+        assert_eq!(bank.get_by_id("arrangement.crush.on"), Some(0.0));
     }
 }
