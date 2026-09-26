@@ -15,6 +15,7 @@
 //! allocator, and `tests/audio_thread.rs` runs every audio-thread call inside
 //! it.
 
+pub mod chain;
 pub mod crush;
 pub mod drive;
 pub mod engine;

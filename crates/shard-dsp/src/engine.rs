@@ -6,17 +6,14 @@
 
 use std::sync::Arc;
 
-use crate::crush::{Crush, CrushParams};
-use crate::drive::{Drive, DriveParams, DriveType};
+use crate::chain::{Chain, ChainParams, ChainSlots, BYPASS_MS};
 use crate::envelope::EnvParams;
-use crate::filter::{Filter, FilterParams, FilterType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::modulation::ModSet;
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
-use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::{OnePole, Ramp};
 use crate::sources::{Generator, Reading};
 use crate::steps::{StepClock, StepParams};
@@ -33,11 +30,6 @@ struct Slots {
     pan: usize,
     reverse: usize,
     window: usize,
-    ring_freq: usize,
-    ring_mix: usize,
-    crush_bits: usize,
-    crush_rate: usize,
-    crush_mix: usize,
     crush_env_amount: usize,
     crush_env_attack: usize,
     crush_env_decay: usize,
@@ -47,18 +39,6 @@ struct Slots {
     material_on: usize,
     material_gain: usize,
     grain_on: usize,
-    crush_on: usize,
-    ring_on: usize,
-    drive_on: usize,
-    drive_mix: usize,
-    drive_amount: usize,
-    drive_tone: usize,
-    drive_type: usize,
-    filter_on: usize,
-    filter_mix: usize,
-    filter_cutoff: usize,
-    filter_resonance: usize,
-    filter_type: usize,
     limit: usize,
     ceiling: usize,
     env_on: usize,
@@ -71,7 +51,8 @@ struct Slots {
     tape_time: usize,
     tape_reverse: usize,
     tape_flick: usize,
-    gain: usize,
+    /// The patch's drive, crush, ring, filter and output.
+    fx: ChainSlots,
 }
 
 impl Slots {
@@ -91,11 +72,6 @@ impl Slots {
             pan: at("grain.pan"),
             reverse: at("grain.reverse"),
             window: at("grain.window"),
-            ring_freq: at("ring.freq"),
-            ring_mix: at("ring.mix"),
-            crush_bits: at("crush.bits"),
-            crush_rate: at("crush.rate"),
-            crush_mix: at("crush.mix"),
             crush_env_amount: at("crush.env.amount"),
             crush_env_attack: at("crush.env.attack"),
             crush_env_decay: at("crush.env.decay"),
@@ -105,18 +81,6 @@ impl Slots {
             material_on: at("material.on"),
             material_gain: at("material.gain"),
             grain_on: at("grain.on"),
-            crush_on: at("crush.on"),
-            ring_on: at("ring.on"),
-            drive_on: at("drive.on"),
-            drive_mix: at("drive.mix"),
-            drive_amount: at("drive.amount"),
-            drive_tone: at("drive.tone"),
-            drive_type: at("drive.type"),
-            filter_on: at("filter.on"),
-            filter_mix: at("filter.mix"),
-            filter_cutoff: at("filter.cutoff"),
-            filter_resonance: at("filter.resonance"),
-            filter_type: at("filter.type"),
             limit: at("amp.limit"),
             ceiling: at("amp.ceiling"),
             env_on: at("env.on"),
@@ -129,7 +93,7 @@ impl Slots {
             tape_time: at("tape.time"),
             tape_reverse: at("tape.reverse"),
             tape_flick: at("tape.flick"),
-            gain: at("amp.gain"),
+            fx: ChainSlots::resolve(at),
         }
     }
 }
@@ -145,16 +109,10 @@ struct Smoothers {
     pan: OnePole,
     grain_gain: OnePole,
     material_gain: OnePole,
-    crush_mix: OnePole,
-    gain: OnePole,
     /// The tape's own inertia. Its time constant is `tape.time`, reset per
     /// block, so the brake's feel is a control rather than a constant.
     speed: OnePole,
 }
-
-/// How long a section switch takes. Short enough to feel instant, long enough
-/// that cutting a loud section in or out never clicks.
-const BYPASS_MS: f32 = 10.0;
 
 /// One ramp per switchable section. Each multiplies its section's mix and
 /// lands on an exact zero, so a section that is off is bit-exact with its mix
@@ -162,11 +120,7 @@ const BYPASS_MS: f32 = 10.0;
 struct Fades {
     material: Ramp,
     grain: Ramp,
-    crush: Ramp,
-    ring: Ramp,
     env: Ramp,
-    filter: Ramp,
-    drive: Ramp,
 }
 
 impl Fades {
@@ -182,11 +136,7 @@ impl Fades {
         Self {
             material: ramp(slots.material_on),
             grain: ramp(slots.grain_on),
-            crush: ramp(slots.crush_on),
-            ring: ramp(slots.ring_on),
             env: ramp(slots.env_on),
-            filter: ramp(slots.filter_on),
-            drive: ramp(slots.drive_on),
         }
     }
 }
@@ -226,10 +176,8 @@ pub struct Engine {
     /// The ratio the tail was read at, so a pitch change fades out at the
     /// old pitch rather than jumping to the new one.
     tail_ratio: f32,
-    drive: Drive,
-    crush: Crush,
-    ringmod: RingMod,
-    filter: Filter,
+    /// The patch's own effects and output.
+    fx: Chain,
     limiter: Limiter,
     slots: Slots,
     smooth: Smoothers,
@@ -262,8 +210,6 @@ impl Engine {
             pan: mk(defs[slots.pan].smooth_ms),
             grain_gain: mk(defs[slots.grain_gain].smooth_ms),
             material_gain: mk(defs[slots.material_gain].smooth_ms),
-            crush_mix: mk(defs[slots.crush_mix].smooth_ms),
-            gain: mk(defs[slots.gain].smooth_ms),
             speed: mk(defs[slots.tape_time].default),
         };
         // Start settled at the defaults, otherwise every parameter glides up
@@ -279,8 +225,6 @@ impl Engine {
         smooth
             .material_gain
             .reset(defs[slots.material_gain].default);
-        smooth.crush_mix.reset(defs[slots.crush_mix].default);
-        smooth.gain.reset(defs[slots.gain].default);
         // Unity, not a parameter default. Copying the line above would reset
         // the tape to `tape.brake`'s default of zero and pitch the instrument
         // up from a standstill on every launch.
@@ -309,10 +253,7 @@ impl Engine {
             pass_ratio: 1.0,
             pass_semis: 0.0,
             tail_ratio: 1.0,
-            drive: Drive::new(sample_rate),
-            crush: Crush::new(sample_rate),
-            ringmod: RingMod::new(sample_rate),
-            filter: Filter::new(sample_rate),
+            fx: Chain::new(sample_rate, defs, &slots.fx),
             limiter: Limiter::new(sample_rate),
             slots,
             smooth,
@@ -450,7 +391,7 @@ impl Engine {
     fn render_audition(&mut self, out: &mut [f32], bank: &ParamBank) {
         // The grain as it was: the cloud's level and the master gain as the
         // hand set them, unmodulated.
-        let gain = bank.get(self.slots.grain_gain) * bank.get(self.slots.gain);
+        let gain = bank.get(self.slots.grain_gain) * bank.get(self.slots.fx.gain);
         // Split the borrows by field so the grain pool can be advanced while
         // the source is read.
         let granular = &mut self.granular;
@@ -582,14 +523,14 @@ impl Engine {
             speed: 1.0,
             spawning: true,
         };
-        let ring = RingModParams {
-            freq: read(&self.mods, bank, self.slots.ring_freq),
-            mix: read(&self.mods, bank, self.slots.ring_mix),
-        };
-        // Bits and rate are read once per block; the mix is rebuilt per sample
-        // below, because the crush envelope moves it.
-        let crush_bits = read(&self.mods, bank, self.slots.crush_bits);
-        let crush_rate = read(&self.mods, bank, self.slots.crush_rate);
+        // The patch's effects and output, heard through its LFOs. The crush
+        // mix is rebuilt per sample inside the chain, because the crush
+        // envelope moves it.
+        let fx = ChainParams::read(
+            &self.slots.fx,
+            |slot| read(&self.mods, bank, slot),
+            |slot| bank.get(slot),
+        );
 
         if !self.playing {
             if self.auditioning {
@@ -601,17 +542,12 @@ impl Engine {
         }
 
         let material_gain_target = read(&self.mods, bank, self.slots.material_gain);
-        let master_gain_target = read(&self.mods, bank, self.slots.gain);
         // Section switches, read as gates. Each one fades its section's mix
         // rather than cutting it.
         let gate = |slot: usize| if bank.get(slot) >= 0.5 { 1.0 } else { 0.0 };
         let grain_on_target = gate(self.slots.grain_on);
         let material_on_target = gate(self.slots.material_on);
-        let crush_on_target = gate(self.slots.crush_on);
-        let ring_on_target = gate(self.slots.ring_on);
         let env_on_target = gate(self.slots.env_on);
-        let filter_on_target = gate(self.slots.filter_on);
-        let drive_on_target = gate(self.slots.drive_on);
         // The step clock, as the tracker last handed it in.
         let steps = self.step_params;
         // Switched on mid-pass, the steps take over from the loop: the pass
@@ -630,21 +566,9 @@ impl Engine {
             self.pass_ratio = 1.0;
             self.pass_semis = 0.0;
         }
-        let drive = DriveParams {
-            amount_db: read(&self.mods, bank, self.slots.drive_amount),
-            tone_hz: read(&self.mods, bank, self.slots.drive_tone),
-            kind: DriveType::from_value(bank.get(self.slots.drive_type)),
-            mix: read(&self.mods, bank, self.slots.drive_mix),
-        };
         let limiter = LimiterParams {
             ceiling: bank.get(self.slots.ceiling),
             on: bank.get(self.slots.limit) >= 0.5,
-        };
-        let filter = FilterParams {
-            cutoff_hz: read(&self.mods, bank, self.slots.filter_cutoff),
-            resonance: read(&self.mods, bank, self.slots.filter_resonance),
-            kind: FilterType::from_value(bank.get(self.slots.filter_type)),
-            mix: read(&self.mods, bank, self.slots.filter_mix),
         };
         let env = EnvParams {
             amount: read(&self.mods, bank, self.slots.env_mix),
@@ -658,7 +582,6 @@ impl Engine {
         // it exists. `position` and the player both address the window, not
         // the file, which is what makes trimming a long sample feel like
         // loading a short one.
-        let crush_mix_target = read(&self.mods, bank, self.slots.crush_mix);
         // The crush envelope reads the same clock as the amplitude one, so the
         // two stay in step, but it means something different. The amplitude
         // envelope multiplies the *signal*, where one is transparent; this one
@@ -817,36 +740,11 @@ impl Engine {
             let l = material + gl;
             let r = material + gr;
 
-            // Driven first, so the crusher and the ring modulator get the
-            // harmonics the curve added. Order stops being fixed the day the
-            // modifier stack lands.
-            let drive_on = self.fades.drive.process(drive_on_target);
-            let faded_drive = DriveParams {
-                mix: drive.mix * drive_on,
-                ..drive
-            };
-            let (l, r) = self.drive.process(l, r, &faded_drive);
-
-            // Crushed before the ring modulator, so the modulator has the
-            // extra partials the crusher just generated to fold against.
+            // Drive, crush and ring. The crush envelope reads the pass's
+            // clock, so it is worked out here and handed in.
             let elapsed = self.player.elapsed();
-            let crush = CrushParams {
-                bits: crush_bits,
-                rate: crush_rate,
-                // Switched off, the mix lands on an exact zero, which the
-                // crusher already treats as a true bypass.
-                mix: self.smooth.crush_mix.process(crush_mix_target)
-                    * crush_env.gain_at(elapsed, window_len, self.sample_rate)
-                    * self.fades.crush.process(crush_on_target),
-            };
-            let (l, r) = self.crush.process(l, r, &crush);
-
-            let ring_on = self.fades.ring.process(ring_on_target);
-            let faded_ring = RingModParams {
-                mix: ring.mix * ring_on,
-                ..ring
-            };
-            let (l, r) = self.ringmod.process(l, r, &faded_ring);
+            let crush_env_gain = crush_env.gain_at(elapsed, window_len, self.sample_rate);
+            let (l, r) = self.fx.front(l, r, &fx, crush_env_gain);
 
             // A stopping reel loses level as well as pitch, because the head
             // stops seeing tape. Without this the last of the brake is a cloud
@@ -868,18 +766,8 @@ impl Engine {
             let (l, r) = (l * e, r * e);
 
             // The filter, on the master: after every generator and effect,
-            // before the gain. Switched off, its mix lands on an exact zero.
-            let filter_on = self.fades.filter.process(filter_on_target);
-            let faded_filter = FilterParams {
-                mix: filter.mix * filter_on,
-                ..filter
-            };
-            let (l, r) = self.filter.process(l, r, &faded_filter);
-
-            // The master gain, after every generator and effect. Unity is
-            // exact, since the smoother starts and rests on it.
-            let g = self.smooth.gain.process(master_gain_target);
-            let (l, r) = (l * g, r * g);
+            // then the master gain.
+            let (l, r) = self.fx.back(l, r, &fx);
 
             // The limiter holds peaks under the ceiling, a millisecond late.
             // The clip after it is a safety net for when it is switched off:
