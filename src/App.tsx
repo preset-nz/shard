@@ -65,6 +65,7 @@ import {
   LANES,
   NODES,
   type NodeInfo,
+  nodeById,
   type ParamValues,
   registerParamScope,
 } from '@/scope';
@@ -197,10 +198,17 @@ export default function App() {
   }, [mode, tracker, changeTracker]);
 
   // Each mode edits its own level, so a selection does not cross between
-  // them: a patch node means nothing in the tracker, and the other way round.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: clears on a mode change only
+  // them: a patch node, a material or an LFO means nothing in the tracker,
+  // and an arrangement node nothing in sound scaping. Only a selection from
+  // the other level is cleared, so a click that selects and then switches,
+  // such as the waveform's title, keeps what it selected.
   useEffect(() => {
-    useSelection.getState().clear();
+    const now = useSelection.getState().selection;
+    if (!now) return;
+    const layer = now.kind === 'node' ? nodeById(now.id)?.layer : 'patch';
+    if (layer !== (mode === 'tracker' ? 'arrangement' : 'patch')) {
+      useSelection.getState().clear();
+    }
   }, [mode]);
 
   // Startup: ask Rust for the table, register the facets scope from it, then

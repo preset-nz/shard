@@ -51,8 +51,9 @@ type SourceSlots = [Option<Vec<f32>>; 2];
 pub struct Audio {
     bank: Arc<ParamBank>,
     /// The arrangement's values: its chain over the patch, the patch's
-    /// fader and the limiter. Not the patch's, so loading a patch leaves them
-    /// alone; saved above the patch. Read by the audio thread once a block.
+    /// fader and the limiter. Saved above the patch, so opening a document
+    /// brings its own; a patch-only load, when one exists, leaves them alone.
+    /// Read by the audio thread once a block.
     arrangement: Arc<ParamBank>,
     /// Every parameter as the engine last heard it, LFOs included. Written by
     /// the audio thread once a block; the bank above stays the hand's.
