@@ -1,6 +1,6 @@
 # Shard
 
-Sample-shaping and sound-scaping. Samples in, damage out.
+Sample-shaping and sound-scaping.
 
 A desktop app for macOS. Material goes through a grain cloud and a chain of
 effects that break it, played from steps or left to run as a soundscape.
