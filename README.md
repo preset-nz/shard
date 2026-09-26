@@ -9,6 +9,18 @@ effects that break it, played from steps or left to run as a soundscape.
 
 ---
 
+## Download
+
+The latest zip is on [Releases](https://github.com/preset-nz/shard/releases). Free, pre-release, Apple Silicon (M-series) Macs only.
+
+It isn't signed by Apple, so the first time macOS says **"Shard.app is damaged and can't be opened"**. It isn't damaged; macOS doesn't recognise the developer. Fix it once:
+
+1. Open Terminal (`Cmd+Space`, type `Terminal`).
+2. Type `xattr -cr ` (with a trailing space), drag `Shard.app` into the Terminal window, and press Return.
+3. Double-click the app again. It opens from then on.
+
+---
+
 ## Play it
 
 The app opens with a built-in drone. Press Space and it loops, plain:
@@ -30,7 +42,7 @@ Move a sample and the file still opens, and says which one is missing.
 
 ## Build it
 
-There is no download. Shard builds from source.
+To build it from source instead:
 
 **Prerequisites**
 [Rust](https://rustup.rs), [Node](https://nodejs.org),
