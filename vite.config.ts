@@ -14,11 +14,9 @@ export default defineConfig(async () => ({
     alias: {
       '@': path.resolve(__dirname, './src'),
     },
-    // The @preset.nz packages are path dependencies of unbuilt TypeScript.
-    // Rollup resolves their imports from their real location, which has no
-    // node_modules of its own, so pin the shared runtime to this app's copy.
-    // facets is in the list because two copies would mean two registries.
-    // See guidance/design/tauri-scaffold.md, "Consuming a path-linked package".
+    // @preset.nz packages ship unbuilt TypeScript. Pin the shared runtime to
+    // this app's copy; facets is in the list because two copies would mean
+    // two registries (a temporary `pnpm link` makes that easy to hit).
     dedupe: ['react', 'react-dom', '@tauri-apps/api', '@preset.nz/facets'],
   },
 

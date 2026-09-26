@@ -1,8 +1,8 @@
 @import "tailwindcss";
-/* Path-linked @preset.nz packages live outside this tree, so Tailwind
-   never scans them on its own. Without these lines their classes are
-   missing from the build. See guidance/design/tauri-scaffold.md. */
-@source "../../../packages/facets/src";
+/* @preset.nz packages ship unbuilt source into node_modules, which Tailwind
+   never scans on its own. Without this line their classes are missing from
+   the build. */
+@source "../node_modules/@preset.nz/facets/src";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/inter";
