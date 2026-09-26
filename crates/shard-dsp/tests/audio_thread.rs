@@ -10,6 +10,7 @@
 use std::hint::black_box;
 use std::sync::Mutex;
 
+use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
     Engine, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape, StepParams, Taper,
@@ -30,7 +31,7 @@ fn tone(n: usize) -> Vec<f32> {
 /// Every parameter at a different slow phase, reaching both ends of its range.
 /// The gates (`tape.reverse`, `tape.brake`) open and close along the way.
 fn sweep(bank: &ParamBank, block: usize) {
-    for (i, p) in PARAMS.iter().enumerate() {
+    for (i, p) in bank.defs().iter().enumerate() {
         let t = ((block * (i + 3)) % 97) as f32 / 96.0;
         bank.set_normalised(p.id, t);
     }
@@ -58,10 +59,14 @@ fn a_block_never_touches_the_allocator() {
     drop(e.swap_source(Generator::Grain, tone(30_000)));
     e.set_playing(true);
     let bank = ParamBank::new();
+    // The arrangement's rows swept as well, and the patch heard alone and
+    // arranged by turns, as the modes switch.
+    let arr = ParamBank::for_table(arrangement::params());
     let mut out = vec![0.0f32; 2048];
 
     for block in 0..2_000 {
         sweep(&bank, block);
+        sweep(&arr, block + 7);
         // Each generator's reading across its range too, ends crossed and all.
         let t = |k: usize| ((block * k) % 97) as f32 / 96.0;
         e.set_readings(
@@ -78,7 +83,10 @@ fn a_block_never_touches_the_allocator() {
         );
         // Devices do not promise a fixed block size, so neither does this.
         let n = [64, 256, 512, 2048][block % 4];
-        let ((), caught) = no_alloc(|| e.process_block(&mut out[..n], &bank));
+        let ((), caught) = no_alloc(|| {
+            e.set_arrangement(&arr, (block / 50) % 2 == 0);
+            e.process_block(&mut out[..n], &bank)
+        });
         assert_eq!(
             caught, 0,
             "block {block} touched the allocator {caught} time(s)"

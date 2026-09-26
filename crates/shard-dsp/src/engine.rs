@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use crate::arrangement::{self, index_of_arrangement};
 use crate::chain::{Chain, ChainParams, ChainSlots, BYPASS_MS};
 use crate::envelope::EnvParams;
 use crate::granular::{GrainParams, Granular, Window};
@@ -39,8 +40,6 @@ struct Slots {
     material_on: usize,
     material_gain: usize,
     grain_on: usize,
-    limit: usize,
-    ceiling: usize,
     env_on: usize,
     env_mix: usize,
     env_attack: usize,
@@ -81,8 +80,6 @@ impl Slots {
             material_on: at("material.on"),
             material_gain: at("material.gain"),
             grain_on: at("grain.on"),
-            limit: at("amp.limit"),
-            ceiling: at("amp.ceiling"),
             env_on: at("env.on"),
             env_mix: at("env.mix"),
             env_attack: at("env.attack"),
@@ -94,6 +91,68 @@ impl Slots {
             tape_reverse: at("tape.reverse"),
             tape_flick: at("tape.flick"),
             fx: ChainSlots::resolve(at),
+        }
+    }
+}
+
+/// Where the arrangement's rows sit in its own table.
+struct ArrangementSlots {
+    fx: ChainSlots,
+    track_gain: usize,
+    limit: usize,
+    ceiling: usize,
+}
+
+impl ArrangementSlots {
+    fn resolve() -> Self {
+        let at = |id: &str| {
+            let full = format!("{}{id}", arrangement::PREFIX);
+            index_of_arrangement(&full).unwrap_or_else(|| panic!("missing arrangement row: {full}"))
+        };
+        Self {
+            fx: ChainSlots::resolve(at),
+            track_gain: at("track.gain"),
+            limit: at("amp.limit"),
+            ceiling: at("amp.ceiling"),
+        }
+    }
+}
+
+/// The arrangement's values for one block, as `set_arrangement` last read
+/// them. Copied in whole, so the audio thread never holds the host's bank.
+#[derive(Clone, Copy)]
+struct ArrangementBlock {
+    fx: ChainParams,
+    track_gain: f32,
+    limiter: LimiterParams,
+}
+
+impl ArrangementBlock {
+    /// Read once a block. No LFO moves an arrangement row yet, so every row is
+    /// read as the hand set it.
+    fn read(s: &ArrangementSlots, value: impl Fn(usize) -> f32 + Copy, patch_alone: bool) -> Self {
+        let mut fx = ChainParams::read(&s.fx, value, value);
+        let mut track_gain = value(s.track_gain);
+        // The patch alone, as sound scaping hears it (Georg, 2026-09-26). Not
+        // a separate path: every arrangement effect is switched off and both
+        // gains go to unity, so the ramps fade the change in 10 ms, and once
+        // they land the chain is bit-exact with no arrangement at all. The
+        // chain keeps running, so a filter switched back in has no stale state.
+        if patch_alone {
+            fx.drive_on = 0.0;
+            fx.crush_on = 0.0;
+            fx.ring_on = 0.0;
+            fx.filter_on = 0.0;
+            fx.gain = 1.0;
+            track_gain = 1.0;
+        }
+        Self {
+            fx,
+            track_gain,
+            limiter: LimiterParams {
+                ceiling: value(s.ceiling),
+                on: value(s.limit) >= 0.5,
+            },
         }
     }
 }
@@ -178,6 +237,12 @@ pub struct Engine {
     tail_ratio: f32,
     /// The patch's own effects and output.
     fx: Chain,
+    /// The arrangement's chain, over the patch, and the patch's fader into it.
+    arr_slots: ArrangementSlots,
+    arr_fx: Chain,
+    arr: ArrangementBlock,
+    track_gain: OnePole,
+    /// After everything, the arrangement included.
     limiter: Limiter,
     slots: Slots,
     smooth: Smoothers,
@@ -230,6 +295,13 @@ impl Engine {
         // up from a standstill on every launch.
         smooth.speed.reset(1.0);
 
+        let arr_defs = arrangement::params();
+        let arr_slots = ArrangementSlots::resolve();
+        let arr = ArrangementBlock::read(&arr_slots, |slot| arr_defs[slot].default, false);
+        let mut track_gain = OnePole::new();
+        track_gain.set_time(arr_defs[arr_slots.track_gain].smooth_ms, sample_rate);
+        track_gain.reset(arr_defs[arr_slots.track_gain].default);
+
         let log = Arc::new(GrainLog::new());
         let mut granular = Granular::new(sample_rate, max_grains);
         granular.set_log(Arc::clone(&log));
@@ -254,6 +326,10 @@ impl Engine {
             pass_semis: 0.0,
             tail_ratio: 1.0,
             fx: Chain::new(sample_rate, defs, &slots.fx),
+            arr_fx: Chain::new(sample_rate, arr_defs, &arr_slots.fx),
+            arr_slots,
+            arr,
+            track_gain,
             limiter: Limiter::new(sample_rate),
             slots,
             smooth,
@@ -480,6 +556,14 @@ impl Engine {
         self.step_params = p;
     }
 
+    /// The arrangement's values, read from its bank once a block, like the
+    /// steps. `bank` holds `arrangement::params()`. With `patch_alone` the
+    /// arrangement's chain and the fader step aside and only the limiter
+    /// remains, which is how sound scaping hears a patch.
+    pub fn set_arrangement(&mut self, bank: &ParamBank, patch_alone: bool) {
+        self.arr = ArrangementBlock::read(&self.arr_slots, |slot| bank.get(slot), patch_alone);
+    }
+
     /// Peak since the last call, then reset. Cheap enough to poll at 30 Hz
     /// for a meter.
     pub fn take_peak(&mut self) -> f32 {
@@ -566,10 +650,7 @@ impl Engine {
             self.pass_ratio = 1.0;
             self.pass_semis = 0.0;
         }
-        let limiter = LimiterParams {
-            ceiling: bank.get(self.slots.ceiling),
-            on: bank.get(self.slots.limit) >= 0.5,
-        };
+        let arr = self.arr;
         let env = EnvParams {
             amount: read(&self.mods, bank, self.slots.env_mix),
             attack_ms: read(&self.mods, bank, self.slots.env_attack),
@@ -769,10 +850,17 @@ impl Engine {
             // then the master gain.
             let (l, r) = self.fx.back(l, r, &fx);
 
+            // Into the arrangement: the patch's fader, then the arrangement's
+            // own drive, crush, ring, filter and output. It has no pass, so
+            // its crusher has no envelope.
+            let t = self.track_gain.process(arr.track_gain);
+            let (l, r) = self.arr_fx.front(l * t, r * t, &arr.fx, 1.0);
+            let (l, r) = self.arr_fx.back(l, r, &arr.fx);
+
             // The limiter holds peaks under the ceiling, a millisecond late.
             // The clip after it is a safety net for when it is switched off:
             // a hard clip beats handing the device something that wraps.
-            let (l, r) = self.limiter.process(l, r, &limiter);
+            let (l, r) = self.limiter.process(l, r, &arr.limiter);
             let l = l.clamp(-1.0, 1.0);
             let r = r.clamp(-1.0, 1.0);
 
@@ -1064,7 +1152,7 @@ mod tests {
         bank.set_by_id("amp.gain", 1.0);
         // A full-scale tone sits above the limiter's ceiling; this test is
         // about the path, not the limiter, so hold it off.
-        bank.set_by_id("amp.limit", 0.0);
+        e.set_arrangement(&limiter_off(), false);
 
         let mut player = crate::player::Player::new(48_000.0);
         let mut out = vec![0.0; 512];
@@ -1093,7 +1181,7 @@ mod tests {
             let bank = ParamBank::new();
             set(&bank, "amp.gain", gain);
             // Linearity is the point here, and the limiter is not linear.
-            set(&bank, "amp.limit", 0.0);
+            e.set_arrangement(&limiter_off(), false);
             let mut out = vec![0.0; 512];
             let mut tail = Vec::new();
             for block in 0..200 {
@@ -1129,7 +1217,7 @@ mod tests {
             let bank = ParamBank::new();
             set(&bank, "material.on", if material { 1.0 } else { 0.0 });
             set(&bank, "grain.on", if grains { 1.0 } else { 0.0 });
-            set(&bank, "amp.limit", 0.0);
+            e.set_arrangement(&limiter_off(), false);
             set(&bank, "grain.gain", 0.5);
             let mut out = vec![0.0; 512];
             let mut tail = Vec::new();
@@ -1656,6 +1744,14 @@ mod tests {
     /// `set_by_id` returns false for an unknown id rather than panicking,
     /// which means a renamed parameter makes a test silently assert nothing.
     /// Every test write goes through here.
+    /// An arrangement at its defaults with the limiter off, for tests about
+    /// the path rather than the limiter.
+    fn limiter_off() -> ParamBank {
+        let arr = ParamBank::for_table(arrangement::params());
+        set(&arr, "arrangement.amp.limit", 0.0);
+        arr
+    }
+
     fn set(bank: &ParamBank, id: &str, v: f32) {
         assert!(bank.set_by_id(id, v), "no such parameter: {id}");
     }
@@ -2537,5 +2633,141 @@ mod tests {
         let bank = ParamBank::new();
         let mut out = vec![0.0; 511];
         e.process_block(&mut out, &bank);
+    }
+
+    /// A patch with every effect on and loud. Arrangement tests need the
+    /// patch's own chain doing something, or they prove nothing.
+    fn busy_patch() -> ParamBank {
+        let bank = ParamBank::new();
+        for (id, v) in [
+            ("drive.on", 1.0),
+            ("drive.amount", 18.0),
+            ("crush.on", 1.0),
+            ("crush.mix", 0.7),
+            ("crush.bits", 6.0),
+            ("ring.on", 1.0),
+            ("ring.mix", 0.5),
+            ("filter.on", 1.0),
+            ("filter.cutoff", 900.0),
+            ("grain.on", 1.0),
+            ("amp.gain", 1.3),
+        ] {
+            set(&bank, id, v);
+        }
+        bank
+    }
+
+    /// An arrangement whose every node is on and audible.
+    fn busy_arrangement() -> ParamBank {
+        let arr = ParamBank::for_table(arrangement::params());
+        for (id, v) in [
+            ("arrangement.track.gain", 0.4),
+            ("arrangement.crush.on", 1.0),
+            ("arrangement.crush.mix", 1.0),
+            ("arrangement.crush.bits", 4.0),
+            ("arrangement.filter.on", 1.0),
+            ("arrangement.filter.cutoff", 300.0),
+            ("arrangement.amp.gain", 0.8),
+        ] {
+            set(&arr, id, v);
+        }
+        arr
+    }
+
+    fn render_arranged(arr: &ParamBank, patch_alone: bool, blocks: usize) -> Vec<f32> {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_playing(true);
+        let bank = busy_patch();
+        let mut out = vec![0.0; 256];
+        let mut all = Vec::new();
+        for _ in 0..blocks {
+            e.set_arrangement(arr, patch_alone);
+            e.process_block(&mut out, &bank);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+
+    #[test]
+    fn the_patch_alone_is_bit_exact_with_an_arrangement_at_its_defaults() {
+        // Sound scaping hears the patch alone. However busy the arrangement
+        // is, stepping it aside must leave exactly the patch, not nearly.
+        let defaults = render_arranged(&ParamBank::for_table(arrangement::params()), false, 100);
+        let alone = render_arranged(&busy_arrangement(), true, 100);
+        assert!(
+            defaults.iter().any(|s| s.abs() > 0.1),
+            "the patch was not heard"
+        );
+        assert!(
+            defaults == alone,
+            "the patch alone differs from no arrangement"
+        );
+    }
+
+    #[test]
+    fn an_arrangement_effect_that_is_on_is_heard() {
+        let defaults = render_arranged(&ParamBank::for_table(arrangement::params()), false, 100);
+        let busy = render_arranged(&busy_arrangement(), false, 100);
+        let most = defaults
+            .iter()
+            .zip(&busy)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(
+            most > 0.05,
+            "the arrangement changed the output by only {most}"
+        );
+    }
+
+    #[test]
+    fn the_fader_silences_the_patch_only_when_arranged() {
+        let arr = ParamBank::for_table(arrangement::params());
+        set(&arr, "arrangement.track.gain", 0.0);
+        // The fader glides from unity over 20 ms; half a second later it is
+        // far below anything audible.
+        let arranged = render_arranged(&arr, false, 400);
+        let loudest = arranged[arranged.len() / 2..]
+            .iter()
+            .fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(
+            loudest < 1e-6,
+            "a fader at zero still let through {loudest}"
+        );
+
+        let defaults = render_arranged(&ParamBank::for_table(arrangement::params()), true, 100);
+        let alone = render_arranged(&arr, true, 100);
+        assert!(defaults == alone, "the patch alone heard the fader");
+    }
+
+    #[test]
+    fn switching_between_the_patch_alone_and_arranged_does_not_click() {
+        let worst_step = |toggle: bool| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = busy_patch();
+            let arr = busy_arrangement();
+            let mut out = vec![0.0; 256];
+            let (mut prev, mut worst) = (0.0f32, 0.0f32);
+            for block in 0..400 {
+                let alone = toggle && (block / 25) % 2 == 1;
+                e.set_arrangement(&arr, alone);
+                e.process_block(&mut out, &bank);
+                for s in out.iter().step_by(2) {
+                    if block > 20 {
+                        worst = worst.max((s - prev).abs());
+                    }
+                    prev = *s;
+                }
+            }
+            worst
+        };
+        let steady = worst_step(false);
+        let switched = worst_step(true);
+        assert!(
+            switched < steady * 2.0 + 0.02,
+            "switching jumped by {switched} against a steady {steady}"
+        );
     }
 }

@@ -628,28 +628,6 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
-    // The limiter, last of all (Georg, 2026-09-14). On by default; off leaves
-    // the hard clip as the only guard, for whoever wants that edge.
-    ParamDef {
-        id: "amp.limit",
-        name: "Limit",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "amp.ceiling",
-        name: "Ceiling",
-        min: 0.5,
-        max: 1.0,
-        default: 0.95,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 0.0,
-    },
 ];
 
 /// The switchable nodes that make sound rather than shape it. They lead with
@@ -669,16 +647,35 @@ pub fn index_of(id: &str) -> Option<usize> {
 /// whose visibility depends on these writes.
 pub struct ParamBank {
     values: Vec<AtomicU32>,
+    /// The table this bank holds, which decides each slot's range: the
+    /// patch's, or the arrangement's (`crate::arrangement`).
+    defs: &'static [ParamDef],
 }
 
 impl ParamBank {
+    /// A bank for the patch table.
     pub fn new() -> Self {
+        Self::for_table(PARAMS)
+    }
+
+    /// A bank for any table, at its defaults.
+    pub fn for_table(defs: &'static [ParamDef]) -> Self {
         Self {
-            values: PARAMS
+            values: defs
                 .iter()
                 .map(|p| AtomicU32::new(p.default.to_bits()))
                 .collect(),
+            defs,
         }
+    }
+
+    pub fn defs(&self) -> &'static [ParamDef] {
+        self.defs
+    }
+
+    /// Where an id sits in this bank's table.
+    pub fn index(&self, id: &str) -> Option<usize> {
+        self.defs.iter().position(|p| p.id == id)
     }
 
     #[inline]
@@ -688,18 +685,18 @@ impl ParamBank {
 
     #[inline]
     pub fn set(&self, index: usize, value: f32) {
-        let d = &PARAMS[index];
+        let d = &self.defs[index];
         let lo = d.min.min(d.max);
         let hi = d.max.max(d.min);
         self.values[index].store(value.clamp(lo, hi).to_bits(), Ordering::Relaxed);
     }
 
     pub fn get_by_id(&self, id: &str) -> Option<f32> {
-        index_of(id).map(|i| self.get(i))
+        self.index(id).map(|i| self.get(i))
     }
 
     pub fn set_by_id(&self, id: &str, value: f32) -> bool {
-        match index_of(id) {
+        match self.index(id) {
             Some(i) => {
                 self.set(i, value);
                 true
@@ -710,9 +707,9 @@ impl ParamBank {
 
     /// Set from a 0-to-1 control position, applying the parameter's taper.
     pub fn set_normalised(&self, id: &str, t: f32) -> bool {
-        match index_of(id) {
+        match self.index(id) {
             Some(i) => {
-                self.set(i, PARAMS[i].denormalise(t));
+                self.set(i, self.defs[i].denormalise(t));
                 true
             }
             None => false,
@@ -723,6 +720,48 @@ impl ParamBank {
 impl Default for ParamBank {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// One pattern for every switchable node: its switch, then its level as the
+/// first row the panel draws. Gain for a generator, Mix for an effect. The
+/// panel draws in table order, so this is a test of the table's order as much
+/// as of its names. `prefix` is what every id in `table` starts with, such as
+/// `arrangement.`, and is not part of the node's name.
+#[cfg(test)]
+pub(crate) fn leads_with_its_level(table: &[ParamDef], prefix: &str) {
+    let switches: Vec<_> = table.iter().filter(|p| p.id.ends_with(".on")).collect();
+    assert!(!switches.is_empty());
+    for switch in switches {
+        let node = switch.id.trim_end_matches(".on");
+        let under = format!("{node}.");
+        let first = table
+            .iter()
+            .find(|p| p.id.starts_with(&under) && p.id != switch.id)
+            .unwrap_or_else(|| panic!("{node} has a switch and nothing else"));
+        let (id, name) = if GENERATORS.contains(&node.trim_start_matches(prefix)) {
+            (format!("{node}.gain"), "Gain")
+        } else {
+            (format!("{node}.mix"), "Mix")
+        };
+        assert_eq!(first.id, id, "{node} must lead with its {name}");
+        assert_eq!(first.name, name, "{node}'s first row must be called {name}");
+    }
+}
+
+/// Every row sits under a section header that already names its node, so
+/// "Ring freq" says "ring" twice. Switches are exempt: their name is the
+/// section's own.
+#[cfg(test)]
+pub(crate) fn repeats_no_node_name(table: &[ParamDef], prefix: &str) {
+    for p in table.iter().filter(|p| !p.id.ends_with(".on")) {
+        let node = p.id.trim_start_matches(prefix).split('.').next().unwrap();
+        assert!(
+            !p.name.to_lowercase().starts_with(node),
+            "{} repeats its node in the name {:?}",
+            p.id,
+            p.name
+        );
     }
 }
 
@@ -835,43 +874,12 @@ mod tests {
 
     #[test]
     fn every_switchable_node_leads_with_its_level() {
-        // One pattern for every switchable node: its switch, then its level
-        // as the first row the panel draws. Gain for a generator, Mix for an
-        // effect. The panel draws in table order, so this is a test of the
-        // table's order as much as of its names.
-        let switches: Vec<_> = PARAMS.iter().filter(|p| p.id.ends_with(".on")).collect();
-        assert!(!switches.is_empty());
-        for switch in switches {
-            let node = switch.id.trim_end_matches(".on");
-            let prefix = format!("{node}.");
-            let first = PARAMS
-                .iter()
-                .find(|p| p.id.starts_with(&prefix) && p.id != switch.id)
-                .unwrap_or_else(|| panic!("{node} has a switch and nothing else"));
-            let (id, name) = if GENERATORS.contains(&node) {
-                (format!("{node}.gain"), "Gain")
-            } else {
-                (format!("{node}.mix"), "Mix")
-            };
-            assert_eq!(first.id, id, "{node} must lead with its {name}");
-            assert_eq!(first.name, name, "{node}'s first row must be called {name}");
-        }
+        leads_with_its_level(PARAMS, "");
     }
 
     #[test]
     fn no_parameter_repeats_its_node_name() {
-        // Every row sits under a section header that already names its node,
-        // so "Ring freq" says "ring" twice. Switches are exempt: their name is
-        // the section's own.
-        for p in PARAMS.iter().filter(|p| !p.id.ends_with(".on")) {
-            let node = p.id.split('.').next().unwrap();
-            assert!(
-                !p.name.to_lowercase().starts_with(node),
-                "{} repeats its node in the name {:?}",
-                p.id,
-                p.name
-            );
-        }
+        repeats_no_node_name(PARAMS, "");
     }
 
     #[test]
