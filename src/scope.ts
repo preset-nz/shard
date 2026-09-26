@@ -42,6 +42,12 @@ import { ParamRow } from '@/components/ParamRow';
 export type Lane = 'generate' | 'process' | 'master';
 
 /**
+ * Which level a node belongs to: the patch, edited in sound scaping, or the
+ * arrangement over it, edited in the tracker (Georg, 2026-09-26).
+ */
+export type Layer = 'patch' | 'arrangement';
+
+/**
  * In signal order. Generators make sound and are summed; processes shape it
  * (Georg, 2026-09-14: generators are not processes, so they get their own).
  * There is no pre-process lane: trim and octave belong to each material, and
@@ -53,9 +59,21 @@ export const LANES: Array<{ id: Lane; label: string }> = [
   { id: 'master', label: 'Master' },
 ];
 
+/**
+ * The tracker's lanes: the same three, with the patches where the generators
+ * were (Georg, 2026-09-26: *"generators replaced with patches, which will
+ * become tracks in the future"*).
+ */
+export const ARRANGEMENT_LANES: Array<{ id: Lane; label: string }> = [
+  { id: 'generate', label: 'Patches' },
+  { id: 'process', label: 'Process' },
+  { id: 'master', label: 'Master' },
+];
+
 export interface NodeInfo {
   id: string;
   label: string;
+  layer: Layer;
   /** Null for a node with no card: Tape, which lives in Settings. */
   lane: Lane | null;
   /**
@@ -77,21 +95,71 @@ export const READS_MATERIAL: ReadonlySet<string> = new Set(['material', 'grain']
 
 /** Every node, in work-area order: each lane's cards in signal order. */
 export const NODES: NodeInfo[] = [
-  { id: 'material', label: 'Sample', lane: 'generate', table: 'material', owns: under('material') },
-  { id: 'grain', label: 'Granular', lane: 'generate', table: 'grain', owns: under('grain') },
+  {
+    layer: 'patch',
+    id: 'material',
+    label: 'Sample',
+    lane: 'generate',
+    table: 'material',
+    owns: under('material'),
+  },
+  {
+    layer: 'patch',
+    id: 'grain',
+    label: 'Granular',
+    lane: 'generate',
+    table: 'grain',
+    owns: under('grain'),
+  },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
-  { id: 'drive', label: 'Drive', lane: 'process', table: 'drive', owns: under('drive') },
-  { id: 'crush', label: 'Crush', lane: 'process', table: 'crush', owns: under('crush') },
-  { id: 'ring', label: 'Ring modulation', lane: 'process', table: 'ring', owns: under('ring') },
-  { id: 'env', label: 'Envelope', lane: 'process', table: 'env', owns: under('env') },
+  {
+    layer: 'patch',
+    id: 'drive',
+    label: 'Drive',
+    lane: 'process',
+    table: 'drive',
+    owns: under('drive'),
+  },
+  {
+    layer: 'patch',
+    id: 'crush',
+    label: 'Crush',
+    lane: 'process',
+    table: 'crush',
+    owns: under('crush'),
+  },
+  {
+    layer: 'patch',
+    id: 'ring',
+    label: 'Ring modulation',
+    lane: 'process',
+    table: 'ring',
+    owns: under('ring'),
+  },
+  {
+    layer: 'patch',
+    id: 'env',
+    label: 'Envelope',
+    lane: 'process',
+    table: 'env',
+    owns: under('env'),
+  },
   // On the master, after every effect (Georg, 2026-09-14): what takes away
   // the harmonics crush and ring add. An EQ, if one comes, sits here too.
-  { id: 'filter', label: 'Filter', lane: 'master', table: 'filter', owns: under('filter') },
-  { id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
+  {
+    layer: 'patch',
+    id: 'filter',
+    label: 'Filter',
+    lane: 'master',
+    table: 'filter',
+    owns: under('filter'),
+  },
+  { layer: 'patch', id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
   // The tape's feel, in Settings (Georg, 2026-09-14). Brake and reverse are
   // played from the header, so they are not rows anywhere.
   {
+    layer: 'patch',
     id: 'tape',
     label: 'Tape',
     lane: null,
@@ -100,12 +168,31 @@ export const NODES: NodeInfo[] = [
   },
 ];
 
+const arrangementNode = (node: string, label: string, lane: Lane): NodeInfo => {
+  const table = `arrangement.${node}`;
+  return { layer: 'arrangement', id: table, label, lane, table, owns: under(table) };
+};
+
+/**
+ * The arrangement's nodes, in the tracker's lanes. One patch today, shown by
+ * its fader; one per track with roadmap row 10. The crusher has no envelope
+ * here, since the arrangement has no pass for one to follow.
+ */
+export const ARRANGEMENT_NODES: NodeInfo[] = [
+  arrangementNode('track', 'Patch', 'generate'),
+  arrangementNode('drive', 'Drive', 'process'),
+  arrangementNode('crush', 'Crush', 'process'),
+  arrangementNode('ring', 'Ring modulation', 'process'),
+  arrangementNode('filter', 'Filter', 'master'),
+  arrangementNode('amp', 'Output', 'master'),
+];
+
 export interface ParamValues {
   [id: string]: number;
 }
 
 export function nodeById(id: string): NodeInfo | null {
-  return NODES.find((n) => n.id === id) ?? null;
+  return NODES.find((n) => n.id === id) ?? ARRANGEMENT_NODES.find((n) => n.id === id) ?? null;
 }
 
 /** Which of a node's two scopes: the inspector's, or the card's. */
@@ -210,7 +297,7 @@ export function registerParamScope(defs: ParamInfo[]) {
   registerFieldRenderer('param', ParamRow);
   registerFieldRenderer('material', MaterialField);
 
-  for (const node of NODES) {
+  for (const node of [...NODES, ...ARRANGEMENT_NODES]) {
     for (const view of ['full', 'summary'] as const) {
       registerScope<ParamValues, Record<string, unknown>>(scopeKeyFor(node.id, view), {
         schema: buildSchema(defs, node, view),

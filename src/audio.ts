@@ -87,7 +87,22 @@ export interface GrainInfo {
 
 export const paramDefs = () => invoke<ParamInfo[]>('param_defs');
 export const getParams = () => invoke<number[]>('get_params');
-export const setParam = (id: string, value: number) => invoke<void>('set_param', { id, value });
+
+/**
+ * Every id of the level above the patch starts with this: the arrangement's
+ * chain, the patch's fader and the limiter. They live in their own table in
+ * Rust, so a patch load leaves them alone (`design/arrangement-layer.md`).
+ */
+export const ARRANGEMENT_PREFIX = 'arrangement.';
+export const isArrangement = (id: string) => id.startsWith(ARRANGEMENT_PREFIX);
+export const arrangementDefs = () => invoke<ParamInfo[]>('arrangement_defs');
+export const getArrangement = () => invoke<number[]>('get_arrangement');
+
+/** Set a value in whichever table owns it, by its id. */
+export const setParam = (id: string, value: number) =>
+  isArrangement(id)
+    ? invoke<void>('set_arrangement_param', { id, value })
+    : invoke<void>('set_param', { id, value });
 export const meters = () => invoke<Meters>('meters');
 
 /** A material as the tree and the inspector show it. */

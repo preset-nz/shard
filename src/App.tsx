@@ -4,6 +4,7 @@ import {
   addDrone,
   addLfo,
   addMaterial,
+  arrangementDefs,
   auditionGrain,
   cancelLearn,
   EMPTY_MAPPINGS,
@@ -11,6 +12,7 @@ import {
   forgetMidi,
   format,
   type GrainInfo,
+  getArrangement,
   getHeard,
   getParams,
   getTracker,
@@ -57,7 +59,15 @@ import { SettingsDialog } from '@/components/SettingsDialog';
 import { StepStrip } from '@/components/StepStrip';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
-import { LANES, NODES, type ParamValues, registerParamScope } from '@/scope';
+import {
+  ARRANGEMENT_LANES,
+  ARRANGEMENT_NODES,
+  LANES,
+  NODES,
+  type NodeInfo,
+  type ParamValues,
+  registerParamScope,
+} from '@/scope';
 import { useSelection } from '@/stores/selection';
 
 /**
@@ -83,12 +93,14 @@ const MODES = [
   {
     id: 'tracker',
     label: 'Tracker',
-    title: 'Play the steps. The patch shows as a strip of levels and switches. (⌘1)',
+    title:
+      'Play the steps, through the arrangement: the patch at its fader, and the arrangement’s own effects and output over it. (⌘1)',
   },
   {
     id: 'soundscape',
     label: 'Sound scaping',
-    title: 'Loop the patch freely and shape it. The steps rest. (⌘2)',
+    title:
+      'Loop the patch freely and shape it, heard alone without the arrangement. The steps rest. (⌘2)',
   },
 ] as const;
 type Mode = (typeof MODES)[number]['id'];
@@ -130,7 +142,9 @@ export default function App() {
   const frozenRef = useRef(false);
   frozenRef.current = frozen;
   const [error, setError] = useState<string | null>(null);
+  /** The patch's rows, then the arrangement's. `patchRowsRef` says where one ends. */
   const defsRef = useRef<ParamInfo[] | null>(null);
+  const patchRowsRef = useRef(0);
   const [envelope, setEnvelope] = useState<number[] | null>(null);
   const [patchName, setPatchName] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
@@ -182,21 +196,33 @@ export default function App() {
     });
   }, [mode, tracker, changeTracker]);
 
+  // Each mode edits its own level, so a selection does not cross between
+  // them: a patch node means nothing in the tracker, and the other way round.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clears on a mode change only
+  useEffect(() => {
+    useSelection.getState().clear();
+  }, [mode]);
+
   // Startup: ask Rust for the table, register the facets scope from it, then
   // read the current values. The table is the single source of truth.
   useEffect(() => {
     let cancelled = false;
     void (async () => {
       try {
-        const d = await paramDefs();
+        // One list of rows for the panels, patch and arrangement together.
+        // Their ids never collide, since the arrangement's all start with
+        // `arrangement.`, and `setParam` sends each to its own table.
+        const [pd, ad] = await Promise.all([paramDefs(), arrangementDefs()]);
         if (cancelled) return;
+        const d = [...pd, ...ad];
         registerParamScope(d);
         defsRef.current = d;
+        patchRowsRef.current = pd.length;
         setDefs(d);
-        const v = await getParams();
+        const [v, a] = await Promise.all([getParams(), getArrangement()]);
         const next: ParamValues = {};
         d.forEach((p, i) => {
-          next[p.id] = v[i];
+          next[p.id] = i < pd.length ? v[i] : a[i - pd.length];
         });
         setValues(next);
         setPool(await readMaterials());
@@ -221,12 +247,13 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v, fresh, h, mm] = await Promise.all([
+        const [m, v, fresh, h, mm, a] = await Promise.all([
           readMeters(),
           getParams(),
           grainLog(),
           getHeard(),
           readMappings(),
+          getArrangement(),
         ]);
         if (!alive) return;
         setMeter(m);
@@ -252,9 +279,11 @@ export default function App() {
         if (d) {
           const next: ParamValues = {};
           const nextHeard: ParamValues = {};
+          // No LFO moves an arrangement row, so it is heard as it is set.
+          const n = patchRowsRef.current;
           d.forEach((p, i) => {
-            next[p.id] = v[i];
-            nextHeard[p.id] = h[i];
+            next[p.id] = i < n ? v[i] : a[i - n];
+            nextHeard[p.id] = i < n ? h[i] : a[i - n];
           });
           setValues(next);
           setHeard(nextHeard);
@@ -883,32 +912,11 @@ export default function App() {
 
           {/* The work area. A click anywhere but on a card deselects,
               including a lane's empty space below its cards; Escape does the
-              same from the keyboard. */}
-          {/* In tracker mode the patch is a strip: each node's level and
-              switch, in lane order. Its title opens it in sound scaping. */}
-          {defs && mode === 'tracker' && (
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] content-start gap-2">
-              {LANES.flatMap((lane) => NODES.filter((n) => n.lane === lane.id)).map((node) => (
-                <NodeCard
-                  key={node.id}
-                  node={node}
-                  defs={defs}
-                  values={values}
-                  ctx={panelCtx}
-                  selected={false}
-                  onSelect={() => {
-                    select({ kind: 'node', id: node.id });
-                    setMode('soundscape');
-                  }}
-                  onError={setError}
-                  onNote={setNote}
-                  onPresetApplied={refreshMod}
-                />
-              ))}
-            </div>
-          )}
-
-          {defs && mode === 'soundscape' && (
+              same from the keyboard. Sound scaping shows the patch's nodes;
+              the tracker shows the arrangement's, the same three lanes with
+              the patches first (Georg, 2026-09-26). Selecting a card shows
+              it in the inspector in either mode. */}
+          {defs && (
             // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
             // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
             <div
@@ -917,25 +925,27 @@ export default function App() {
                 if (!(e.target as Element).closest('[data-node-card]')) clear();
               }}
             >
-              {LANES.map((lane) => (
+              {(mode === 'tracker' ? ARRANGEMENT_LANES : LANES).map((lane) => (
                 <section key={lane.id} className="flex min-w-0 flex-col gap-2">
                   <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                     {lane.label}
                   </h2>
-                  {NODES.filter((n) => n.lane === lane.id).map((node) => (
-                    <NodeCard
-                      key={node.id}
-                      node={node}
-                      defs={defs}
-                      values={values}
-                      ctx={panelCtx}
-                      selected={selection?.kind === 'node' && selection.id === node.id}
-                      onSelect={() => select({ kind: 'node', id: node.id })}
-                      onError={setError}
-                      onNote={setNote}
-                      onPresetApplied={refreshMod}
-                    />
-                  ))}
+                  {(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
+                    .filter((n: NodeInfo) => n.lane === lane.id)
+                    .map((node) => (
+                      <NodeCard
+                        key={node.id}
+                        node={node}
+                        defs={defs}
+                        values={values}
+                        ctx={panelCtx}
+                        selected={selection?.kind === 'node' && selection.id === node.id}
+                        onSelect={() => select({ kind: 'node', id: node.id })}
+                        onError={setError}
+                        onNote={setNote}
+                        onPresetApplied={refreshMod}
+                      />
+                    ))}
                 </section>
               ))}
             </div>
@@ -959,45 +969,43 @@ export default function App() {
           )}
         </main>
 
-        {mode === 'soundscape' && (
-          <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
-            {defs ? (
-              <Inspector
-                selection={selection}
-                defs={defs}
-                values={values}
-                ctx={panelCtx}
-                pool={pool}
-                onMaterialChange={(m) => void changeMaterial(m)}
-                limits={limits}
-                linkedCounts={linkedCounts}
-                onSelect={select}
-                onLfoChange={(next) => void editMod(() => setLfo(next))}
-                onError={setError}
-                onNote={setNote}
-                onPresetApplied={refreshMod}
-              />
-            ) : (
-              <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
-            )}
+        <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
+          {defs ? (
+            <Inspector
+              selection={selection}
+              defs={defs}
+              values={values}
+              ctx={panelCtx}
+              pool={pool}
+              onMaterialChange={(m) => void changeMaterial(m)}
+              limits={limits}
+              linkedCounts={linkedCounts}
+              onSelect={select}
+              onLfoChange={(next) => void editMod(() => setLfo(next))}
+              onError={setError}
+              onNote={setNote}
+              onPresetApplied={refreshMod}
+            />
+          ) : (
+            <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
+          )}
 
-            {defs && showDebugger && (
-              <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
-                {defs.map((d) => (
-                  <div
-                    key={d.id}
-                    className="flex justify-between gap-2 text-[11px] text-muted-foreground"
-                  >
-                    <span className="truncate font-mono">{d.id}</span>
-                    <span className="shrink-0 tabular-nums">
-                      {format(d, values[d.id] ?? d.default)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
-        )}
+          {defs && showDebugger && (
+            <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
+              {defs.map((d) => (
+                <div
+                  key={d.id}
+                  className="flex justify-between gap-2 text-[11px] text-muted-foreground"
+                >
+                  <span className="truncate font-mono">{d.id}</span>
+                  <span className="shrink-0 tabular-nums">
+                    {format(d, values[d.id] ?? d.default)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </aside>
       </div>
 
       <SettingsDialog

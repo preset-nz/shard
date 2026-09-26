@@ -86,7 +86,7 @@ export function NodeHeader({
   );
 }
 
-/** Right-click for the node's presets, when it has a table prefix to save. */
+/** Right-click for the node's presets, when it is a patch node with a table prefix. */
 export function WithNodePresets({
   node,
   onError,
@@ -103,7 +103,9 @@ export function WithNodePresets({
   className?: string;
   children: ReactNode;
 }) {
-  if (!node.table) return <>{children}</>;
+  // Presets are saved in the patch and applied to the patch's own rows, so
+  // an arrangement node has none yet (`design/arrangement-layer.md`).
+  if (!node.table || node.layer !== 'patch') return <>{children}</>;
   return (
     <NodePresets
       node={node.table}
