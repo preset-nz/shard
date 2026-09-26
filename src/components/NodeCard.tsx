@@ -128,8 +128,8 @@ export function WithNodePresets({
  * the material a generator reads and the node's level (Gain for a generator,
  * Mix for an effect). So the level on a card links to an LFO, takes a MIDI
  * knob and shows where modulation has moved it, as the inspector's row does.
- * A new node needs no card of its own. Click the title to open the whole
- * node in the inspector; right-click the card for its presets. Solo arrives
+ * A new node needs no card of its own. Click anywhere on the card to open the
+ * whole node in the inspector; right-click it for its presets. Solo arrives
  * with roadmap row 14.
  */
 export function NodeCard({
@@ -162,8 +162,15 @@ export function NodeCard({
       onPresetApplied={onPresetApplied}
       className=""
     >
+      {/* The title stays the keyboard's way in; the card is a larger target
+          for the pointer. The switch only switches. */}
+      {/* biome-ignore lint/a11y/useKeyWithClickEvents: the title button is the keyboard path */}
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: see above */}
       <div
         data-node-card
+        onClick={(e) => {
+          if (!(e.target as Element).closest('[role="switch"]')) onSelect();
+        }}
         className={`rounded-md border transition-colors ${
           selected ? 'border-primary bg-primary/5' : 'border-border'
         }`}
