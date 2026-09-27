@@ -35,15 +35,24 @@ export function PatchPreview({ preview, busy }: { preview: Preview | null; busy:
         {busy && preview && <span className="text-[10px] text-muted-foreground">updating</span>}
       </div>
       <div className="flex gap-2">
-        <canvas
-          ref={overview}
-          className="h-20 min-w-0 flex-1 rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93]"
-        />
-        <canvas
-          ref={zoom}
-          title={preview ? `${preview.zoom_ms.toFixed(0)} ms, a quarter of the way in` : undefined}
-          className="h-20 w-40 shrink-0 rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93]"
-        />
+        <figure className="min-w-0 flex-1 space-y-0.5">
+          <canvas
+            ref={overview}
+            className="h-20 w-full rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93]"
+          />
+          <figcaption className="text-[10px] text-muted-foreground">
+            The whole pass: level, envelopes, density. The box marks the close-up.
+          </figcaption>
+        </figure>
+        <figure className="w-40 shrink-0 space-y-0.5">
+          <canvas
+            ref={zoom}
+            className="h-20 w-full rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93]"
+          />
+          <figcaption className="text-[10px] text-muted-foreground">
+            Close-up, {preview ? preview.zoom_ms.toFixed(0) : 20} ms: the timbre.
+          </figcaption>
+        </figure>
       </div>
     </div>
   );

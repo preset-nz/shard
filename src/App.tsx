@@ -389,7 +389,17 @@ export default function App() {
   // What the waveform shows follows the selection (Georg, 2026-09-15): a
   // material picked in the tree, else the one wired into the selected
   // generator, else Sample's.
-  const shownFor = selection?.kind === 'node' && selection.id === 'grain' ? 'Granular' : 'Sample';
+  // Sample's material by default, but a Sample that is off makes no sound of
+  // its own, so the cloud's is shown instead when the cloud is on. With
+  // neither on, Sample's is still shown, dimmed: it is the clock, so its trim
+  // sets how long a pass is even when nothing plays it (Georg, 2026-09-27).
+  const sampleOn = (values['material.on'] ?? 1) >= 0.5;
+  const grainOn = (values['grain.on'] ?? 0) >= 0.5;
+  const shownFor =
+    (selection?.kind === 'node' && selection.id === 'grain') ||
+    (!sampleOn && grainOn && !(selection?.kind === 'node' && selection.id === 'material'))
+      ? 'Granular'
+      : 'Sample';
   const shownId: number | null =
     selection?.kind === 'material'
       ? selection.id
@@ -400,9 +410,13 @@ export default function App() {
   const shownWave = shownId === null ? null : (waves[shownId] ?? null);
   const shownIsPlayer = shownId !== null && shownId === pool.wires.material;
   const shownIsGrain = shownId !== null && shownId === pool.wires.grain;
-  const readers = [shownIsPlayer ? 'Sample' : null, shownIsGrain ? 'Granular' : null].filter(
-    (r): r is string => r !== null,
-  );
+  // Only the generators that are on read anything you can hear.
+  const readers = [
+    shownIsPlayer && sampleOn ? 'Sample' : null,
+    shownIsGrain && grainOn ? 'Granular' : null,
+  ].filter((r): r is string => r !== null);
+  // Shown only because it is the clock: nothing that is on reads it.
+  const clockOnly = shownIsPlayer && readers.length === 0;
 
   // Each waveform is fetched once. Ids are never reused within a document,
   // and opening a document clears the lot.
@@ -913,39 +927,45 @@ export default function App() {
             <span className="truncate text-xs text-muted-foreground">
               {shownRecord
                 ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
-                    readers.length > 0 ? `read by ${readers.join(' and ')}` : 'not wired'
+                    clockOnly
+                      ? 'Sample is off · its trim still sets how long a pass is'
+                      : readers.length > 0
+                        ? `read by ${readers.join(' and ')}`
+                        : 'not wired'
                   }`
                 : `Nothing is wired into ${shownFor}`}
             </span>
           </div>
-          <Waveform
-            peaks={shownWave?.peaks ?? []}
-            position={values['grain.position'] ?? 0}
-            jitter={values['grain.jitter'] ?? 0}
-            showGrain={shownIsGrain}
-            playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
-            trimStart={shownRecord?.trim_start ?? 0}
-            trimEnd={shownRecord?.trim_end ?? 1}
-            envelope={shownIsPlayer ? envelope : null}
-            grains={shownIsGrain ? grains : []}
-            newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
-            selected={picked}
-            totalSamples={shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0}
-            // Stopped or frozen, the waveform is an inspector; playing, it is
-            // still the trim control it has always been.
-            inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
-            onTrim={(which, v) => {
-              if (!shownRecord) return;
-              void changeMaterial(
-                which === 'start'
-                  ? { ...shownRecord, trim_start: v }
-                  : { ...shownRecord, trim_end: v },
-              );
-            }}
-            onPickGrain={(g) => {
-              if (g) void doAudition(g);
-            }}
-          />
+          <div className={clockOnly ? 'opacity-40' : ''}>
+            <Waveform
+              peaks={shownWave?.peaks ?? []}
+              position={values['grain.position'] ?? 0}
+              jitter={values['grain.jitter'] ?? 0}
+              showGrain={shownIsGrain}
+              playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
+              trimStart={shownRecord?.trim_start ?? 0}
+              trimEnd={shownRecord?.trim_end ?? 1}
+              envelope={shownIsPlayer ? envelope : null}
+              grains={shownIsGrain ? grains : []}
+              newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
+              selected={picked}
+              totalSamples={shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0}
+              // Stopped or frozen, the waveform is an inspector; playing, it is
+              // still the trim control it has always been.
+              inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
+              onTrim={(which, v) => {
+                if (!shownRecord) return;
+                void changeMaterial(
+                  which === 'start'
+                    ? { ...shownRecord, trim_start: v }
+                    : { ...shownRecord, trim_end: v },
+                );
+              }}
+              onPickGrain={(g) => {
+                if (g) void doAudition(g);
+              }}
+            />
+          </div>
 
           {/* The patch only: the tracker's preview may be something else. */}
           {mode === 'soundscape' && <PatchPreview preview={preview} busy={previewBusy} />}
