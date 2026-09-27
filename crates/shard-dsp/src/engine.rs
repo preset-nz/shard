@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::arrangement::{self, index_of_arrangement};
 use crate::chain::{Chain, ChainParams, ChainSlots, BYPASS_MS};
 use crate::envelope::EnvParams;
+use crate::fm::{Fm, FmParams};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::limiter::{Limiter, LimiterParams};
@@ -50,6 +51,12 @@ struct Slots {
     tape_time: usize,
     tape_reverse: usize,
     tape_flick: usize,
+    fm_on: usize,
+    fm_gain: usize,
+    fm_freq: usize,
+    fm_ratio: usize,
+    fm_index: usize,
+    fm_feedback: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
 }
@@ -90,6 +97,12 @@ impl Slots {
             tape_time: at("tape.time"),
             tape_reverse: at("tape.reverse"),
             tape_flick: at("tape.flick"),
+            fm_on: at("fm.on"),
+            fm_gain: at("fm.gain"),
+            fm_freq: at("fm.freq"),
+            fm_ratio: at("fm.ratio"),
+            fm_index: at("fm.index"),
+            fm_feedback: at("fm.feedback"),
             fx: ChainSlots::resolve(at),
         }
     }
@@ -168,6 +181,7 @@ struct Smoothers {
     pan: OnePole,
     grain_gain: OnePole,
     material_gain: OnePole,
+    fm_gain: OnePole,
     /// The tape's own inertia. Its time constant is `tape.time`, reset per
     /// block, so the brake's feel is a control rather than a constant.
     speed: OnePole,
@@ -179,6 +193,10 @@ struct Smoothers {
 struct Fades {
     material: Ramp,
     grain: Ramp,
+    fm: Ramp,
+    /// FM has no pass of its own, so under the steps it follows the
+    /// player's: this opens while one sounds and closes between them.
+    fm_gate: Ramp,
     env: Ramp,
 }
 
@@ -195,6 +213,12 @@ impl Fades {
         Self {
             material: ramp(slots.material_on),
             grain: ramp(slots.grain_on),
+            fm: ramp(slots.fm_on),
+            fm_gate: {
+                let mut r = Ramp::new(1.0);
+                r.set_time(BYPASS_MS, sample_rate);
+                r
+            },
             env: ramp(slots.env_on),
         }
     }
@@ -212,6 +236,8 @@ pub struct Engine {
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
     granular: Granular,
+    /// The third generator, which reads no material.
+    fm: Fm,
     /// Every spawn the cloud makes, for the inspector. Shared out by
     /// `grain_log`; the audio thread only ever pushes to it.
     log: Arc<GrainLog>,
@@ -275,6 +301,7 @@ impl Engine {
             pan: mk(defs[slots.pan].smooth_ms),
             grain_gain: mk(defs[slots.grain_gain].smooth_ms),
             material_gain: mk(defs[slots.material_gain].smooth_ms),
+            fm_gain: mk(defs[slots.fm_gain].smooth_ms),
             speed: mk(defs[slots.tape_time].default),
         };
         // Start settled at the defaults, otherwise every parameter glides up
@@ -290,6 +317,7 @@ impl Engine {
         smooth
             .material_gain
             .reset(defs[slots.material_gain].default);
+        smooth.fm_gain.reset(defs[slots.fm_gain].default);
         // Unity, not a parameter default. Copying the line above would reset
         // the tape to `tape.brake`'s default of zero and pitch the instrument
         // up from a standstill on every launch.
@@ -314,6 +342,7 @@ impl Engine {
             player: Player::new(sample_rate),
             playing: false,
             granular,
+            fm: Fm::new(sample_rate),
             log,
             auditioning: false,
             reversing: false,
@@ -626,10 +655,18 @@ impl Engine {
         }
 
         let material_gain_target = read(&self.mods, bank, self.slots.material_gain);
+        let fm_gain_target = read(&self.mods, bank, self.slots.fm_gain);
+        let fm_params = FmParams {
+            freq: read(&self.mods, bank, self.slots.fm_freq),
+            ratio: read(&self.mods, bank, self.slots.fm_ratio),
+            index: read(&self.mods, bank, self.slots.fm_index),
+            feedback: read(&self.mods, bank, self.slots.fm_feedback),
+        };
         // Section switches, read as gates. Each one fades its section's mix
         // rather than cutting it.
         let gate = |slot: usize| if bank.get(slot) >= 0.5 { 1.0 } else { 0.0 };
         let grain_on_target = gate(self.slots.grain_on);
+        let fm_on_target = gate(self.slots.fm_on);
         let material_on_target = gate(self.slots.material_on);
         let env_on_target = gate(self.slots.env_on);
         // The step clock, as the tracker last handed it in.
@@ -818,8 +855,25 @@ impl Engine {
             } else {
                 (0.0, 0.0)
             };
-            let l = material + gl;
-            let r = material + gr;
+            // FM plays on the tape: a step's pitch moves its note, and a brake
+            // pulls it down with everything else. Looping, it drones; under
+            // the steps it sounds while a pass does. Mono, into both sides.
+            let fm_on = self.fades.fm.process(fm_on_target);
+            let fm_open = if looping || self.player.sounding() {
+                1.0
+            } else {
+                0.0
+            };
+            let fm_level = self.smooth.fm_gain.process(fm_gain_target)
+                * fm_on
+                * self.fades.fm_gate.process(fm_open);
+            let fm = if fm_on > 0.0 {
+                self.fm.process(&fm_params, self.pass_ratio * p.speed.abs()) * fm_level
+            } else {
+                0.0
+            };
+            let l = material + gl + fm;
+            let r = material + gr + fm;
 
             // Drive, crush and ring. The crush envelope reads the pass's
             // clock, so it is worked out here and handed in.
@@ -883,6 +937,10 @@ impl Engine {
         // it back on starts fresh rather than resuming grains frozen mid-window.
         if self.fades.grain.value() == 0.0 {
             self.granular.clear();
+        }
+        // FM likewise starts from the top of a cycle when switched back on.
+        if self.fades.fm.value() == 0.0 {
+            self.fm.reset();
         }
     }
 }
@@ -1276,9 +1334,16 @@ mod tests {
         // the signal; a generator, the same generator never switched on, which
         // proves nothing of it lingers.
         type Settings<'a> = &'a [(&'a str, f32)];
-        let cases: [(&str, &str, Settings, Settings, bool); 5] = [
+        let cases: [(&str, &str, Settings, Settings, bool); 6] = [
             ("material", "material.on", &[], &[], false),
             ("granular", "grain.on", &[], &[], false),
+            (
+                "fm",
+                "fm.on",
+                &[("fm.index", 4.0), ("fm.feedback", 0.5)],
+                &[],
+                false,
+            ),
             (
                 "crush",
                 "crush.on",
@@ -1551,6 +1616,52 @@ mod tests {
         // The pass ends at 0.25 s and the last grain 180 ms after it.
         assert_eq!(loudest(120..395), 0.0, "sound between the steps");
         assert!(loudest(400..440) > 0.1, "the bar came round in silence");
+    }
+
+    #[test]
+    fn fm_stands_alone_as_a_generator() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        let bank = ParamBank::new();
+        bank.set_by_id("material.on", 0.0);
+        bank.set_by_id("fm.on", 1.0);
+        e.set_playing(true);
+        let mut out = vec![0.0; 512];
+        let mut peak = 0.0f32;
+        for _ in 0..100 {
+            e.process_block(&mut out, &bank);
+            peak = out.iter().fold(peak, |m, s| m.max(s.abs()));
+        }
+        assert!(peak > 0.5, "FM alone should be heard, peaked at {peak}");
+    }
+
+    #[test]
+    fn under_the_steps_fm_sounds_with_the_pass_and_not_between() {
+        // The same bar as `a_step_plays_the_pass_once`, with FM in place of
+        // the material: it has no pass of its own, so it follows the player's.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(12_000));
+        let bank = ParamBank::new();
+        bank.set_by_id("material.on", 0.0);
+        bank.set_by_id("fm.on", 1.0);
+        e.set_steps(StepParams {
+            on: true,
+            length: 16,
+            pattern: 1,
+            ..Default::default()
+        });
+        e.set_playing(true);
+        let mut out = vec![0.0; 480];
+        let peaks: Vec<f32> = (0..480)
+            .map(|_| {
+                e.process_block(&mut out, &bank);
+                out.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+            })
+            .collect();
+        let loudest = |r: core::ops::Range<usize>| peaks[r].iter().copied().fold(0.0, f32::max);
+        assert!(loudest(0..40) > 0.3, "the step never sounded");
+        assert_eq!(loudest(60..395), 0.0, "FM between the steps");
+        assert!(loudest(400..440) > 0.3, "the bar came round in silence");
     }
 
     #[test]

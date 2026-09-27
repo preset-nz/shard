@@ -112,6 +112,14 @@ export const NODES: NodeInfo[] = [
     table: 'grain',
     owns: under('grain'),
   },
+  {
+    layer: 'patch',
+    id: 'fm',
+    label: 'FM',
+    lane: 'generate',
+    table: 'fm',
+    owns: under('fm'),
+  },
   // `crush.env.*` lands here rather than in Envelope, which is the point: it
   // belongs to the crusher, not to the amplitude shape.
   {

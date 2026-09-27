@@ -79,7 +79,8 @@ patch without it.
 - Its switch is `<node>.on`, drawn in the section header.
 - A **generator** makes sound, and its first row after the switch is
   `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
-  plain sample (`material`) and the cloud (`grain`). Generators are summed.
+  plain sample (`material`), the cloud (`grain`) and two-operator FM
+  (`fm`). Generators are summed.
 - An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".- `amp.gain` is the master gain, after everything.
 - No row's name repeats its node's name, because the header already says it.
 - The panel draws rows in table order, so order in `params.rs` is layout.

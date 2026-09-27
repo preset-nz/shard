@@ -265,6 +265,70 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // FM, the third generator (Georg, 2026-09-27). Two operators, built as
+    // phase modulation; see `fm.rs`. It reads no material: its pitch is the
+    // frequency row, moved by a step's pitch. Off by default, like the cloud.
+    ParamDef {
+        id: "fm.on",
+        name: "FM",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "fm.gain",
+        name: "Gain",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 40.0,
+    },
+    ParamDef {
+        id: "fm.freq",
+        name: "Frequency",
+        min: 20.0,
+        max: 2000.0,
+        default: 110.0,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+    // Exponential, so 1 sits a third of the way along and 2 at the centre.
+    ParamDef {
+        id: "fm.ratio",
+        name: "Ratio",
+        min: 0.25,
+        max: 16.0,
+        default: 2.0,
+        taper: Taper::Exponential,
+        unit: Unit::None,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "fm.index",
+        name: "Index",
+        min: 0.0,
+        max: 10.0,
+        default: 1.5,
+        taper: Taper::Linear,
+        unit: Unit::None,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "fm.feedback",
+        name: "Feedback",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "ring.on",
         name: "Ring modulation",
@@ -632,7 +696,7 @@ pub const PARAMS: &[ParamDef] = &[
 
 /// The switchable nodes that make sound rather than shape it. They lead with
 /// Gain; every other switchable node is an effect and leads with Mix.
-pub const GENERATORS: &[&str] = &["material", "grain"];
+pub const GENERATORS: &[&str] = &["material", "grain", "fm"];
 
 pub fn index_of(id: &str) -> Option<usize> {
     PARAMS.iter().position(|p| p.id == id)
