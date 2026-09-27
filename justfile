@@ -78,7 +78,15 @@ build:
     # tauri-bundler's signature can fail `codesign --verify`, which a
     # downloaded copy shows as "app is damaged" (Oblique Epic 14).
     product=$(node -p "require('./src-tauri/tauri.conf.json').productName")
-    codesign --deep --force --sign - "target/release/bundle/macos/${product}.app"
+    app="target/release/bundle/macos/${product}.app"
+    # Finder draws a .shard file with the app's icon only when the document
+    # type names an icon file, and Tauri's fileAssociations has no field for
+    # one. A partial src-tauri/Info.plist would replace the declarations
+    # rather than merge into them, so the keys go in here, before the reseal.
+    plist="$app/Contents/Info.plist"
+    plutil -replace 'CFBundleDocumentTypes.0.CFBundleTypeIconFile' -string icon.icns "$plist"
+    plutil -replace 'UTExportedTypeDeclarations.0.UTTypeIconFile' -string icon.icns "$plist"
+    codesign --deep --force --sign - "$app"
 
 # The friends build: the .app, a README with the Gatekeeper fix, and the
 # third-party notices, zipped for a GitHub release. Oblique's recipe.
