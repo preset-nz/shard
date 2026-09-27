@@ -52,12 +52,13 @@ import {
   unlinkParam,
   wireMaterial,
 } from '@/audio';
+import { GeneratorTree } from '@/components/GeneratorTree';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Inspector } from '@/components/Inspector';
 import { MaterialTree } from '@/components/MaterialTree';
 import { Meter } from '@/components/Meter';
 import { ModulatorTree } from '@/components/ModulatorTree';
-import { NodeCard } from '@/components/NodeCard';
+import { isNodeOn, NodeCard } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { StepStrip } from '@/components/StepStrip';
@@ -632,6 +633,11 @@ export default function App() {
   for (const link of Object.values(mod.links)) {
     linkedCounts.set(link.source, (linkedCounts.get(link.source) ?? 0) + 1);
   }
+  // Every generator type and whether it is in the patch: on means present.
+  const generators = NODES.filter((n) => n.layer === 'patch' && n.lane === 'generate').map(
+    (node) => ({ node, on: defs ? isNodeOn(defs, values, node) : true }),
+  );
+  const absent = new Set(generators.filter((g) => !g.on).map((g) => g.node.id));
   const selectedModulator =
     selection?.kind === 'lfo' || selection?.kind === 'envelope' ? selection : null;
   const refreshMod = () => void editMod(readModulation);
@@ -795,6 +801,20 @@ export default function App() {
                 })
               }
             />
+            <GeneratorTree
+              generators={generators}
+              selected={selection?.kind === 'node' ? selection.id : null}
+              onSelect={(id) => (id === null ? clear() : select({ kind: 'node', id }))}
+              onAdd={(id) => {
+                void setParam(`${id}.on`, 1).catch((e) => setError(String(e)));
+                select({ kind: 'node', id });
+              }}
+              onRemove={(node) => {
+                void setParam(`${node.id}.on`, 0).catch((e) => setError(String(e)));
+                const now = useSelection.getState().selection;
+                if (now?.kind === 'node' && now.id === node.id) clear();
+              }}
+            />
             <ModulatorTree
               modulators={modulatorsOf(mod)}
               selected={selectedModulator}
@@ -952,6 +972,8 @@ export default function App() {
                   </h2>
                   {(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
                     .filter((n: NodeInfo) => n.lane === lane.id)
+                    // A generator that is off is not in the patch; the tree adds it.
+                    .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id))
                     .map((node) => (
                       <NodeCard
                         key={node.id}

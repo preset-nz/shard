@@ -1,5 +1,5 @@
-import { Plus } from 'lucide-react';
 import type { Modulator } from '@/audio';
+import { AddMenu } from '@/components/AddMenu';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -33,33 +33,25 @@ export function ModulatorTree({
   onAdd: (kind: Kind) => void;
   onRemove: (m: Modulator) => void;
 }) {
-  const add = (kind: Kind, label: string, title: string) => (
-    <button
-      type="button"
-      title={title}
-      // Keep focus off the button, so Space still starts playback.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => onAdd(kind)}
-      className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
-    >
-      <Plus size={11} />
-      {label}
-    </button>
-  );
-
   return (
     <div className="py-2">
       <div className="flex items-center gap-1 pr-2 pl-3 pb-1">
         <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Modulators
         </span>
-        {add('lfo', 'LFO', 'Add an LFO')}
-        {add('envelope', 'Env', 'Add a modulation envelope, started by each step')}
+        <AddMenu<Kind>
+          title="Add a modulator"
+          choices={[
+            { kind: 'lfo', label: 'LFO' },
+            { kind: 'envelope', label: 'Mod envelope' },
+          ]}
+          onAdd={onAdd}
+        />
       </div>
 
       {modulators.length === 0 && (
         <p className="px-3 text-xs text-muted-foreground">
-          No modulators yet. Add an LFO or an envelope with +.
+          No modulators yet. Add an LFO or a mod envelope with +.
         </p>
       )}
 
