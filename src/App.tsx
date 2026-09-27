@@ -1,3 +1,4 @@
+import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -51,6 +52,7 @@ import {
   setPlaying,
   setTracker,
   type Tracker,
+  takeOpenedFile,
   unlinkParam,
   wireMaterial,
 } from '@/audio';
@@ -491,52 +493,89 @@ export default function App() {
     }
   }, [patchName]);
 
+  /**
+   * Replace the document with the one at `path`. File > Open and a file
+   * opened from Finder both come through here.
+   */
+  const openPath = useCallback(
+    async (path: string) => {
+      try {
+        const report = await loadPatch(path);
+        setPatchName(path.split('/').pop() ?? path);
+        setWaves({});
+        setPool(await readMaterials());
+        setMod(await readModulation());
+        // The document's tracker replaces the one on screen, and no answer to
+        // an edit made before the load may put the old one back.
+        trackerSeq.current++;
+        const loaded = await getTracker();
+        setTrackerView(loaded);
+        // The document's switch picks the mode it opens in. Correcting the
+        // switch to the mode instead would overwrite what the file saved, and
+        // the next Save would keep the damage.
+        setMode(loaded.tracks[0]?.on ? 'tracker' : 'soundscape');
+        useSelection.getState().clear();
+        setError(null);
+
+        // A partial load must not look like a clean one.
+        const parts: string[] = [];
+        if (report.sample_missing) {
+          parts.push(`sample not found: ${report.sample_path ?? 'unknown'}`);
+        }
+        if (report.unknown.length > 0) {
+          parts.push(`${report.unknown.length} unknown parameter(s) ignored`);
+        }
+        if (report.missing.length > 0) {
+          parts.push(`${report.missing.length} left at default`);
+        }
+        if (report.refused.length > 0) {
+          parts.push(`${report.refused.length} LFO or link(s) could not be used`);
+        }
+        if (report.map_missing) {
+          parts.push(`controller map "${report.map_missing}" not on this Mac`);
+        }
+        setNote(parts.length > 0 ? parts.join(' · ') : null);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [setMode],
+  );
+
   const doLoad = useCallback(async () => {
     try {
       const path = await open({
         multiple: false,
         filters: [{ name: 'Shard patch', extensions: ['shard'] }],
       });
-      if (typeof path !== 'string') return;
-      const report = await loadPatch(path);
-      setPatchName(path.split('/').pop() ?? path);
-      setWaves({});
-      setPool(await readMaterials());
-      setMod(await readModulation());
-      // The document's tracker replaces the one on screen, and no answer to
-      // an edit made before the load may put the old one back.
-      trackerSeq.current++;
-      const loaded = await getTracker();
-      setTrackerView(loaded);
-      // The document's switch picks the mode it opens in. Correcting the
-      // switch to the mode instead would overwrite what the file saved, and
-      // the next Save would keep the damage.
-      setMode(loaded.tracks[0]?.on ? 'tracker' : 'soundscape');
-      useSelection.getState().clear();
-      setError(null);
-
-      // A partial load must not look like a clean one.
-      const parts: string[] = [];
-      if (report.sample_missing) {
-        parts.push(`sample not found: ${report.sample_path ?? 'unknown'}`);
-      }
-      if (report.unknown.length > 0) {
-        parts.push(`${report.unknown.length} unknown parameter(s) ignored`);
-      }
-      if (report.missing.length > 0) {
-        parts.push(`${report.missing.length} left at default`);
-      }
-      if (report.refused.length > 0) {
-        parts.push(`${report.refused.length} LFO or link(s) could not be used`);
-      }
-      if (report.map_missing) {
-        parts.push(`controller map "${report.map_missing}" not on this Mac`);
-      }
-      setNote(parts.length > 0 ? parts.join(' · ') : null);
+      if (typeof path === 'string') await openPath(path);
     } catch (e) {
       setError(String(e));
     }
-  }, [setMode]);
+  }, [openPath]);
+
+  // A document opened from Finder or `open some.shard`. Listen first, then
+  // ask Rust for one that arrived before the window had mounted: asking is
+  // what tells Rust to emit from now on, so nothing falls between the two.
+  // A file opened this way wins over anything restored at launch, so any
+  // restore belongs after the answer, and only when it is empty.
+  const openPathRef = useRef(openPath);
+  openPathRef.current = openPath;
+  useEffect(() => {
+    const unlisten = listen<string>('open-document', (e) => {
+      void openPathRef.current(e.payload);
+    });
+    // Not gated on unmount: `take` hands a held path over exactly once, so
+    // dropping it here would lose it for good.
+    void unlisten.then(() =>
+      takeOpenedFile().then((path) => {
+        if (path) void openPathRef.current(path);
+      }),
+    );
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
 
   /** Run one material command, and draw the pool Rust answers with. */
   const editMaterials = useCallback(async (run: () => Promise<MaterialsView>) => {

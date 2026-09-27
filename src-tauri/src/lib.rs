@@ -30,6 +30,7 @@ mod mapping;
 mod materials;
 mod midi;
 mod modulation;
+mod opened;
 mod patch;
 mod presets;
 mod profile;
@@ -579,6 +580,13 @@ fn save_patch(
     doc.pool = pool;
     doc.arrangement = patch::capture_arrangement(&state.arrangement);
     std::fs::write(&path, doc.to_json()?).map_err(|e| format!("{path}: {e}"))
+}
+
+/// A document macOS opened before the frontend was listening, if any. Also
+/// the frontend saying it is listening now, so later ones are emitted.
+#[tauri::command]
+fn take_opened_file(opened: tauri::State<'_, opened::Opened>) -> Option<String> {
+    opened.take()
 }
 
 /// Read a `.shard` file back. Reloads the sample it names when that file is
@@ -1898,6 +1906,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .manage(audio)
+        .manage(opened::Opened::default())
         .setup(|app| {
             // Controllers belong to this machine, so they live in the app's
             // config directory rather than in any patch.
@@ -1937,6 +1946,7 @@ pub fn run() {
             patch_preview,
             save_patch,
             load_patch,
+            take_opened_file,
             material_wave,
             materials,
             add_material,
@@ -1982,7 +1992,22 @@ pub fn run() {
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|_app, event| {
+        .run(|app, event| {
+            // A document opened from Finder or `open`, at launch or later,
+            // takes the same path File > Open does, in the frontend.
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Opened { urls } = &event {
+                if let Some(path) = opened::document_path(urls) {
+                    if let opened::Offer::Emit(path) = app.state::<opened::Opened>().offer(path) {
+                        use tauri::Emitter;
+                        if let Err(e) = app.emit(opened::OPEN_DOCUMENT, path) {
+                            eprintln!("shard: could not hand over an opened file: {e}");
+                        }
+                    }
+                }
+            }
+            #[cfg(not(target_os = "macos"))]
+            let _ = app;
             // Hand a profiled surface back before quitting, so the device
             // returns to standalone rather than sitting in a DAW mode that
             // nothing is driving. A crash cannot do this; a clean exit can.

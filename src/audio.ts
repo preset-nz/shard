@@ -341,6 +341,11 @@ export const getHeard = () => invoke<number[]>('get_heard');
 
 export const savePatch = (path: string) => invoke<void>('save_patch', { path });
 export const loadPatch = (path: string) => invoke<LoadReport>('load_patch', { path });
+/**
+ * A document macOS opened before the UI was listening, if any. Calling it
+ * also says the UI is listening now, so later ones arrive as `open-document`.
+ */
+export const takeOpenedFile = () => invoke<string | null>('take_opened_file');
 
 /** The envelope sampled across the trimmed window, for drawing. */
 export const envelopeCurve = () => invoke<number[]>('envelope_curve');
