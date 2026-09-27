@@ -13,8 +13,8 @@ use std::sync::Mutex;
 use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
-    Engine, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape, StepParams, Taper,
-    PARAMS,
+    Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape, StepParams,
+    Taper, PARAMS,
 };
 
 #[global_allocator]
@@ -142,19 +142,39 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
             phase: i as f32 * 0.13,
         })
         .collect();
-    let build = |lfos: &[LfoSpec]| {
-        let mut set = ModSet::new(lfos);
+    // Modulation envelopes too, retriggered by the steps below, following
+    // every third row. Ids clear of the LFOs', as the document keeps them.
+    let envs: Vec<EnvSpec> = (0..4u64)
+        .map(|i| EnvSpec {
+            id: 100 + i,
+            attack_ms: i as f32 * 7.0,
+            decay_ms: 20.0 + i as f32 * 30.0,
+            sustain: i as f32 * 0.3,
+            release_ms: i as f32 * 11.0,
+        })
+        .collect();
+    let build = |lfos: &[LfoSpec], envs: &[EnvSpec]| {
+        let mut set = ModSet::with_envelopes(lfos, envs);
         for (i, p) in PARAMS
             .iter()
             .enumerate()
             .filter(|(_, p)| !matches!(p.taper, Taper::Stepped(_)))
         {
             let (lo, hi) = if i % 2 == 0 { (0.2, 0.9) } else { (0.9, 0.2) };
-            set.link(p.id, lfos[i % lfos.len()].id, lo, hi).unwrap();
+            let source = if i % 3 == 0 {
+                envs[i % envs.len()].id
+            } else {
+                lfos[i % lfos.len()].id
+            };
+            set.link(p.id, source, lo, hi).unwrap();
         }
         set
     };
-    let (first, smaller, bigger) = (build(&specs), build(&specs[..3]), build(&specs));
+    let (first, smaller, bigger) = (
+        build(&specs, &envs),
+        build(&specs[..3], &envs[..1]),
+        build(&specs, &envs),
+    );
 
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(96_000));

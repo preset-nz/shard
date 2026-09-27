@@ -205,6 +205,7 @@ pub struct SourceInfo {
 #[derive(Serialize)]
 pub struct ModulationView {
     pub lfos: Vec<modulation::LfoRecord>,
+    pub envelopes: Vec<modulation::EnvelopeRecord>,
     pub links: modulation::Links,
     pub refused: Vec<modulation::Refused>,
 }
@@ -213,6 +214,7 @@ impl ModulationView {
     fn of(doc: &modulation::Modulation, refused: Vec<modulation::Refused>) -> Self {
         Self {
             lfos: doc.lfos.clone(),
+            envelopes: doc.envelopes.clone(),
             links: doc.links.clone(),
             refused,
         }
@@ -566,6 +568,8 @@ pub struct LfoLimits {
     pub shapes: Vec<&'static str>,
     pub min_rate: f32,
     pub max_rate: f32,
+    /// The longest envelope stage, in ms.
+    pub max_stage_ms: f32,
 }
 
 #[tauri::command]
@@ -574,6 +578,7 @@ fn lfo_limits() -> LfoLimits {
         shapes: shard_dsp::Shape::NAMES.to_vec(),
         min_rate: shard_dsp::modulation::MIN_RATE_HZ,
         max_rate: shard_dsp::modulation::MAX_RATE_HZ,
+        max_stage_ms: modulation::MAX_STAGE_MS,
     }
 }
 
@@ -611,16 +616,42 @@ fn set_lfo(
     state.edit_modulation(|doc| doc.set_lfo(lfo))
 }
 
-/// Make a parameter follow an LFO, or change the depth it follows at.
+/// Add a modulation envelope. It is last in the answer's `envelopes`.
+#[tauri::command]
+fn add_envelope(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| {
+        doc.add_envelope();
+        Ok(())
+    })
+}
+
+/// Remove a modulation envelope. Parameters that followed it stay linked, and
+/// are reported.
+#[tauri::command]
+fn remove_envelope(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| doc.remove_envelope(id))
+}
+
+/// Change a modulation envelope's name and stages.
+#[tauri::command]
+fn set_envelope(
+    state: tauri::State<'_, Audio>,
+    envelope: modulation::EnvelopeRecord,
+) -> Result<ModulationView, String> {
+    state.edit_modulation(|doc| doc.set_envelope(envelope))
+}
+
+/// Make a parameter follow an LFO or envelope, or change the range it
+/// follows over.
 #[tauri::command]
 fn link_param(
     state: tauri::State<'_, Audio>,
     id: String,
-    lfo: u64,
+    source: u64,
     lo: f32,
     hi: f32,
 ) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.link(&id, lfo, lo, hi))
+    state.edit_modulation(|doc| doc.link(&id, source, lo, hi))
 }
 
 /// Stop a parameter following anything.
@@ -1783,6 +1814,9 @@ pub fn run() {
             add_lfo,
             remove_lfo,
             set_lfo,
+            add_envelope,
+            remove_envelope,
+            set_envelope,
             link_param,
             unlink_param,
             get_heard,
@@ -1952,9 +1986,10 @@ mod tests {
         let mut doc = modulation::Modulation::default();
         let id = doc.add_lfo().id;
         doc.link("grain.size", id, 0.25, 0.75).unwrap();
+        doc.add_envelope();
         let view = serde_json::to_value(ModulationView::of(&doc, Vec::new()))
             .expect("ModulationView is serialisable");
-        for key in ["lfos", "links", "refused"] {
+        for key in ["lfos", "envelopes", "links", "refused"] {
             assert!(view.get(key).is_some(), "ModulationView lost `{key}`");
         }
 
@@ -2061,13 +2096,19 @@ mod tests {
         }
 
         let limits = serde_json::to_value(lfo_limits()).expect("LfoLimits is serialisable");
-        for key in ["shapes", "min_rate", "max_rate"] {
+        for key in ["shapes", "min_rate", "max_rate", "max_stage_ms"] {
             assert!(limits.get(key).is_some(), "LfoLimits lost `{key}`");
         }
         for key in ["id", "name", "rate", "shape", "phase"] {
             assert!(view["lfos"][0].get(key).is_some(), "LfoRecord lost `{key}`");
         }
-        for key in ["lfo", "lo", "hi"] {
+        for key in ["id", "name", "attack", "decay", "sustain", "release"] {
+            assert!(
+                view["envelopes"][0].get(key).is_some(),
+                "EnvelopeRecord lost `{key}`"
+            );
+        }
+        for key in ["source", "lo", "hi"] {
             assert!(
                 view["links"]["grain.size"].get(key).is_some(),
                 "LinkRecord lost `{key}`"

@@ -229,7 +229,7 @@ export interface LoadReport {
 
 /** Something in the patch's modulation the engine could not use. */
 export interface Refused {
-  /** A parameter id for a link, or `lfo:<id>` for an LFO. */
+  /** A parameter id for a link, `lfo:<id>` for an LFO, `envelope:<id>` for an envelope. */
   id: string;
   reason: string;
 }
@@ -263,12 +263,30 @@ export interface LfoRecord {
   phase: number;
 }
 
+/**
+ * One modulation envelope: ADSR on the pass's clock, so a step starts it. Its
+ * id shares the LFOs' space. Called "Mod envelope" so it is not mistaken for
+ * the Envelope node, which shapes the amplitude.
+ */
+export interface EnvelopeRecord {
+  id: number;
+  name: string;
+  /** ms. */
+  attack: number;
+  /** ms. */
+  decay: number;
+  /** 0 to 1. */
+  sustain: number;
+  /** ms. */
+  release: number;
+}
+
 export interface LinkRecord {
-  /** The id of the LFO the parameter follows. */
-  lfo: number;
+  /** The id of the LFO or envelope the parameter follows. */
+  source: number;
   /**
-   * The ends of the sweep, 0 to 1 of the parameter's range. The LFO's trough
-   * lands on `lo` and its crest on `hi`.
+   * The ends of the sweep, 0 to 1 of the parameter's range. An LFO's trough,
+   * or an envelope at rest, lands on `lo`; the crest or the peak on `hi`.
    */
   lo: number;
   hi: number;
@@ -277,6 +295,7 @@ export interface LinkRecord {
 /** The open patch's LFOs and links, and what in them the engine refused. */
 export interface ModulationView {
   lfos: LfoRecord[];
+  envelopes: EnvelopeRecord[];
   /** By parameter id. */
   links: Record<string, LinkRecord>;
   refused: Refused[];
@@ -286,7 +305,21 @@ export interface LfoLimits {
   shapes: string[];
   min_rate: number;
   max_rate: number;
+  /** The longest envelope stage, in ms. */
+  max_stage_ms: number;
 }
+
+/** Anything a parameter can follow, LFOs first, as the link menu lists them. */
+export interface Modulator {
+  id: number;
+  name: string;
+  kind: 'lfo' | 'envelope';
+}
+
+export const modulatorsOf = (mod: ModulationView): Modulator[] => [
+  ...mod.lfos.map((l) => ({ id: l.id, name: l.name, kind: 'lfo' as const })),
+  ...mod.envelopes.map((e) => ({ id: e.id, name: e.name, kind: 'envelope' as const })),
+];
 
 // Every modulation edit answers with the whole document, so the UI draws
 // exactly what the engine now has.
@@ -295,8 +328,12 @@ export const lfoLimits = () => invoke<LfoLimits>('lfo_limits');
 export const addLfo = () => invoke<ModulationView>('add_lfo');
 export const removeLfo = (id: number) => invoke<ModulationView>('remove_lfo', { id });
 export const setLfo = (lfo: LfoRecord) => invoke<ModulationView>('set_lfo', { lfo });
-export const linkParam = (id: string, lfo: number, lo: number, hi: number) =>
-  invoke<ModulationView>('link_param', { id, lfo, lo, hi });
+export const addEnvelope = () => invoke<ModulationView>('add_envelope');
+export const removeEnvelope = (id: number) => invoke<ModulationView>('remove_envelope', { id });
+export const setEnvelope = (envelope: EnvelopeRecord) =>
+  invoke<ModulationView>('set_envelope', { envelope });
+export const linkParam = (id: string, source: number, lo: number, hi: number) =>
+  invoke<ModulationView>('link_param', { id, source, lo, hi });
 export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param', { id });
 
 /** Every parameter as the engine last heard it, indexed as `getParams`. */

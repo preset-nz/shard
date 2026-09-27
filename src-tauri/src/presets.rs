@@ -195,9 +195,9 @@ mod tests {
         assert!(bank.set_by_id(id, v), "no parameter {id}");
     }
 
-    fn link(lfo: u64, depth: f32) -> LinkRecord {
+    fn link(source: u64, depth: f32) -> LinkRecord {
         LinkRecord {
-            lfo,
+            source,
             lo: 1.0 - depth,
             hi: 1.0,
         }

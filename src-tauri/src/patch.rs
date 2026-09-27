@@ -340,7 +340,7 @@ mod tests {
         patch.modulation.links.insert(
             "grain.position".into(),
             LinkRecord {
-                lfo: 2,
+                source: 2,
                 lo: 0.6,
                 hi: 0.2,
             },

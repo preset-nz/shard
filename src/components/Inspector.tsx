@@ -1,5 +1,13 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import type { LfoLimits, LfoRecord, MaterialsView, MaterialView, ParamInfo } from '@/audio';
+import type {
+  EnvelopeRecord,
+  LfoLimits,
+  LfoRecord,
+  MaterialsView,
+  MaterialView,
+  ParamInfo,
+} from '@/audio';
+import { EnvelopeEditor } from '@/components/EnvelopeEditor';
 import { LfoEditor } from '@/components/LfoEditor';
 import { MaterialEditor } from '@/components/MaterialEditor';
 import { isNodeOn, NodeHeader, WithNodePresets } from '@/components/NodeCard';
@@ -10,10 +18,11 @@ import type { Selection } from '@/stores/selection';
 /**
  * The property panel: whatever is selected, and nothing when nothing is.
  *
- * A node shows its rows, and under them a **Linked** block with every LFO
- * those rows follow, folded down to rate and shape, so a node and what moves
- * it can be tuned together (Georg, 2026-09-14). A generator's material picker is
- * a row of its scope. A material shows its octave and trim, and an LFO its full editor.
+ * A node shows its rows, and under them a **Linked** block with every LFO or
+ * envelope those rows follow, folded down, so a node and what moves it can be
+ * tuned together (Georg, 2026-09-14). A generator's material picker is a row
+ * of its scope. A material shows its octave and trim, and an LFO or envelope
+ * its full editor.
  */
 export function Inspector({
   selection,
@@ -26,6 +35,7 @@ export function Inspector({
   linkedCounts,
   onSelect,
   onLfoChange,
+  onEnvelopeChange,
   onError,
   onNote,
   onPresetApplied,
@@ -37,10 +47,11 @@ export function Inspector({
   pool: MaterialsView;
   onMaterialChange: (next: MaterialView) => void;
   limits: LfoLimits | null;
-  /** How many parameters follow each LFO, by id. */
+  /** How many parameters follow each modulator, by id. */
   linkedCounts: Map<number, number>;
   onSelect: (next: Selection) => void;
   onLfoChange: (next: LfoRecord) => void;
+  onEnvelopeChange: (next: EnvelopeRecord) => void;
   onError: (message: string | null) => void;
   onNote: (message: string | null) => void;
   onPresetApplied: () => void;
@@ -57,6 +68,20 @@ export function Inspector({
         limits={limits}
         linked={linkedCounts.get(lfo.id) ?? 0}
         onChange={onLfoChange}
+      />
+    );
+  }
+
+  if (selection.kind === 'envelope') {
+    const envelope = ctx.mod.envelopes.find((e) => e.id === selection.id);
+    if (!envelope || !limits) return null;
+    return (
+      <EnvelopeEditor
+        key={envelope.id}
+        envelope={envelope}
+        limits={limits}
+        linked={linkedCounts.get(envelope.id) ?? 0}
+        onChange={onEnvelopeChange}
       />
     );
   }
@@ -78,13 +103,14 @@ export function Inspector({
   if (!node) return null;
   const on = isNodeOn(defs, values, node);
 
-  // Every LFO this node's rows follow, once each, in the tree's order.
+  // Every modulator this node's rows follow, once each, in the tree's order.
   const followed = new Set(
     rowsOf(defs, node)
-      .map((p) => ctx.mod.links[p.id]?.lfo)
+      .map((p) => ctx.mod.links[p.id]?.source)
       .filter((id) => id !== undefined),
   );
   const linked = ctx.mod.lfos.filter((l) => followed.has(l.id));
+  const linkedEnvelopes = ctx.mod.envelopes.filter((e) => followed.has(e.id));
 
   return (
     <>
@@ -107,7 +133,7 @@ export function Inspector({
           </div>
         </section>
       </WithNodePresets>
-      {linked.length > 0 && limits && (
+      {linked.length + linkedEnvelopes.length > 0 && limits && (
         <div className="border-t border-border">
           <div className="px-3 pt-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Linked
@@ -120,6 +146,16 @@ export function Inspector({
               compact
               onOpen={() => onSelect({ kind: 'lfo', id: l.id })}
               onChange={onLfoChange}
+            />
+          ))}
+          {linkedEnvelopes.map((e) => (
+            <EnvelopeEditor
+              key={e.id}
+              envelope={e}
+              limits={limits}
+              compact
+              onOpen={() => onSelect({ kind: 'envelope', id: e.id })}
+              onChange={onEnvelopeChange}
             />
           ))}
         </div>

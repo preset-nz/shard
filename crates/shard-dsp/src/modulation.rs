@@ -1,4 +1,17 @@
-//! Modulation: LFOs, and links from parameters to them.
+//! Modulation: LFOs and envelopes, and links from parameters to them.
+//!
+//! **Two kinds of modulator, one id space.** An LFO runs on its own clock. A
+//! modulation envelope (Georg, 2026-09-27: the ADSR a Dark Energy switches onto
+//! its filter) runs on the pass's clock, as the amplitude envelope does: a
+//! step starts it, and it rests between steps. A link names either by id, so
+//! ids are unique across both lists.
+//!
+//! **Resolution.** Both are read once per block and then smoothed per row, so
+//! no attack is faster than a row's smoothing (about 20 ms on most) and a
+//! step's onset can land up to a block late. Fine for a filter sweep or a
+//! brass index, not a DX transient. The envelope's value is a pure function
+//! of the pass's clock, so a row can read it per sample later with no new
+//! state.
 //!
 //! A `ModSet` is built on the command thread and swapped into the engine
 //! whole, the way a new sample arrives. It may allocate while it is being built
@@ -17,6 +30,7 @@
 //!   hand's value does not take part while a link exists; it is what you get
 //!   back when you unlink. Low above high runs the sweep the other way.
 
+use crate::envelope::EnvParams;
 use crate::params::{index_of, Taper, PARAMS};
 use crate::rng::Rng;
 
@@ -190,6 +204,45 @@ fn bounce_out(t: f32) -> f32 {
     }
 }
 
+/// A modulation envelope as the document describes it. The same four stages
+/// as the amplitude envelope, fitted to the pass the same way.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct EnvSpec {
+    /// Stable and never reused, and never the id of an LFO in the same set.
+    pub id: u64,
+    pub attack_ms: f32,
+    pub decay_ms: f32,
+    /// 0 to 1.
+    pub sustain: f32,
+    pub release_ms: f32,
+}
+
+impl EnvSpec {
+    /// The shape at `elapsed` samples into a pass `length` long, 0 at rest and
+    /// 1 at the peak. Rest whenever no pass is sounding.
+    pub fn level_at(&self, elapsed: f32, length: f32, sounding: bool, sample_rate: f32) -> f32 {
+        if !sounding || length < 2.0 {
+            return 0.0;
+        }
+        EnvParams {
+            amount: 1.0,
+            attack_ms: self.attack_ms,
+            decay_ms: self.decay_ms,
+            sustain: self.sustain,
+            release_ms: self.release_ms,
+        }
+        .gain_at(elapsed, length, sample_rate)
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Env {
+    spec: EnvSpec,
+    /// This block's output, -1 at rest to 1 at the peak, so a link reads it
+    /// exactly as it reads an LFO: rest on the low end, peak on the high.
+    value: f32,
+}
+
 /// An LFO as the document describes it.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LfoSpec {
@@ -282,10 +335,18 @@ impl Lfo {
     }
 }
 
+/// What a link follows, resolved from an id when the link was made.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum Source {
+    /// Index into this set's LFOs.
+    Lfo(usize),
+    /// Index into this set's envelopes.
+    Env(usize),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 struct Link {
-    /// Index into this set's LFOs, resolved from an id when the link was made.
-    lfo: usize,
+    source: Source,
     /// Where the LFO's trough and crest land, 0 to 1 of the parameter's range.
     lo: f32,
     hi: f32,
@@ -299,7 +360,7 @@ pub enum LinkError {
     /// Stepped parameters are discrete choices. Walking through window
     /// shapes is a different feature, and not this one.
     Stepped(&'static str),
-    UnknownLfo(u64),
+    UnknownSource(u64),
 }
 
 impl std::fmt::Display for LinkError {
@@ -307,17 +368,20 @@ impl std::fmt::Display for LinkError {
         match self {
             LinkError::UnknownParameter(id) => write!(f, "there is no parameter called {id}"),
             LinkError::Stepped(id) => {
-                write!(f, "{id} is a set of choices and cannot follow an LFO")
+                write!(f, "{id} is a set of choices and cannot follow a modulator")
             }
-            LinkError::UnknownLfo(id) => write!(f, "there is no LFO {id} to link to"),
+            LinkError::UnknownSource(id) => {
+                write!(f, "there is no LFO or envelope {id} to link to")
+            }
         }
     }
 }
 
-/// Every LFO in a patch, and every link from a parameter to one of them.
+/// Every modulator in a patch, and every link from a parameter to one of them.
 #[derive(Debug, Clone, Default)]
 pub struct ModSet {
     lfos: Vec<Lfo>,
+    envs: Vec<Env>,
     /// Indexed as `PARAMS`. Empty when nothing has been linked.
     links: Vec<Option<Link>>,
 }
@@ -328,35 +392,56 @@ impl ModSet {
     pub const fn empty() -> Self {
         Self {
             lfos: Vec::new(),
+            envs: Vec::new(),
             links: Vec::new(),
         }
     }
 
     /// A set with these LFOs and nothing linked yet.
     pub fn new(lfos: &[LfoSpec]) -> Self {
+        Self::with_envelopes(lfos, &[])
+    }
+
+    /// A set with these LFOs and envelopes and nothing linked yet. The caller
+    /// keeps ids unique across both; a link to a shared id finds the LFO.
+    pub fn with_envelopes(lfos: &[LfoSpec], envs: &[EnvSpec]) -> Self {
         Self {
             lfos: lfos.iter().map(|s| Lfo::new(*s)).collect(),
+            envs: envs
+                .iter()
+                .map(|s| Env {
+                    spec: *s,
+                    value: -1.0,
+                })
+                .collect(),
             links: Vec::new(),
         }
     }
 
-    /// Link `param` to the LFO with `lfo_id`, replacing any link it had. The
-    /// ends are clamped to 0 to 1, the parameter's own range.
-    pub fn link(&mut self, param: &str, lfo_id: u64, lo: f32, hi: f32) -> Result<(), LinkError> {
+    /// Link `param` to the LFO or envelope with `source_id`, replacing any
+    /// link it had. The ends are clamped to 0 to 1, the parameter's own range.
+    pub fn link(&mut self, param: &str, source_id: u64, lo: f32, hi: f32) -> Result<(), LinkError> {
         let slot = index_of(param).ok_or_else(|| LinkError::UnknownParameter(param.to_string()))?;
         if matches!(PARAMS[slot].taper, Taper::Stepped(_)) {
             return Err(LinkError::Stepped(PARAMS[slot].id));
         }
-        let lfo = self
+        let source = self
             .lfos
             .iter()
-            .position(|l| l.spec.id == lfo_id)
-            .ok_or(LinkError::UnknownLfo(lfo_id))?;
+            .position(|l| l.spec.id == source_id)
+            .map(Source::Lfo)
+            .or_else(|| {
+                self.envs
+                    .iter()
+                    .position(|e| e.spec.id == source_id)
+                    .map(Source::Env)
+            })
+            .ok_or(LinkError::UnknownSource(source_id))?;
         if self.links.len() < PARAMS.len() {
             self.links.resize(PARAMS.len(), None);
         }
         self.links[slot] = Some(Link {
-            lfo,
+            source,
             lo: lo.clamp(0.0, 1.0),
             hi: hi.clamp(0.0, 1.0),
         });
@@ -386,6 +471,17 @@ impl ModSet {
         }
     }
 
+    /// Once per block, after `advance`: where each envelope is on the pass's
+    /// clock. `elapsed` and `length` are in samples of the pass; `sounding`
+    /// is false between steps, where every envelope rests.
+    #[inline]
+    pub fn clock_envelopes(&mut self, elapsed: f32, length: f32, sounding: bool, sample_rate: f32) {
+        for env in &mut self.envs {
+            let level = env.spec.level_at(elapsed, length, sounding, sample_rate);
+            env.value = 2.0 * level - 1.0;
+        }
+    }
+
     /// The value the engine should use for parameter `slot`, given the hand's
     /// `base`. Exactly `base` when nothing is linked, not a round trip through
     /// the taper, which would not be bit-exact. Linked, the LFO's −1 lands on
@@ -395,17 +491,27 @@ impl ModSet {
         let Some(Some(link)) = self.links.get(slot) else {
             return base;
         };
-        let Some(lfo) = self.lfos.get(link.lfo) else {
+        let value = match link.source {
+            Source::Lfo(i) => self.lfos.get(i).map(|l| l.value),
+            Source::Env(i) => self.envs.get(i).map(|e| e.value),
+        };
+        let Some(value) = value else {
             return base;
         };
         let def = &PARAMS[slot];
-        let t = 0.5 + 0.5 * lfo.value.clamp(-1.0, 1.0);
+        let t = 0.5 + 0.5 * value.clamp(-1.0, 1.0);
         def.denormalise(link.lo + (link.hi - link.lo) * t)
     }
 
     /// The current output of the LFO with `id`, -1 to 1. For drawing and tests.
     pub fn lfo_value(&self, id: u64) -> Option<f32> {
         self.lfos.iter().find(|l| l.spec.id == id).map(|l| l.value)
+    }
+
+    /// The current output of the envelope with `id`, -1 at rest to 1 at the
+    /// peak. For drawing and tests.
+    pub fn env_value(&self, id: u64) -> Option<f32> {
+        self.envs.iter().find(|e| e.spec.id == id).map(|e| e.value)
     }
 }
 
@@ -569,7 +675,7 @@ mod tests {
         );
         assert_eq!(
             set.link("grain.size", 99, 0.0, 0.5),
-            Err(LinkError::UnknownLfo(99))
+            Err(LinkError::UnknownSource(99))
         );
         // Out-of-range ends are clamped rather than refused.
         set.link("grain.size", 1, -3.0, 7.0).unwrap();

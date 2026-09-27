@@ -1,5 +1,5 @@
 import { Plus } from 'lucide-react';
-import type { LfoRecord } from '@/audio';
+import type { Modulator } from '@/audio';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -7,73 +7,89 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 
+type Kind = Modulator['kind'];
+
 /**
  * Modulators, the left-hand tree's second category under Materials: the
- * patch's LFOs. Click one to edit it in the panel; right-click to remove it.
+ * patch's LFOs and modulation envelopes. Click one to edit it in the panel;
+ * right-click to remove it.
  *
  * A rough sketch ahead of the panel redesign and the node API's real tree.
  */
 export function ModulatorTree({
-  lfos,
+  modulators,
   selected,
   linked,
   onSelect,
   onAdd,
   onRemove,
 }: {
-  lfos: LfoRecord[];
-  selected: number | null;
-  /** How many parameters follow each LFO, by id. */
+  /** LFOs first, then envelopes. */
+  modulators: Modulator[];
+  selected: { kind: Kind; id: number } | null;
+  /** How many parameters follow each modulator, by id. */
   linked: Map<number, number>;
-  onSelect: (id: number | null) => void;
-  onAdd: () => void;
-  onRemove: (id: number) => void;
+  onSelect: (next: { kind: Kind; id: number } | null) => void;
+  onAdd: (kind: Kind) => void;
+  onRemove: (m: Modulator) => void;
 }) {
+  const add = (kind: Kind, label: string, title: string) => (
+    <button
+      type="button"
+      title={title}
+      // Keep focus off the button, so Space still starts playback.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => onAdd(kind)}
+      className="flex items-center gap-0.5 rounded px-1 py-0.5 text-[10px] text-muted-foreground hover:bg-accent hover:text-foreground"
+    >
+      <Plus size={11} />
+      {label}
+    </button>
+  );
+
   return (
     <div className="py-2">
-      <div className="flex items-center pr-2 pl-3 pb-1">
+      <div className="flex items-center gap-1 pr-2 pl-3 pb-1">
         <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
           Modulators
         </span>
-        <button
-          type="button"
-          title="Add an LFO"
-          // Keep focus off the button, so Space still starts playback.
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onAdd}
-          className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <Plus size={13} />
-        </button>
+        {add('lfo', 'LFO', 'Add an LFO')}
+        {add('envelope', 'Env', 'Add a modulation envelope, started by each step')}
       </div>
 
-      {lfos.length === 0 && (
-        <p className="px-3 text-xs text-muted-foreground">No LFOs yet. Add one with +.</p>
+      {modulators.length === 0 && (
+        <p className="px-3 text-xs text-muted-foreground">
+          No modulators yet. Add an LFO or an envelope with +.
+        </p>
       )}
 
-      {lfos.map((l) => {
-        const count = linked.get(l.id) ?? 0;
+      {modulators.map((m) => {
+        const count = linked.get(m.id) ?? 0;
+        const isSelected = selected?.kind === m.kind && selected.id === m.id;
         return (
-          <ContextMenu key={l.id} modal={false}>
+          <ContextMenu key={m.id} modal={false}>
             <ContextMenuTrigger asChild>
               <button
                 type="button"
                 onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onSelect(selected === l.id ? null : l.id)}
+                onClick={() => onSelect(isSelected ? null : { kind: m.kind, id: m.id })}
                 className={`flex w-full items-baseline gap-2 px-3 py-1 text-left text-xs ${
-                  selected === l.id
+                  isSelected
                     ? 'bg-accent text-foreground'
                     : 'text-muted-foreground hover:text-foreground'
                 }`}
               >
-                <span className="flex-1 truncate">{l.name}</span>
+                <span className="w-3 shrink-0 text-center" aria-hidden>
+                  {m.kind === 'lfo' ? '∿' : '⌒'}
+                </span>
+                <span className="flex-1 truncate">{m.name}</span>
                 <span className="shrink-0 text-[10px] tabular-nums">
                   {count > 0 ? `${count} linked` : ''}
                 </span>
               </button>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
-              <ContextMenuItem onSelect={() => onRemove(l.id)}>Remove {l.name}</ContextMenuItem>
+              <ContextMenuItem onSelect={() => onRemove(m)}>Remove {m.name}</ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
         );

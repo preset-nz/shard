@@ -1,8 +1,8 @@
 import { create } from 'zustand';
 
 /**
- * What the inspector shows: one node from the work area, one material or LFO
- * from the tree, or nothing. The waveform follows it too.
+ * What the inspector shows: one node from the work area, one material, LFO or
+ * envelope from the tree, or nothing. The waveform follows it too.
  *
  * Its own tiny store rather than part of any document, per guidance
  * `design/interaction-state.md`. The tree and the work area both write it,
@@ -13,6 +13,7 @@ export type Selection =
   | { kind: 'node'; id: string }
   | { kind: 'material'; id: number }
   | { kind: 'lfo'; id: number }
+  | { kind: 'envelope'; id: number }
   | null;
 
 interface SelectionState {

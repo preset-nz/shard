@@ -45,7 +45,7 @@ pub use fm::{Fm, FmParams, FmType};
 pub use granular::{GrainParams, Granular, Window};
 pub use inspect::{GrainLog, GrainSpawn};
 pub use limiter::{Limiter, LimiterParams};
-pub use modulation::{Curve, Ease, LfoSpec, LinkError, ModSet, Shape};
+pub use modulation::{Curve, Ease, EnvSpec, LfoSpec, LinkError, ModSet, Shape};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;
 pub use ringmod::{RingMod, RingModParams};

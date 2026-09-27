@@ -283,6 +283,9 @@ pub struct Engine {
     sample_rate: f32,
     peak: f32,
     trimmed_play_position: f32,
+    /// The pass's window length in samples, as last block found it, for the
+    /// modulation envelopes' clock.
+    pass_len: f32,
 }
 
 impl Engine {
@@ -371,6 +374,7 @@ impl Engine {
             sample_rate,
             peak: 0.0,
             trimmed_play_position: 0.0,
+            pass_len: 0.0,
         }
     }
 
@@ -620,6 +624,15 @@ impl Engine {
         // below reads a parameter through them.
         if self.playing {
             self.mods.advance(out.len() / 2, self.sample_rate);
+            // Envelopes on the pass's clock, before any row reads through
+            // them. The window's length is last block's, since this block's
+            // is worked out below; it changes only when the trim does.
+            self.mods.clock_envelopes(
+                self.player.elapsed(),
+                self.pass_len,
+                self.player.sounding(),
+                self.sample_rate,
+            );
         }
         // Read the bank once per block, not once per sample. The smoothers
         // handle the step between blocks.
@@ -778,6 +791,7 @@ impl Engine {
         };
         let span = self.player_source.len().max(1) as f32;
         let window_len = source.len() as f32;
+        self.pass_len = window_len;
 
         let mut p = target;
         for frame in out.chunks_mut(2) {
@@ -2504,6 +2518,116 @@ mod tests {
             let mut out = vec![0.0; 512];
             let mut all = Vec::new();
             for _ in 0..200 {
+                e.process_block(&mut out, &bank);
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        assert!(render(false) == render(true));
+    }
+
+    /// A pluck: fast up, down to half, released at the end of the pass.
+    fn pluck(id: u64) -> crate::modulation::EnvSpec {
+        crate::modulation::EnvSpec {
+            id,
+            attack_ms: 10.0,
+            decay_ms: 50.0,
+            sustain: 0.5,
+            release_ms: 20.0,
+        }
+    }
+
+    /// Filter cutoff as the engine heard it, block by block, normalised, with
+    /// a pluck on it from 0.1 to 0.9 of its range. A quarter-second sample.
+    fn cutoff_under_a_pluck(steps_on: bool, octave: f32, blocks: usize) -> Vec<f32> {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(12_000));
+        e.set_readings(
+            Reading {
+                octave,
+                ..Reading::default()
+            },
+            Reading::default(),
+        );
+        let mut set = ModSet::with_envelopes(&[], &[pluck(7)]);
+        set.link("filter.cutoff", 7, 0.1, 0.9).unwrap();
+        drop(e.set_modulation(set));
+        e.set_steps(StepParams {
+            on: steps_on,
+            length: 16,
+            pattern: 1,
+            ..Default::default()
+        });
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        let heard = ParamBank::new();
+        let slot = index_of("filter.cutoff").unwrap();
+        let def = &crate::params::PARAMS[slot];
+        // 240 frames a block is 5 ms, so 400 blocks is the two-second bar.
+        let mut out = vec![0.0; 480];
+        (0..blocks)
+            .map(|_| {
+                e.process_block(&mut out, &bank);
+                e.publish_heard(&bank, &heard);
+                def.normalise(heard.get(slot))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_mod_envelope_peaks_with_each_step_and_rests_between() {
+        let v = cutoff_under_a_pluck(true, 0.0, 480);
+        let most = |r: core::ops::Range<usize>| v[r].iter().copied().fold(0.0, f32::max);
+        let rest = |r: core::ops::Range<usize>| v[r].iter().all(|x| (x - 0.1).abs() < 1e-4);
+        assert!(
+            most(0..10) > 0.8,
+            "no peak on the first step: {:?}",
+            &v[..10]
+        );
+        assert!(
+            (0.45..0.55).contains(&v[40]),
+            "not at its sustain mid-pass: {}",
+            v[40]
+        );
+        assert!(rest(60..398), "moved between the steps");
+        assert!(most(400..410) > 0.8, "no peak on the next bar");
+    }
+
+    #[test]
+    fn with_the_steps_off_a_mod_envelope_retriggers_every_loop() {
+        // A loop is a quarter second, fifty blocks.
+        let v = cutoff_under_a_pluck(false, 0.0, 200);
+        for start in [0, 50, 100, 150] {
+            let peak = v[start..start + 10].iter().copied().fold(0.0, f32::max);
+            assert!(peak > 0.8, "no peak on the loop at block {start}");
+        }
+    }
+
+    #[test]
+    fn a_mod_envelope_runs_on_the_pass_so_an_octave_up_halves_it() {
+        // Decided, not incidental: it reads the pass's clock, as the
+        // amplitude envelope does, so it follows the material's octave.
+        let down = cutoff_under_a_pluck(true, 0.0, 60);
+        let up = cutoff_under_a_pluck(true, 1.0, 60);
+        assert!(down[35] > 0.4, "the pass should still be sounding");
+        assert!((up[35] - 0.1).abs() < 1e-4, "an octave up should be over");
+    }
+
+    #[test]
+    fn an_unlinked_mod_envelope_is_bit_exact_with_none() {
+        let render = |with_env: bool| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(12_000));
+            if with_env {
+                drop(e.set_modulation(ModSet::with_envelopes(&[], &[pluck(1)])));
+            }
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "filter.on", 1.0);
+            set(&bank, "filter.mix", 1.0);
+            let mut out = vec![0.0; 512];
+            let mut all = Vec::new();
+            for _ in 0..100 {
                 e.process_block(&mut out, &bank);
                 all.extend_from_slice(&out);
             }

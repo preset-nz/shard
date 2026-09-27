@@ -2,6 +2,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
   addDrone,
+  addEnvelope,
   addLfo,
   addMaterial,
   arrangementDefs,
@@ -29,18 +30,21 @@ import {
   type ModulationView,
   mapMidi,
   materialWave,
+  modulatorsOf,
   type ParamInfo,
   paramDefs,
   mappings as readMappings,
   materials as readMaterials,
   meters as readMeters,
   modulation as readModulation,
+  removeEnvelope,
   removeLfo,
   removeMaterial,
   type SourceInfo,
   savePatch,
   setLfo,
   setMaterial,
+  setEnvelope as setModEnvelope,
   setParam,
   setPlaying,
   setTracker,
@@ -150,7 +154,12 @@ export default function App() {
   const [patchName, setPatchName] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
   /** The open patch's LFOs and links, as Rust last answered with them. */
-  const [mod, setMod] = useState<ModulationView>({ lfos: [], links: {}, refused: [] });
+  const [mod, setMod] = useState<ModulationView>({
+    lfos: [],
+    envelopes: [],
+    links: {},
+    refused: [],
+  });
   const [limits, setLimits] = useState<LfoLimits | null>(null);
   const { selection, select, clear } = useSelection();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -618,12 +627,13 @@ export default function App() {
     };
   }, [togglePlay, doSave, doLoad, setBrake, setReverse, setShowDebugger, setMode]);
 
-  // How many parameters follow each LFO, for the tree and the editor.
+  // How many parameters follow each modulator, for the tree and the editors.
   const linkedCounts = new Map<number, number>();
   for (const link of Object.values(mod.links)) {
-    linkedCounts.set(link.lfo, (linkedCounts.get(link.lfo) ?? 0) + 1);
+    linkedCounts.set(link.source, (linkedCounts.get(link.source) ?? 0) + 1);
   }
-  const selectedLfo = selection?.kind === 'lfo' ? selection.id : null;
+  const selectedModulator =
+    selection?.kind === 'lfo' || selection?.kind === 'envelope' ? selection : null;
   const refreshMod = () => void editMod(readModulation);
 
   // Links and what the engine heard reach the rows through the panel's
@@ -635,7 +645,7 @@ export default function App() {
     midi,
     pool,
     onWire: wire,
-    onLink: (id, lfo, lo, hi) => void editMod(() => linkParam(id, lfo, lo, hi)),
+    onLink: (id, source, lo, hi) => void editMod(() => linkParam(id, source, lo, hi)),
     onUnlink: (id) => void editMod(() => unlinkParam(id)),
     onLearn: (id) => void learnMidi(id).catch((e) => setError(String(e))),
     onMapMidi: (id, control) => void mapMidi(id, control).catch((e) => setError(String(e))),
@@ -786,28 +796,30 @@ export default function App() {
               }
             />
             <ModulatorTree
-              lfos={mod.lfos}
-              selected={selectedLfo}
+              modulators={modulatorsOf(mod)}
+              selected={selectedModulator}
               linked={linkedCounts}
-              onSelect={(id) => (id === null ? clear() : select({ kind: 'lfo', id }))}
-              onAdd={() =>
+              onSelect={(next) => (next === null ? clear() : select(next))}
+              onAdd={(kind) =>
                 void editMod(async () => {
-                  const view = await addLfo();
-                  // The new LFO is last; select it so it can be set up at once.
-                  const added = view.lfos[view.lfos.length - 1];
-                  if (added) select({ kind: 'lfo', id: added.id });
+                  const view = kind === 'lfo' ? await addLfo() : await addEnvelope();
+                  // The new one is last; select it so it can be set up at once.
+                  const list = kind === 'lfo' ? view.lfos : view.envelopes;
+                  const added = list[list.length - 1];
+                  if (added) select({ kind, id: added.id });
                   return view;
                 })
               }
-              onRemove={(id) =>
+              onRemove={(m) =>
                 void editMod(async () => {
-                  const view = await removeLfo(id);
+                  const view =
+                    m.kind === 'lfo' ? await removeLfo(m.id) : await removeEnvelope(m.id);
                   const now = useSelection.getState().selection;
-                  if (now?.kind === 'lfo' && now.id === id) clear();
-                  const orphaned = linkedCounts.get(id) ?? 0;
+                  if (now?.kind === m.kind && now.id === m.id) clear();
+                  const orphaned = linkedCounts.get(m.id) ?? 0;
                   if (orphaned > 0) {
                     setNote(
-                      `Removed the LFO. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
+                      `Removed ${m.name}. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
                     );
                   }
                   return view;
@@ -990,6 +1002,7 @@ export default function App() {
               linkedCounts={linkedCounts}
               onSelect={select}
               onLfoChange={(next) => void editMod(() => setLfo(next))}
+              onEnvelopeChange={(next) => void editMod(() => setModEnvelope(next))}
               onError={setError}
               onNote={setNote}
               onPresetApplied={refreshMod}

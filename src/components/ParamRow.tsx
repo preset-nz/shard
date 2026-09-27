@@ -8,6 +8,7 @@ import {
   type MappingsView,
   type MaterialsView,
   type ModulationView,
+  modulatorsOf,
   normalise,
   type ParamInfo,
 } from '@/audio';
@@ -43,7 +44,7 @@ function groupKnobs(knobs: KnobInfo[]): [string, KnobInfo[]][] {
 }
 
 /**
- * One parameter: label, value and slider, and its link to an LFO.
+ * One parameter: label, value and slider, and its link to an LFO or envelope.
  *
  * Registered with facets as the custom kind `param`, so the panel still
  * knows nothing about grains. The extra props it reads arrive on the field
@@ -51,7 +52,7 @@ function groupKnobs(knobs: KnobInfo[]): [string, KnobInfo[]][] {
  * arrive on the panel's context, which changes every poll without rebuilding
  * the schema.
  *
- * Right-click links or unlinks. A linked row shows the LFO it follows, the two
+ * Right-click links or unlinks. A linked row shows the modulator it follows, the two
  * ends of its sweep on a second slider, and a mark on the main slider where
  * the engine has moved the value to. The main slider stays the hand's, and is
  * what the value returns to when unlinked.
@@ -77,7 +78,7 @@ export interface ParamRowContext {
   /** The materials, and which generator reads which, for the `material` field. */
   pool: MaterialsView;
   onWire: (node: string, material: number | null) => void;
-  onLink: (id: string, lfo: number, lo: number, hi: number) => void;
+  onLink: (id: string, source: number, lo: number, hi: number) => void;
   onUnlink: (id: string) => void;
   onLearn: (id: string) => void;
   onMapMidi: (id: string, control: number) => void;
@@ -102,12 +103,13 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
   const real = denormalise(def, t);
 
   const link = c.mod.links[def.id];
-  const source = link ? c.mod.lfos.find((l) => l.id === link.lfo) : undefined;
+  const modulators = modulatorsOf(c.mod);
+  const source = link ? modulators.find((m) => m.id === link.source) : undefined;
   const heard = c.heard[def.id];
   const mark = source && heard !== undefined ? normalise(def, heard) : null;
   const mapped = c.midi.mappings[def.id];
   const learning = c.midi.learning === def.id;
-  // The arrangement's rows follow no LFO yet (Georg, 2026-09-26: later),
+  // The arrangement's rows follow no modulator yet (Georg, 2026-09-26: later),
   // though a knob maps to them like any other row.
   const arrangement = isArrangement(def.id);
 
@@ -144,10 +146,11 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
                 title={
                   source
                     ? `Follows ${source.name}. Right-click to change or unlink.`
-                    : 'Follows an LFO this patch no longer has. Right-click to unlink.'
+                    : 'Follows a modulator this patch no longer has. Right-click to unlink.'
                 }
               >
-                ∿ {source ? source.name : 'missing LFO'}
+                {source?.kind === 'envelope' ? '⌒' : '∿'}{' '}
+                {source ? source.name : 'missing modulator'}
               </span>
             )}
             <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
@@ -188,7 +191,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
                 step={0.001}
                 minStepsBetweenThumbs={1}
                 value={[Math.min(link.lo, link.hi), Math.max(link.lo, link.hi)]}
-                onValueChange={([lo, hi]) => c.onLink(def.id, link.lfo, lo, hi)}
+                onValueChange={([lo, hi]) => c.onLink(def.id, link.source, lo, hi)}
                 className="flex-1"
               />
               <span className="w-14 shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
@@ -202,21 +205,21 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         <ContextMenuLabel>{def.name}</ContextMenuLabel>
         <ContextMenuSeparator />
         <ContextMenuSub>
-          <ContextMenuSubTrigger disabled={arrangement || c.mod.lfos.length === 0}>
+          <ContextMenuSubTrigger disabled={arrangement || modulators.length === 0}>
             Link to
           </ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {c.mod.lfos.map((l) => (
+            {modulators.map((m) => (
               <ContextMenuItem
-                key={l.id}
+                key={m.id}
                 onSelect={() =>
                   source
-                    ? c.onLink(def.id, l.id, link.lo, link.hi)
-                    : c.onLink(def.id, l.id, ...around(t))
+                    ? c.onLink(def.id, m.id, link.lo, link.hi)
+                    : c.onLink(def.id, m.id, ...around(t))
                 }
               >
-                {l.name}
-                {link?.lfo === l.id ? ' ✓' : ''}
+                {m.kind === 'lfo' ? '∿' : '⌒'} {m.name}
+                {link?.source === m.id ? ' ✓' : ''}
               </ContextMenuItem>
             ))}
           </ContextMenuSubContent>
@@ -226,12 +229,12 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         </ContextMenuItem>
         {arrangement && (
           <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-            The arrangement's controls follow no LFO yet.
+            The arrangement's controls follow no modulator yet.
           </ContextMenuLabel>
         )}
-        {!arrangement && c.mod.lfos.length === 0 && (
+        {!arrangement && modulators.length === 0 && (
           <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-            Add an LFO under Modulators first.
+            Add an LFO or envelope under Modulators first.
           </ContextMenuLabel>
         )}
         <ContextMenuSeparator />
