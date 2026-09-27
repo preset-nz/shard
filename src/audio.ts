@@ -399,6 +399,8 @@ export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
 export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
 /** `FmType::NAMES`, in stepped order. */
 export const FM_TYPES = ['Phase', 'Linear', 'Exponential'];
+/** `note::Length::NAMES`, in stepped order: what sets a note's length. */
+export const LENGTH_NAMES = ['Loop', 'Sample', 'Hold'];
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {

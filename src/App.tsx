@@ -415,8 +415,13 @@ export default function App() {
     shownIsPlayer && sampleOn ? 'Sample' : null,
     shownIsGrain && grainOn ? 'Granular' : null,
   ].filter((r): r is string => r !== null);
-  // Shown only because it is the clock: nothing that is on reads it.
-  const clockOnly = shownIsPlayer && readers.length === 0;
+  // Shown only because it is the clock: nothing that is on reads it. That is
+  // true only while the patch's Length is Sample; under Loop or Hold the
+  // sample is no clock, so an unheard Sample shows nothing.
+  const lengthIsSample = Math.round(values['patch.length'] ?? 1) === 1;
+  const unheard = shownIsPlayer && readers.length === 0 && selection?.kind !== 'material';
+  const clockOnly = unheard && lengthIsSample;
+  const blank = unheard && !lengthIsSample;
 
   // Each waveform is fetched once. Ids are never reused within a document,
   // and opening a document clears the lot.
@@ -684,9 +689,9 @@ export default function App() {
     linkedCounts.set(link.source, (linkedCounts.get(link.source) ?? 0) + 1);
   }
   // Every generator type and whether it is in the patch: on means present.
-  const generators = NODES.filter((n) => n.layer === 'patch' && n.lane === 'generate').map(
-    (node) => ({ node, on: defs ? isNodeOn(defs, values, node) : true }),
-  );
+  const generators = NODES.filter(
+    (n) => n.layer === 'patch' && n.lane === 'generate' && !n.setting,
+  ).map((node) => ({ node, on: defs ? isNodeOn(defs, values, node) : true }));
   const absent = new Set(generators.filter((g) => !g.on).map((g) => g.node.id));
   const selectedModulator =
     selection?.kind === 'lfo' || selection?.kind === 'envelope' ? selection : null;
@@ -927,18 +932,20 @@ export default function App() {
             <span className="truncate text-xs text-muted-foreground">
               {shownRecord
                 ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
-                    clockOnly
-                      ? 'Sample is off · its trim still sets how long a pass is'
-                      : readers.length > 0
-                        ? `read by ${readers.join(' and ')}`
-                        : 'not wired'
+                    blank
+                      ? 'Sample is off'
+                      : clockOnly
+                        ? 'Sample is off · its trim still sets how long a pass is'
+                        : readers.length > 0
+                          ? `read by ${readers.join(' and ')}`
+                          : 'not wired'
                   }`
                 : `Nothing is wired into ${shownFor}`}
             </span>
           </div>
           <div className={clockOnly ? 'opacity-40' : ''}>
             <Waveform
-              peaks={shownWave?.peaks ?? []}
+              peaks={blank ? [] : (shownWave?.peaks ?? [])}
               position={values['grain.position'] ?? 0}
               jitter={values['grain.jitter'] ?? 0}
               showGrain={shownIsGrain}

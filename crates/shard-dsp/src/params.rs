@@ -117,6 +117,31 @@ impl ParamDef {
 /// "Frequency", not "Ring freq". The panel draws rows in table order, so order
 /// here is layout. The tests at the bottom hold all of this.
 pub const PARAMS: &[ParamDef] = &[
+    // The patch's own settings, before any node (Georg, 2026-09-27): what
+    // sets a note's length. See `note.rs`. Sample by default, which is how
+    // every patch played before the setting existed.
+    ParamDef {
+        id: "patch.length",
+        name: "Length",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        taper: Taper::Stepped(3),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    // How long a note is held under Hold, before its release. Read once, when
+    // the note starts, so nothing moving it can move a note's end mid-note.
+    ParamDef {
+        id: "patch.hold",
+        name: "Hold",
+        min: 10.0,
+        max: 10_000.0,
+        default: 400.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
+        smooth_ms: 0.0,
+    },
     // Generators make sound, effects shape it (Georg, 2026-09-13). The plain
     // sample is one generator and the grain cloud is another; each has a
     // switch and a Gain, and the two are summed into the effects. The plain

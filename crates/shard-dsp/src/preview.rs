@@ -16,7 +16,9 @@
 //!
 //! Allocates freely. It is never called on the audio thread.
 
+use crate::chain::BYPASS_MS;
 use crate::modulation::ModSet;
+use crate::note::Length;
 use crate::params::{index_of, ParamBank};
 use crate::sources::{Generator, Reading};
 use crate::steps::StepParams;
@@ -28,6 +30,10 @@ const SETTLE_S: f32 = 0.25;
 
 /// When nothing is wired there is no pass to measure, so draw this long.
 const UNWIRED_S: f32 = 1.0;
+
+/// A Loop patch runs for ever, so draw this much of it: the attack and
+/// enough of what it settles into.
+const LOOP_S: f32 = 2.0;
 
 /// The gestures a hand makes while playing. They are not part of the patch,
 /// and a brake held while a control moves would flatten the picture.
@@ -90,10 +96,24 @@ pub fn render_pass(input: PreviewInput) -> Preview {
     } else {
         (grain.len(), grain_reading)
     };
-    let pass = if clock_len >= 2 {
-        (clock_len as f32 / clock_reading.octaves().exp2()).ceil() as usize
-    } else {
-        (UNWIRED_S * sr) as usize
+    // What one note is depends on the patch's Length (`note.rs`): a pass
+    // through the sample, a held note and its release, or a stretch of a
+    // patch that never ends.
+    let value = |id: &str| index_of(id).map_or(0.0, |i| input.bank.get(i));
+    let pass = match Length::from_value(value("patch.length")) {
+        Length::Sample if clock_len >= 2 => {
+            (clock_len as f32 / clock_reading.octaves().exp2()).ceil() as usize
+        }
+        Length::Sample => (UNWIRED_S * sr) as usize,
+        Length::Hold => {
+            let release = if value("env.on") >= 0.5 {
+                value("env.release").max(0.0)
+            } else {
+                0.0
+            };
+            ((value("patch.hold").max(0.0) + release + BYPASS_MS) * 0.001 * sr).ceil() as usize
+        }
+        Length::Loop => (LOOP_S * sr) as usize,
     };
     let max = (input.max_seconds.max(0.0) * sr) as usize;
     let frames = pass.min(max.max(1));
@@ -231,5 +251,26 @@ mod tests {
         let plain = render(&bank, &m, 0.0).samples;
         bank.set_by_id("tape.brake", 1.0);
         assert!(plain == render(&bank, &m, 0.0).samples);
+    }
+
+    #[test]
+    fn a_held_note_is_drawn_to_the_end_of_its_release() {
+        let bank = ParamBank::new();
+        bank.set_by_id("patch.length", 2.0);
+        bank.set_by_id("patch.hold", 200.0);
+        bank.set_by_id("env.release", 100.0);
+        let m = tone(96_000);
+        // 200 held, 100 released, 10 to fade: 310 ms, whatever the sample.
+        assert_eq!(render(&bank, &m, 0.0).samples.len(), 2 * 14_880);
+        assert_eq!(render(&bank, &m, 2.0).samples.len(), 2 * 14_880);
+        let x = render(&bank, &m, 0.0).samples;
+        assert_eq!(peak(&x[x.len() - 200..]), 0.0, "it should end in silence");
+    }
+
+    #[test]
+    fn a_loop_is_drawn_for_two_seconds() {
+        let bank = ParamBank::new();
+        bank.set_by_id("patch.length", 0.0);
+        assert_eq!(render(&bank, &tone(12_000), 0.0).samples.len(), 2 * 96_000);
     }
 }

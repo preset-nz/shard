@@ -233,6 +233,16 @@ impl EnvSpec {
         }
         .gain_at(elapsed, length, sample_rate)
     }
+
+    fn shape(&self) -> EnvParams {
+        EnvParams {
+            amount: 1.0,
+            attack_ms: self.attack_ms,
+            decay_ms: self.decay_ms,
+            sustain: self.sustain,
+            release_ms: self.release_ms,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -241,6 +251,10 @@ struct Env {
     /// This block's output, -1 at rest to 1 at the peak, so a link reads it
     /// exactly as it reads an LFO: rest on the low end, peak on the high.
     value: f32,
+    /// On the note clock: the level a new note's attack climbs from, and the
+    /// note it was taken for, so a retrigger mid-release does not jump.
+    from: f32,
+    note: u32,
 }
 
 /// An LFO as the document describes it.
@@ -412,6 +426,8 @@ impl ModSet {
                 .map(|s| Env {
                     spec: *s,
                     value: -1.0,
+                    from: 0.0,
+                    note: 0,
                 })
                 .collect(),
             links: Vec::new(),
@@ -461,6 +477,13 @@ impl ModSet {
                 lfo.to = prev.to;
             }
         }
+        for env in &mut self.envs {
+            if let Some(prev) = old.envs.iter().find(|p| p.spec.id == env.spec.id) {
+                env.value = prev.value;
+                env.from = prev.from;
+                env.note = prev.note;
+            }
+        }
     }
 
     /// Once per block, before anything reads a parameter.
@@ -478,6 +501,31 @@ impl ModSet {
     pub fn clock_envelopes(&mut self, elapsed: f32, length: f32, sounding: bool, sample_rate: f32) {
         for env in &mut self.envs {
             let level = env.spec.level_at(elapsed, length, sounding, sample_rate);
+            env.value = 2.0 * level - 1.0;
+        }
+    }
+
+    /// The same, on the note clock, for the Loop and Hold lengths: `age`
+    /// samples into note number `note`, held for `gate` samples or for ever.
+    /// A note number it has not seen is a new note, whose attack climbs from
+    /// where the last one had got to.
+    #[inline]
+    pub fn clock_envelopes_note(
+        &mut self,
+        age: f32,
+        gate: Option<f32>,
+        note: u32,
+        sample_rate: f32,
+    ) {
+        for env in &mut self.envs {
+            if env.note != note {
+                env.note = note;
+                env.from = 0.5 + 0.5 * env.value;
+            }
+            let level = env
+                .spec
+                .shape()
+                .shape_at_note(age, gate, env.from, sample_rate);
             env.value = 2.0 * level - 1.0;
         }
     }

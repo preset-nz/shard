@@ -111,6 +111,49 @@ impl EnvParams {
         1.0 - amount * (1.0 - shape.clamp(0.0, 1.0))
     }
 
+    /// The shape, 0 to 1, `age` samples into a note that is held for `gate`
+    /// samples, or for ever when `gate` is none. For the Loop and Hold
+    /// lengths (`patch.length`), where a note has a time of its own rather
+    /// than a pass through the sample.
+    ///
+    /// Stages are in real time and not fitted to anything: a two-second
+    /// attack takes two seconds. The attack climbs from `from`, the level the
+    /// last note had reached, so a retrigger mid-release does not click.
+    /// Release runs from wherever the note had got to when the gate closed.
+    pub fn shape_at_note(&self, age: f32, gate: Option<f32>, from: f32, sample_rate: f32) -> f32 {
+        let ms = sample_rate * 0.001;
+        let attack = self.attack_ms.max(0.0) * ms;
+        let decay = self.decay_ms.max(0.0) * ms;
+        let release = self.release_ms.max(0.0) * ms;
+        let sustain = self.sustain.clamp(0.0, 1.0);
+        let from = from.clamp(0.0, 1.0);
+        let held = |t: f32| {
+            if t < attack {
+                from + (1.0 - from) * (t / attack)
+            } else if t < attack + decay {
+                1.0 - (1.0 - sustain) * ((t - attack) / decay)
+            } else {
+                sustain
+            }
+        };
+        match gate {
+            Some(g) if age >= g => {
+                if release <= 0.0 {
+                    0.0
+                } else {
+                    held(g) * (1.0 - (age - g) / release).max(0.0)
+                }
+            }
+            _ => held(age.max(0.0)),
+        }
+    }
+
+    /// The gain for a shape, through the depth, as `gain_at` applies it.
+    pub fn gain_of(&self, shape: f32) -> f32 {
+        let amount = self.amount.clamp(0.0, 1.0);
+        1.0 - amount * (1.0 - shape.clamp(0.0, 1.0))
+    }
+
     /// The shape sampled across one pass, for drawing. `points` evenly spaced
     /// values from the start of the window to its end.
     pub fn curve(&self, points: usize, length: f32, sample_rate: f32) -> Vec<f32> {
@@ -348,5 +391,40 @@ mod tests {
             ..Default::default()
         }
         .is_neutral());
+    }
+
+    #[test]
+    fn a_note_envelope_runs_in_real_time_and_releases_from_its_gate() {
+        let sr = 48_000.0;
+        let e = EnvParams {
+            amount: 1.0,
+            attack_ms: 100.0,
+            decay_ms: 100.0,
+            sustain: 0.5,
+            release_ms: 100.0,
+        };
+        let at = |ms: f32, gate_ms: Option<f32>| {
+            e.shape_at_note(ms * 48.0, gate_ms.map(|g| g * 48.0), 0.0, sr)
+        };
+        assert!((at(50.0, None) - 0.5).abs() < 1e-3, "halfway up the attack");
+        assert!((at(100.0, None) - 1.0).abs() < 1e-3, "at the peak");
+        assert!(
+            (at(10_000.0, None) - 0.5).abs() < 1e-6,
+            "held at sustain for ever"
+        );
+        // Gate closed at 50 ms, halfway up: the release starts from there.
+        assert!((at(50.0, Some(50.0)) - 0.5).abs() < 1e-3);
+        assert!((at(100.0, Some(50.0)) - 0.25).abs() < 1e-3);
+        assert_eq!(at(151.0, Some(50.0)), 0.0, "and lands on silence");
+    }
+
+    #[test]
+    fn a_retrigger_climbs_from_where_the_last_note_was() {
+        let e = EnvParams {
+            attack_ms: 10.0,
+            ..EnvParams::default()
+        };
+        assert_eq!(e.shape_at_note(0.0, None, 0.7, 48_000.0), 0.7);
+        assert_eq!(e.shape_at_note(0.0, None, 0.0, 48_000.0), 0.0);
     }
 }

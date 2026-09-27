@@ -14,6 +14,7 @@ use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::modulation::ModSet;
+use crate::note::Length;
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::smooth::{OnePole, Ramp};
@@ -51,6 +52,8 @@ struct Slots {
     tape_time: usize,
     tape_reverse: usize,
     tape_flick: usize,
+    patch_length: usize,
+    patch_hold: usize,
     fm_on: usize,
     fm_gain: usize,
     fm_freq: usize,
@@ -99,6 +102,8 @@ impl Slots {
             tape_time: at("tape.time"),
             tape_reverse: at("tape.reverse"),
             tape_flick: at("tape.flick"),
+            patch_length: at("patch.length"),
+            patch_hold: at("patch.hold"),
             fm_on: at("fm.on"),
             fm_gain: at("fm.gain"),
             fm_freq: at("fm.freq"),
@@ -228,6 +233,46 @@ impl Fades {
     }
 }
 
+/// The note clock (`note.rs`), which always runs: samples of tape time since
+/// the last trigger, reset by the transport and by every step.
+#[derive(Default)]
+struct NoteClock {
+    /// f64, because an f32 count stops moving after about six minutes and a
+    /// Loop drone runs longer than that.
+    age: f64,
+    /// Where this note's gate closes, where its release has finished and the
+    /// generators start to fade, and where it ends once they have. Latched
+    /// when it started, so nothing moving `patch.hold` moves a note mid-note.
+    gate: f64,
+    released: f64,
+    end: f64,
+    /// Counts triggers, so the modulation envelopes can tell a new note.
+    id: u32,
+    /// A trigger waiting for the next block, which has the bank to latch
+    /// from: the transport starting, or a pass restarted offline.
+    pending: bool,
+    /// Each envelope's shape as it last was, and where a new note's attack
+    /// climbs from, so a retrigger mid-release does not click.
+    amp_shape: f32,
+    amp_from: f32,
+    crush_shape: f32,
+    crush_from: f32,
+}
+
+impl NoteClock {
+    /// Start a note: the clock from zero, this note's gate and end latched,
+    /// and every envelope's attack climbing from where it had got to.
+    fn start(&mut self, gate: f64, released: f64, end: f64) {
+        self.age = 0.0;
+        self.gate = gate;
+        self.released = released;
+        self.end = end;
+        self.id = self.id.wrapping_add(1);
+        self.amp_from = self.amp_shape;
+        self.crush_from = self.crush_shape;
+    }
+}
+
 pub struct Engine {
     /// What plain playback reads, and what the cloud reads. Each generator
     /// has its own material (Georg, 2026-09-15); they may be the same file.
@@ -286,6 +331,11 @@ pub struct Engine {
     /// The pass's window length in samples, as last block found it, for the
     /// modulation envelopes' clock.
     pass_len: f32,
+    /// The note clock; see `NoteClock`.
+    note: NoteClock,
+    /// Under Hold, the generators fall to an exact zero once the note has
+    /// ended, whether or not the Envelope node is on.
+    note_fade: Ramp,
 }
 
 impl Engine {
@@ -375,6 +425,15 @@ impl Engine {
             peak: 0.0,
             trimmed_play_position: 0.0,
             pass_len: 0.0,
+            note: NoteClock {
+                pending: true,
+                ..NoteClock::default()
+            },
+            note_fade: {
+                let mut r = Ramp::new(1.0);
+                r.set_time(BYPASS_MS, sample_rate);
+                r
+            },
         }
     }
 
@@ -555,6 +614,9 @@ impl Engine {
         if playing && !self.playing && self.step_params.on {
             self.player.finish();
         }
+        if playing && !self.playing {
+            self.note.pending = true;
+        }
         self.playing = playing;
     }
 
@@ -566,6 +628,7 @@ impl Engine {
         self.player.rewind();
         self.tail_left = 0.0;
         self.granular.clear();
+        self.note.pending = true;
     }
 
     /// Where plain playback has reached, 0 to 1 across the *whole* source, so
@@ -630,19 +693,29 @@ impl Engine {
 
     /// Render interleaved stereo into `out`, which must have an even length.
     pub fn process_block(&mut self, out: &mut [f32], bank: &ParamBank) {
+        let length = Length::from_value(bank.get(self.slots.patch_length));
         // LFOs move with the transport, and once per block, before anything
         // below reads a parameter through them.
         if self.playing {
             self.mods.advance(out.len() / 2, self.sample_rate);
-            // Envelopes on the pass's clock, before any row reads through
-            // them. The window's length is last block's, since this block's
-            // is worked out below; it changes only when the trim does.
-            self.mods.clock_envelopes(
-                self.player.elapsed(),
-                self.pass_len,
-                self.player.sounding(),
-                self.sample_rate,
-            );
+            // Envelopes on the pass's clock, or the note's, before any row
+            // reads through them. The window's length is last block's, since
+            // this block's is worked out below; it changes only when the trim
+            // does.
+            match length {
+                Length::Sample => self.mods.clock_envelopes(
+                    self.player.elapsed(),
+                    self.pass_len,
+                    self.player.sounding(),
+                    self.sample_rate,
+                ),
+                Length::Loop | Length::Hold => self.mods.clock_envelopes_note(
+                    self.note.age as f32,
+                    (length == Length::Hold).then_some(self.note.gate as f32),
+                    self.note.id,
+                    self.sample_rate,
+                ),
+            }
         }
         // Read the bank once per block, not once per sample. The smoothers
         // handle the step between blocks.
@@ -711,11 +784,18 @@ impl Engine {
         self.steps.set_running(steps.on);
         // Under the steps a pass plays once (Georg, 2026-09-14); without them
         // it loops, and no step's pitch outlives them.
-        let looping = !steps.on;
-        if looping {
+        let steps_off = !steps.on;
+        if steps_off {
             self.pass_ratio = 1.0;
             self.pass_semis = 0.0;
         }
+        // Whether the sample loops: always for Loop, never for Hold, and for
+        // Sample, whenever the steps are off, as it always has.
+        let looping = match length {
+            Length::Loop => true,
+            Length::Sample => steps_off,
+            Length::Hold => false,
+        };
         let arr = self.arr;
         let env = EnvParams {
             amount: read(&self.mods, bank, self.slots.env_mix),
@@ -803,6 +883,24 @@ impl Engine {
         let window_len = source.len() as f32;
         self.pass_len = window_len;
 
+        // This block's note, as a trigger now would latch it: held for Hold's
+        // time, then the amplitude envelope's release when it is on, then the
+        // few milliseconds the generators take to fade to an exact zero.
+        let sr = f64::from(self.sample_rate);
+        let note_gate =
+            f64::from(read(&self.mods, bank, self.slots.patch_hold).max(0.0)) * 0.001 * sr;
+        let note_release = if env_on_target > 0.0 {
+            f64::from(env.release_ms.max(0.0)) * 0.001 * sr
+        } else {
+            0.0
+        };
+        let note_released = note_gate + note_release;
+        let note_end = note_released + f64::from(BYPASS_MS) * 0.001 * sr;
+        if self.note.pending {
+            self.note.pending = false;
+            self.note.start(note_gate, note_released, note_end);
+        }
+
         let mut p = target;
         for frame in out.chunks_mut(2) {
             // A step that is on starts a pass, and the envelope with it. A
@@ -824,6 +922,7 @@ impl Engine {
                     self.tail_ratio = self.pass_ratio;
                 }
                 (self.pass_ratio, self.pass_semis) = steps.pitch_of(k);
+                self.note.start(note_gate, note_released, note_end);
                 // A reel running backwards starts its pass from the far end,
                 // or it would leave the window on its first sample.
                 if self.smooth.speed.value() < 0.0 {
@@ -842,6 +941,19 @@ impl Engine {
             p.pitch_spread = self.smooth.spread.process(target.pitch_spread);
             p.pan_spread = self.smooth.pan.process(target.pan_spread);
             p.speed = self.smooth.speed.process(speed_target);
+
+            // Under Hold with nothing to trigger it, a note that has ended
+            // starts again, the way a pass loops under Sample, so the patch
+            // keeps sounding in sound scaping.
+            if length == Length::Hold && steps_off && self.note.age >= self.note.end {
+                self.note.start(note_gate, note_released, note_end);
+                if self.smooth.speed.value() < 0.0 {
+                    self.player.rewind_to_end(source.len());
+                } else {
+                    self.player.rewind();
+                }
+            }
+            let gate = (length == Length::Hold).then_some(self.note.gate as f32);
 
             // Two generators, summed (Georg, 2026-09-13). Each has a switch
             // that fades to an exact zero and a gain; on at unity is bit-exact.
@@ -877,7 +989,11 @@ impl Engine {
             };
             // The cloud follows the pass: it throws grains while one sounds,
             // and between steps lets the grains it has thrown play out.
-            p.spawning = self.player.sounding();
+            p.spawning = match length {
+                Length::Sample => self.player.sounding(),
+                Length::Loop => true,
+                Length::Hold => self.note.age < self.note.gate,
+            };
             // Off means off. Once the fade has landed the cloud's contribution
             // is already an exact zero, so it is not run at all.
             let (gl, gr) = if grain_on > 0.0 {
@@ -889,11 +1005,12 @@ impl Engine {
             // pulls it down with everything else. Looping, it drones; under
             // the steps it sounds while a pass does. Mono, into both sides.
             let fm_on = self.fades.fm.process(fm_on_target);
-            let fm_open = if looping || self.player.sounding() {
-                1.0
-            } else {
-                0.0
+            let note_sounding = match length {
+                Length::Sample => steps_off || self.player.sounding(),
+                Length::Loop => true,
+                Length::Hold => self.note.age < self.note.end,
             };
+            let fm_open = if note_sounding { 1.0 } else { 0.0 };
             let fm_level = self.smooth.fm_gain.process(fm_gain_target)
                 * fm_on
                 * self.fades.fm_gate.process(fm_open);
@@ -902,13 +1019,33 @@ impl Engine {
             } else {
                 0.0
             };
-            let l = material + gl + fm;
-            let r = material + gr + fm;
+            // Under Hold the generators fall to an exact zero once the note
+            // has ended, with or without the Envelope node. Otherwise this is
+            // exactly one, and changes nothing.
+            let note_level = self.note_fade.process(
+                if length == Length::Hold && self.note.age >= self.note.released {
+                    0.0
+                } else {
+                    1.0
+                },
+            );
+            let l = (material + gl + fm) * note_level;
+            let r = (material + gr + fm) * note_level;
 
             // Drive, crush and ring. The crush envelope reads the pass's
             // clock, so it is worked out here and handed in.
             let elapsed = self.player.elapsed();
-            let crush_env_gain = crush_env.gain_at(elapsed, window_len, self.sample_rate);
+            let crush_env_gain = if length == Length::Sample {
+                crush_env.gain_at(elapsed, window_len, self.sample_rate)
+            } else {
+                self.note.crush_shape = crush_env.shape_at_note(
+                    self.note.age as f32,
+                    gate,
+                    self.note.crush_from,
+                    self.sample_rate,
+                );
+                crush_env.gain_of(self.note.crush_shape)
+            };
             let (l, r) = self.fx.front(l, r, &fx, crush_env_gain);
 
             // A stopping reel loses level as well as pitch, because the head
@@ -927,7 +1064,17 @@ impl Engine {
                 amount: env.amount * self.fades.env.process(env_on_target),
                 ..env
             };
-            let e = faded_env.gain_at(elapsed, window_len, self.sample_rate);
+            let e = if length == Length::Sample {
+                faded_env.gain_at(elapsed, window_len, self.sample_rate)
+            } else {
+                self.note.amp_shape = faded_env.shape_at_note(
+                    self.note.age as f32,
+                    gate,
+                    self.note.amp_from,
+                    self.sample_rate,
+                );
+                faded_env.gain_of(self.note.amp_shape)
+            };
             let (l, r) = (l * e, r * e);
 
             // The filter, on the master: after every generator and effect,
@@ -954,6 +1101,9 @@ impl Engine {
                 *lo = l;
                 *ro = r;
             }
+            // The note clock runs on tape time, as the grain scheduler does:
+            // a brake slows it, and the material's octave does not.
+            self.note.age += f64::from(p.speed.abs());
         }
 
         // A playhead for the Sample's material, so none when nothing is wired.
@@ -2550,6 +2700,16 @@ mod tests {
     /// Filter cutoff as the engine heard it, block by block, normalised, with
     /// a pluck on it from 0.1 to 0.9 of its range. A quarter-second sample.
     fn cutoff_under_a_pluck(steps_on: bool, octave: f32, blocks: usize) -> Vec<f32> {
+        cutoff_under_a_pluck_at(1.0, steps_on, octave, blocks)
+    }
+
+    /// The same under any `patch.length`.
+    fn cutoff_under_a_pluck_at(
+        length: f32,
+        steps_on: bool,
+        octave: f32,
+        blocks: usize,
+    ) -> Vec<f32> {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(12_000));
         e.set_readings(
@@ -2570,6 +2730,8 @@ mod tests {
         });
         e.set_playing(true);
         let bank = ParamBank::new();
+        bank.set_by_id("patch.length", length);
+        bank.set_by_id("patch.hold", 100.0);
         let heard = ParamBank::new();
         let slot = index_of("filter.cutoff").unwrap();
         let def = &crate::params::PARAMS[slot];
@@ -2624,6 +2786,21 @@ mod tests {
     }
 
     #[test]
+    fn under_hold_a_mod_envelope_follows_the_note_not_the_sample() {
+        // Held 100 ms and released over 20: at rest by 150 ms, at any octave,
+        // where under Sample it would ride the quarter-second pass.
+        for octave in [0.0, 2.0] {
+            let v = cutoff_under_a_pluck_at(2.0, true, octave, 480);
+            let most = v[0..10].iter().copied().fold(0.0, f32::max);
+            assert!(most > 0.8, "no peak at octave {octave}");
+            assert!(
+                v[30..398].iter().all(|x| (x - 0.1).abs() < 1e-4),
+                "not at rest after the note at octave {octave}"
+            );
+        }
+    }
+
+    #[test]
     fn an_unlinked_mod_envelope_is_bit_exact_with_none() {
         let render = |with_env: bool| {
             let mut e = Engine::new(48_000.0, 64);
@@ -2644,6 +2821,220 @@ mod tests {
             all
         };
         assert!(render(false) == render(true));
+    }
+
+    /// FM alone, over a two-second material that only sets the pass, with
+    /// the patch's length and any extra rows set. Peak per 5 ms block.
+    fn fm_blocks(
+        settings: &[(&str, f32)],
+        octave: f32,
+        steps: StepParams,
+        blocks: usize,
+    ) -> Vec<f32> {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(96_000));
+        e.set_readings(
+            Reading {
+                octave,
+                ..Reading::default()
+            },
+            Reading::default(),
+        );
+        e.set_steps(steps);
+        let bank = ParamBank::new();
+        set(&bank, "material.on", 0.0);
+        set(&bank, "fm.on", 1.0);
+        set(&bank, "fm.index", 0.0);
+        for (id, v) in settings {
+            set(&bank, id, *v);
+        }
+        e.set_playing(true);
+        let mut out = vec![0.0; 480];
+        (0..blocks)
+            .map(|_| {
+                e.process_block(&mut out, &bank);
+                out.iter().fold(0.0f32, |m, s| m.max(s.abs()))
+            })
+            .collect()
+    }
+
+    const HOLD: f32 = 2.0;
+    const LOOP: f32 = 0.0;
+
+    #[test]
+    fn under_hold_a_note_lasts_its_hold_and_then_starts_again() {
+        // 100 ms held, no release, the Envelope node off: sound, then the
+        // 5 ms fade, then the next note. The two-second material has no say.
+        let v = fm_blocks(
+            &[
+                ("patch.length", HOLD),
+                ("patch.hold", 100.0),
+                ("env.on", 0.0),
+            ],
+            0.0,
+            StepParams::default(),
+            60,
+        );
+        assert!(v[2..19].iter().all(|p| *p > 0.5), "the note should sound");
+        // The fade takes 10 ms, so a 5 ms block's peak never shows the zero;
+        // it shows as the quietest blocks, followed by the next note.
+        assert!(
+            v[20..23].iter().any(|p| *p < 0.35),
+            "and end: {:?}",
+            &v[18..26]
+        );
+        assert!(v[25..40].iter().all(|p| *p > 0.5), "then start again");
+    }
+
+    #[test]
+    fn under_hold_a_note_ends_in_silence_even_with_the_envelope_off() {
+        // One step a bar: 100 ms held, the fade, then nothing at all until
+        // the bar comes round. Without the fade FM would drone on and Sample
+        // would play to the end of its material.
+        let one_a_bar = StepParams {
+            on: true,
+            length: 16,
+            pattern: 1,
+            ..Default::default()
+        };
+        for material_on in [0.0, 1.0] {
+            let v = fm_blocks(
+                &[
+                    ("patch.length", HOLD),
+                    ("patch.hold", 100.0),
+                    ("env.on", 0.0),
+                    ("material.on", material_on),
+                ],
+                0.0,
+                one_a_bar,
+                420,
+            );
+            assert!(v[5] > 0.5, "the note never sounded");
+            assert!(
+                v[24..399].iter().all(|p| *p == 0.0),
+                "sound between the notes with material {material_on}"
+            );
+            assert!(v[401] > 0.5, "the bar came round in silence");
+        }
+    }
+
+    #[test]
+    fn under_hold_the_materials_octave_does_not_change_a_note() {
+        // Under Sample an octave up halves the pass and both envelopes with
+        // it. Under Hold a note is real time, so it must not.
+        let settings = [
+            ("patch.length", HOLD),
+            ("patch.hold", 100.0),
+            ("env.on", 0.0),
+        ];
+        let down = fm_blocks(&settings, 0.0, StepParams::default(), 30);
+        let up = fm_blocks(&settings, 2.0, StepParams::default(), 30);
+        let quiet = |v: &[f32]| v.iter().position(|p| *p < 0.05);
+        assert_eq!(quiet(&down), quiet(&up));
+    }
+
+    #[test]
+    fn under_hold_the_envelope_releases_after_the_gate_in_real_time() {
+        // Held 100 ms, released over 100 ms: half level halfway down.
+        let v = fm_blocks(
+            &[
+                ("patch.length", HOLD),
+                ("patch.hold", 100.0),
+                ("env.release", 100.0),
+            ],
+            0.0,
+            StepParams::default(),
+            50,
+        );
+        assert!(v[15] > 0.9, "held at full: {}", v[15]);
+        assert!(
+            (0.4..0.6).contains(&v[30]),
+            "halfway down the release: {}",
+            v[30]
+        );
+        assert!(v[41] < 0.05, "released: {}", v[41]);
+    }
+
+    #[test]
+    fn under_loop_the_envelope_attacks_once_and_holds() {
+        // The pass is two seconds and would restart the envelope each time
+        // under Sample; under Loop it holds at sustain through the loop.
+        let v = fm_blocks(
+            &[
+                ("patch.length", LOOP),
+                ("env.attack", 20.0),
+                ("env.decay", 50.0),
+                ("env.sustain", 0.4),
+            ],
+            0.0,
+            StepParams::default(),
+            1_000,
+        );
+        let peak = v[2..8].iter().copied().fold(0.0, f32::max);
+        assert!(peak > 0.8, "the peak: {peak}");
+        for at in [100, 399, 401, 600, 999] {
+            assert!((v[at] - 0.4).abs() < 0.03, "not held at {at}: {}", v[at]);
+        }
+    }
+
+    #[test]
+    fn a_retrigger_mid_note_does_not_click() {
+        // Steps every 62 ms land mid-release of a longer note. Each attack
+        // climbs from where the last had got to, so the largest step between
+        // samples stays near a 110 Hz sine's own.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(96_000));
+        e.set_steps(StepParams {
+            on: true,
+            tempo_bpm: 240.0,
+            pattern: 0xFFFF,
+            ..Default::default()
+        });
+        let bank = ParamBank::new();
+        for (id, v) in [
+            ("material.on", 0.0),
+            ("fm.on", 1.0),
+            ("fm.index", 0.0),
+            ("patch.length", HOLD),
+            ("patch.hold", 30.0),
+            ("env.attack", 5.0),
+            ("env.release", 200.0),
+        ] {
+            set(&bank, id, v);
+        }
+        e.set_playing(true);
+        let mut out = vec![0.0; 256];
+        let (mut last, mut worst) = (0.0f32, 0.0f32);
+        for _ in 0..400 {
+            e.process_block(&mut out, &bank);
+            for s in out.iter().step_by(2) {
+                worst = worst.max((s - last).abs());
+                last = *s;
+            }
+        }
+        assert!(worst < 0.05, "a jump of {worst}");
+    }
+
+    #[test]
+    fn switching_length_while_playing_keeps_sounding() {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(96_000));
+        let bank = ParamBank::new();
+        set(&bank, "material.on", 0.0);
+        set(&bank, "fm.on", 1.0);
+        set(&bank, "patch.hold", 400.0);
+        e.set_playing(true);
+        let mut out = vec![0.0; 480];
+        for (i, length) in [LOOP, HOLD, 1.0, LOOP, 1.0, HOLD, LOOP].iter().enumerate() {
+            set(&bank, "patch.length", *length);
+            let mut peak = 0.0f32;
+            for _ in 0..20 {
+                e.process_block(&mut out, &bank);
+                peak = out.iter().fold(peak, |m, s| m.max(s.abs()));
+                assert!(out.iter().all(|s| s.is_finite()));
+            }
+            assert!(peak > 0.3, "went quiet after switch {i} to {length}");
+        }
     }
 
     #[test]

@@ -32,6 +32,7 @@ import {
   FILTER_TYPES,
   FM_TYPES,
   format,
+  LENGTH_NAMES,
   normalise,
   type ParamInfo,
   setParam,
@@ -85,6 +86,11 @@ export interface NodeInfo {
   table: string | null;
   /** Whether a parameter id is one of this node's rows. */
   owns: (id: string) => boolean;
+  /**
+   * The patch's own settings rather than a node that makes or shapes sound.
+   * Drawn as a card, but never listed or added as a generator.
+   */
+  setting?: boolean;
 }
 
 const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
@@ -97,6 +103,18 @@ export const READS_MATERIAL: ReadonlySet<string> = new Set(['material', 'grain']
 
 /** Every node, in work-area order: each lane's cards in signal order. */
 export const NODES: NodeInfo[] = [
+  // The patch's settings, before the generators (Georg, 2026-09-27: "isn't
+  // it before the generator, a setting for the patch?"), in the Generators
+  // lane rather than a column of its own. Trial and error; may move.
+  {
+    layer: 'patch',
+    id: 'patch',
+    label: 'Patch',
+    lane: 'generate',
+    table: 'patch',
+    owns: under('patch'),
+    setting: true,
+  },
   {
     layer: 'patch',
     id: 'material',
@@ -250,6 +268,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'grain.window': WINDOW_NAMES,
   'filter.type': FILTER_TYPES,
   'drive.type': DRIVE_TYPES,
+  'patch.length': LENGTH_NAMES,
   'fm.type': FM_TYPES,
 };
 
@@ -293,7 +312,10 @@ function fieldFor(p: ParamInfo) {
  */
 export function buildSchema(defs: ParamInfo[], node: NodeInfo, view: NodeView): PropertySchema {
   const level = levelIdOf(defs, node);
-  const rows = rowsOf(defs, node).filter((p) => view === 'full' || p.id === level);
+  // A card folds to the level; a node with none, such as Patch, to its first row.
+  const all = rowsOf(defs, node);
+  const summary = level ?? all[0]?.id ?? null;
+  const rows = all.filter((p) => view === 'full' || p.id === summary);
   const picker = READS_MATERIAL.has(node.id)
     ? [{ kind: 'material', id: `${node.id}.wire`, path: `${node.id}.wire`, node: node.id }]
     : [];

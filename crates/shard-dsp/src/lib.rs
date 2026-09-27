@@ -27,6 +27,7 @@ pub mod granular;
 pub mod inspect;
 pub mod limiter;
 pub mod modulation;
+pub mod note;
 pub mod params;
 pub mod player;
 pub mod preview;
