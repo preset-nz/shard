@@ -343,6 +343,8 @@ export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
 export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
 /** `DriveType::NAMES`, in stepped order. */
 export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
+/** `FmType::NAMES`, in stepped order. */
+export const FM_TYPES = ['Phase', 'Linear', 'Exponential'];
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {

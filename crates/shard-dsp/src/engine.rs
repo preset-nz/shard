@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::arrangement::{self, index_of_arrangement};
 use crate::chain::{Chain, ChainParams, ChainSlots, BYPASS_MS};
 use crate::envelope::EnvParams;
-use crate::fm::{Fm, FmParams};
+use crate::fm::{Fm, FmParams, FmType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::limiter::{Limiter, LimiterParams};
@@ -57,6 +57,8 @@ struct Slots {
     fm_ratio: usize,
     fm_index: usize,
     fm_feedback: usize,
+    fm_drift: usize,
+    fm_type: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
 }
@@ -103,6 +105,8 @@ impl Slots {
             fm_ratio: at("fm.ratio"),
             fm_index: at("fm.index"),
             fm_feedback: at("fm.feedback"),
+            fm_drift: at("fm.drift"),
+            fm_type: at("fm.type"),
             fx: ChainSlots::resolve(at),
         }
     }
@@ -661,6 +665,8 @@ impl Engine {
             ratio: read(&self.mods, bank, self.slots.fm_ratio),
             index: read(&self.mods, bank, self.slots.fm_index),
             feedback: read(&self.mods, bank, self.slots.fm_feedback),
+            drift: read(&self.mods, bank, self.slots.fm_drift),
+            ty: FmType::from_value(bank.get(self.slots.fm_type)),
         };
         // Section switches, read as gates. Each one fades its section's mix
         // rather than cutting it.

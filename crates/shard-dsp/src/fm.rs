@@ -12,7 +12,18 @@
 //!
 //! Not band-limited. A high index on a high note folds sidebands back under
 //! Nyquist, which is part of how digital FM has always sounded.
+//!
+//! **Towards analogue** (Georg, 2026-09-27: *"something that pulls that from
+//! math based fm to pseudo analog"*). Digital FM is clinical because it is
+//! exact: perfect ratios, identical cycles. Two rows break that. **Drift**
+//! lets each operator wander in pitch on its own, so the ratio is never quite
+//! whole and the sidebands beat. **Type** chooses how the modulator moves the
+//! carrier: its phase (clean, the default), its frequency linearly (through
+//! zero), or its frequency exponentially, as a VCO's pitch input does. The
+//! last goes sharp as the index rises, which is the "wrong" that makes analogue
+//! cross-modulation sound the way it does.
 
+use crate::rng::Rng;
 use crate::smooth::OnePole;
 use core::f32::consts::TAU;
 
@@ -20,6 +31,77 @@ use core::f32::consts::TAU;
 /// modulator's own output stops being a saw and turns to noise, which is the
 /// far end of the control and deliberate.
 const FEEDBACK_SCALE: f32 = 1.6;
+
+/// How far a full drift wanders, in cents either way. Enough to beat and to
+/// pull a whole ratio out of true, not enough to read as out of tune.
+const DRIFT_CENTS: f32 = 25.0;
+/// The per-sample roughness under the wander at full drift, in cents.
+const JITTER_CENTS: f32 = 1.5;
+/// How long the wander holds a heading before choosing another, in seconds.
+const WANDER_S: f32 = 0.35;
+
+/// Exponential FM reads the index as octaves of swing: ten is three octaves
+/// either way, which is as far as a VCO's pitch input usefully goes.
+const OCTAVES_PER_INDEX: f32 = 0.3;
+
+/// How the modulator moves the carrier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FmType {
+    /// The carrier's phase. Pitch holds still at any index.
+    Phase,
+    /// The carrier's frequency, linearly, through zero. The same sidebands as
+    /// phase at no feedback; with feedback, the modulator's offset moves the
+    /// pitch.
+    Linear,
+    /// The carrier's frequency in octaves, as a VCO's pitch input. The pitch
+    /// rises with the index.
+    Exponential,
+}
+
+impl FmType {
+    pub const ALL: [FmType; 3] = [FmType::Phase, FmType::Linear, FmType::Exponential];
+    pub const NAMES: [&'static str; 3] = ["Phase", "Linear", "Exponential"];
+
+    pub fn from_value(v: f32) -> FmType {
+        Self::ALL[(v.round().max(0.0) as usize).min(Self::ALL.len() - 1)]
+    }
+}
+
+/// A slow random walk from -1 to 1: a new heading every so often, glided to.
+/// One per operator, so the two wander apart.
+struct Wander {
+    rng: Rng,
+    heading: f32,
+    left: u32,
+    hold: u32,
+    glide: OnePole,
+}
+
+impl Wander {
+    fn new(seed: u32, sample_rate: f32) -> Self {
+        let mut glide = OnePole::new();
+        glide.set_time(WANDER_S * 1000.0, sample_rate);
+        Self {
+            rng: Rng::new(seed),
+            heading: 0.0,
+            left: 0,
+            hold: (WANDER_S * sample_rate) as u32,
+            glide,
+        }
+    }
+
+    /// The wander this sample, and a bipolar white sample for the roughness.
+    #[inline]
+    fn process(&mut self) -> (f32, f32) {
+        if self.left == 0 {
+            self.heading = self.rng.next_bipolar();
+            // Uneven holds, or the wander ticks at a rate you can hear.
+            self.left = self.hold / 2 + (self.rng.next_f32() * self.hold as f32) as u32;
+        }
+        self.left -= 1;
+        (self.glide.process(self.heading), self.rng.next_bipolar())
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct FmParams {
@@ -32,6 +114,9 @@ pub struct FmParams {
     pub index: f32,
     /// The modulator's feedback on itself, 0 to 1.
     pub feedback: f32,
+    /// How far each operator wanders off its pitch, 0 to 1.
+    pub drift: f32,
+    pub ty: FmType,
 }
 
 impl Default for FmParams {
@@ -41,6 +126,8 @@ impl Default for FmParams {
             ratio: 2.0,
             index: 1.5,
             feedback: 0.0,
+            drift: 0.0,
+            ty: FmType::Phase,
         }
     }
 }
@@ -57,6 +144,11 @@ pub struct Fm {
     ratio: OnePole,
     index: OnePole,
     feedback: OnePole,
+    drift: OnePole,
+    carrier_wander: Wander,
+    modulator_wander: Wander,
+    /// The type last sample, to carry the carrier's phase across a switch.
+    ty: FmType,
 }
 
 impl Fm {
@@ -77,6 +169,10 @@ impl Fm {
             ratio: pole(d.ratio),
             index: pole(d.index),
             feedback: pole(d.feedback),
+            drift: pole(d.drift),
+            carrier_wander: Wander::new(0x5EED_0001, sample_rate),
+            modulator_wander: Wander::new(0x5EED_0002, sample_rate),
+            ty: d.ty,
         }
     }
 
@@ -95,17 +191,61 @@ impl Fm {
         let ratio = self.ratio.process(p.ratio.max(0.0));
         let index = self.index.process(p.index.max(0.0));
         let feedback = self.feedback.process(p.feedback.clamp(0.0, 1.0));
+        let drift = self.drift.process(p.drift.clamp(0.0, 1.0));
+
+        // The wanders run whether drift is up or not, so turning it up picks
+        // up a walk already in motion rather than one starting from centre.
+        // At zero both detunes are exactly one, and the voice is untouched.
+        let (cw, cn) = self.carrier_wander.process();
+        let (mw, mn) = self.modulator_wander.process();
+        let detune = |wander: f32, noise: f32| {
+            if drift > 0.0 {
+                (drift * (DRIFT_CENTS * wander + JITTER_CENTS * noise) / 1200.0).exp2()
+            } else {
+                1.0
+            }
+        };
+        let step = freq / self.sample_rate;
+        let carrier_step = step * detune(cw, cn);
+        let modulator_step = step * ratio * detune(mw, mn);
 
         let fb = feedback * FEEDBACK_SCALE * 0.5 * (self.last[0] + self.last[1]);
         let m = (TAU * self.modulator + fb).sin();
         self.last = [m, self.last[0]];
-        let out = (TAU * self.carrier + index * m).sin();
+
+        // Phase type reads the carrier with the modulation added; the other
+        // two have it already in the carrier's phase. Switching between them
+        // moves that offset across, so the wave carries on where it was
+        // rather than jumping by the index.
+        if p.ty != self.ty {
+            let offset = index * m / TAU;
+            match (self.ty, p.ty) {
+                (FmType::Phase, _) => self.carrier = wrap(self.carrier + offset),
+                (_, FmType::Phase) => self.carrier = wrap(self.carrier - offset),
+                _ => {}
+            }
+            self.ty = p.ty;
+        }
+        let (out, carrier_step) = match p.ty {
+            FmType::Phase => ((TAU * self.carrier + index * m).sin(), carrier_step),
+            // Frequency deviation is the index times the modulator's rate,
+            // which is what makes the index mean the same thing as in phase.
+            FmType::Linear => (
+                (TAU * self.carrier).sin(),
+                carrier_step + index * modulator_step * m,
+            ),
+            FmType::Exponential => (
+                (TAU * self.carrier).sin(),
+                carrier_step * (index * OCTAVES_PER_INDEX * m).exp2(),
+            ),
+        };
 
         // Wrapped rather than left to grow, as the ring modulator's is: an
-        // f32 phase counter loses precision audibly within minutes.
-        let step = freq / self.sample_rate;
-        self.carrier = wrap(self.carrier + step);
-        self.modulator = wrap(self.modulator + step * ratio);
+        // f32 phase counter loses precision audibly within minutes. Linear
+        // runs through zero, so the phase can step backwards; `wrap` holds it
+        // in range either way.
+        self.carrier = wrap(self.carrier + carrier_step);
+        self.modulator = wrap(self.modulator + modulator_step);
         out
     }
 }
@@ -164,12 +304,84 @@ mod tests {
             freq: 200.0,
             ratio: 3.0,
             index,
-            feedback: 0.0,
+            ..FmParams::default()
         };
         let plain = render(p(0.0), 48_000);
         let bright = render(p(3.0), 48_000);
         assert!(energy_at(&plain, 800.0) < 1e-3);
         assert!(energy_at(&bright, 800.0) > 0.1);
+    }
+
+    /// Carrier cycles in `x`, from its rising zero crossings. Every type
+    /// reads the carrier as a sine of one phase, so this is its mean pitch.
+    fn cycles(x: &[f32]) -> usize {
+        x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count()
+    }
+
+    #[test]
+    fn drift_at_zero_holds_the_pitch_true() {
+        // Ten seconds, so a wander left running would have somewhere to go.
+        // A count can land either side of its edge by one.
+        let p = FmParams {
+            index: 0.0,
+            ..FmParams::default()
+        };
+        let n = cycles(&render(p, 480_000)) as i32;
+        assert!(
+            (n - 1_100).abs() <= 1,
+            "{n} cycles in ten seconds of 110 Hz"
+        );
+    }
+
+    #[test]
+    fn drift_pulls_the_pitch_off_true_and_moves_it() {
+        // A second at a time, the cycle count wanders about 110 Hz rather
+        // than sitting on it, and never by more than the range.
+        let p = FmParams {
+            index: 0.0,
+            drift: 1.0,
+            ..FmParams::default()
+        };
+        let x = render(p, 48_000 * 4);
+        let counts: Vec<usize> = x.chunks(48_000).map(cycles).collect();
+        let hz = |n: usize| n as f32;
+        assert!(
+            counts.iter().any(|&n| n != 110),
+            "drift left the pitch alone: {counts:?}"
+        );
+        let most = 110.0 * (DRIFT_CENTS * 1.1 / 1200.0).exp2();
+        assert!(
+            counts
+                .iter()
+                .all(|&n| hz(n) < most + 1.0 && hz(n) > 110.0 * 110.0 / most - 1.0),
+            "drifted further than its range: {counts:?}"
+        );
+    }
+
+    #[test]
+    fn exponential_goes_sharp_as_the_index_rises_and_the_others_hold_pitch() {
+        // The analogue signature: modulating a VCO's pitch input raises its
+        // mean pitch. Phase and linear keep the carrier on 110.
+        let at = |ty, index| {
+            cycles(&render(
+                FmParams {
+                    ratio: 0.5,
+                    index,
+                    ty,
+                    ..FmParams::default()
+                },
+                48_000,
+            )) as i32
+        };
+        for ty in [FmType::Phase, FmType::Linear] {
+            assert!((at(ty, 3.0) - 110).abs() <= 2, "{ty:?} moved the pitch");
+        }
+        assert!(
+            // The mean of 2^(0.9 sin) is about 1.1, so 121 Hz.
+            at(FmType::Exponential, 3.0) > 116,
+            "exponential held its pitch at {}",
+            at(FmType::Exponential, 3.0)
+        );
     }
 
     #[test]
@@ -180,18 +392,23 @@ mod tests {
             ratio: 16.0,
             index: 20.0,
             feedback: 1.0,
+            drift: 1.0,
+            ty: FmType::Phase,
         };
-        for _ in 0..48_000 {
-            let v = fm.process(&p, 8.0);
-            assert!(v.is_finite() && v.abs() <= 1.0);
+        for ty in FmType::ALL {
+            for _ in 0..48_000 {
+                let v = fm.process(&FmParams { ty, ..p }, 8.0);
+                assert!(v.is_finite() && v.abs() <= 1.0);
+            }
         }
     }
 
     #[test]
     fn a_parameter_sweep_produces_no_discontinuity() {
         // A pure sine at 110 Hz moves at most about 0.015 a sample. Jerking
-        // every knob end to end each 256 samples must stay near that,
-        // because the smoothing has to turn a jump into a glide.
+        // every knob end to end each 256 samples, and switching the type,
+        // must stay near that: the smoothing turns a jump into a glide, and a
+        // switch carries the carrier's phase across.
         let mut fm = Fm::new(SR);
         let mut last = 0.0f32;
         let mut worst = 0.0f32;
@@ -202,6 +419,8 @@ mod tests {
                 ratio: if high { 1.0 } else { 1.5 },
                 index: if high { 0.0 } else { 1.0 },
                 feedback: if high { 0.0 } else { 0.2 },
+                drift: if high { 0.0 } else { 1.0 },
+                ty: FmType::ALL[block / 2 % 3],
             };
             for _ in 0..256 {
                 let v = fm.process(&p, 1.0);

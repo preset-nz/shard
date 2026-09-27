@@ -30,6 +30,7 @@ import {
   DRIVE_TYPES,
   denormalise,
   FILTER_TYPES,
+  FM_TYPES,
   format,
   normalise,
   type ParamInfo,
@@ -249,6 +250,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'grain.window': WINDOW_NAMES,
   'filter.type': FILTER_TYPES,
   'drive.type': DRIVE_TYPES,
+  'fm.type': FM_TYPES,
 };
 
 function fieldFor(p: ParamInfo) {

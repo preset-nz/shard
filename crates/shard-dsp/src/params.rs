@@ -329,6 +329,29 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
+    // Towards analogue (Georg, 2026-09-27). Each operator wanders off its
+    // pitch on its own; zero is the exact, clinical voice.
+    ParamDef {
+        id: "fm.drift",
+        name: "Drift",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    // Phase, linear or exponential: see `FmType`. Names from `FmType::NAMES`.
+    ParamDef {
+        id: "fm.type",
+        name: "Type",
+        min: 0.0,
+        max: 2.0,
+        default: 0.0,
+        taper: Taper::Stepped(3),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
     ParamDef {
         id: "ring.on",
         name: "Ring modulation",

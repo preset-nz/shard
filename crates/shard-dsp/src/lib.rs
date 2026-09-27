@@ -41,7 +41,7 @@ pub use drive::{Drive, DriveParams, DriveType};
 pub use engine::Engine;
 pub use envelope::EnvParams;
 pub use filter::{Filter, FilterParams, FilterType};
-pub use fm::{Fm, FmParams};
+pub use fm::{Fm, FmParams, FmType};
 pub use granular::{GrainParams, Granular, Window};
 pub use inspect::{GrainLog, GrainSpawn};
 pub use limiter::{Limiter, LimiterParams};
