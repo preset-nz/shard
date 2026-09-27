@@ -20,8 +20,10 @@ import { Slider } from '@/components/ui/slider';
  * Plain controls rather than a facets scope, as the LFO editor is, because an
  * envelope is not a row in the parameter table. The parent keys this by id.
  *
- * `compact` folds it to its name, attack and decay, for the Linked block under
- * a node; the name opens the full editor.
+ * `compact` is for the Linked block under a node: all four stages, without the
+ * name field, and the name opens the full editor. An LFO folds further, but
+ * an envelope's four stages are one shape and half of it is no use (Georg,
+ * 2026-09-27).
  */
 export function EnvelopeEditor({
   envelope,
@@ -97,8 +99,14 @@ export function EnvelopeEditor({
     </div>
   );
 
-  const attackRow = row(attack, envelope.attack, (v) => onChange({ ...envelope, attack: v }));
-  const decayRow = row(decay, envelope.decay, (v) => onChange({ ...envelope, decay: v }));
+  const stages = (
+    <>
+      {row(attack, envelope.attack, (v) => onChange({ ...envelope, attack: v }))}
+      {row(decay, envelope.decay, (v) => onChange({ ...envelope, decay: v }))}
+      {row(sustain, envelope.sustain, (v) => onChange({ ...envelope, sustain: v }))}
+      {row(release, envelope.release, (v) => onChange({ ...envelope, release: v }))}
+    </>
+  );
 
   if (compact) {
     return (
@@ -112,8 +120,7 @@ export function EnvelopeEditor({
         >
           ⌒ {envelope.name}
         </button>
-        {attackRow}
-        {decayRow}
+        {stages}
       </section>
     );
   }
@@ -137,10 +144,7 @@ export function EnvelopeEditor({
         }}
         className="h-7 text-xs"
       />
-      {attackRow}
-      {decayRow}
-      {row(sustain, envelope.sustain, (v) => onChange({ ...envelope, sustain: v }))}
-      {row(release, envelope.release, (v) => onChange({ ...envelope, release: v }))}
+      {stages}
       <p className="text-[11px] text-muted-foreground">
         Each step starts it, and it rests between steps.{' '}
         {linked === 0
