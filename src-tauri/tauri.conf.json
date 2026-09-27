@@ -44,7 +44,7 @@
         "contentTypes": ["nz.preset.shard.document"],
         "exportedType": {
           "identifier": "nz.preset.shard.document",
-          "conformsTo": ["public.json", "public.data"]
+          "conformsTo": ["public.data", "public.content"]
         }
       }
     ]
