@@ -32,7 +32,9 @@ import {
   materialWave,
   modulatorsOf,
   type ParamInfo,
+  type PatchPreview as PatchPreviewData,
   paramDefs,
+  patchPreview,
   mappings as readMappings,
   materials as readMaterials,
   meters as readMeters,
@@ -60,6 +62,7 @@ import { Meter } from '@/components/Meter';
 import { ModulatorTree } from '@/components/ModulatorTree';
 import { isNodeOn, NodeCard } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
+import { PatchPreview } from '@/components/PatchPreview';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { StepStrip } from '@/components/StepStrip';
 import { Waveform } from '@/components/Waveform';
@@ -316,6 +319,39 @@ export default function App() {
       clearInterval(id);
     };
   }, [defs]);
+
+  // The patch preview: re-rendered in Rust a moment after anything that
+  // could change the sound settles, and only the newest answer is drawn.
+  // Values are polled, so the key is what changed, not the poll.
+  const [preview, setPreview] = useState<PatchPreviewData | null>(null);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const previewSeq = useRef(0);
+  const previewKey = [
+    Object.entries(values)
+      .map(([k, v]) => `${k}=${v}`)
+      .join(','),
+    JSON.stringify(mod),
+    JSON.stringify(pool.wires),
+    pool.materials.map((m) => `${m.id}:${m.octave}:${m.trim_start}:${m.trim_end}`).join(','),
+  ].join('|');
+  // previewKey is the trigger: the command reads everything on the Rust side.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: see above
+  useEffect(() => {
+    if (!defs || mode !== 'soundscape') return;
+    const seq = ++previewSeq.current;
+    setPreviewBusy(true);
+    const t = setTimeout(() => {
+      void patchPreview()
+        .then((p) => {
+          if (seq === previewSeq.current) setPreview(p);
+        })
+        .catch((e) => setError(String(e)))
+        .finally(() => {
+          if (seq === previewSeq.current) setPreviewBusy(false);
+        });
+    }, 120);
+    return () => clearTimeout(t);
+  }, [defs, previewKey, mode]);
 
   // Refetch the curve only when an envelope control or Sample's material
   // actually moves. Polling it thirty times a second would be free but
@@ -910,6 +946,9 @@ export default function App() {
               if (g) void doAudition(g);
             }}
           />
+
+          {/* The patch only: the tracker's preview may be something else. */}
+          {mode === 'soundscape' && <PatchPreview preview={preview} busy={previewBusy} />}
 
           <div className="flex items-center gap-6 text-xs text-muted-foreground">
             <Meter peak={meter.peak} reduction={meter.reduction} />

@@ -345,6 +345,23 @@ export const loadPatch = (path: string) => invoke<LoadReport>('load_patch', { pa
 /** The envelope sampled across the trimmed window, for drawing. */
 export const envelopeCurve = () => invoke<number[]>('envelope_curve');
 
+/** One pass of the patch as sound scaping plays it, folded to peaks for drawing. */
+export interface PatchPreview {
+  /** Per column, lowest and highest across both channels. */
+  min: number[];
+  max: number[];
+  /** The zoom window, folded the same way. */
+  zoom_min: number[];
+  zoom_max: number[];
+  /** Where the zoom starts, 0 to 1 of the pass, and how long it is. */
+  zoom_at: number;
+  zoom_ms: number;
+  seconds: number;
+  /** The pass ran past the longest the preview draws, and was cut. */
+  capped: boolean;
+}
+export const patchPreview = () => invoke<PatchPreview>('patch_preview');
+
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
 

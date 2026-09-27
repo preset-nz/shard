@@ -48,6 +48,10 @@ static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 type SourceSlots = [Option<Vec<f32>>; 2];
 
 /// Shared between the UI thread and the audio thread.
+/// The live engine's grain pool. The preview renders with the same, or the
+/// cloud would steal voices differently from what is heard.
+const LIVE_MAX_GRAINS: usize = 256;
+
 pub struct Audio {
     bank: Arc<ParamBank>,
     /// The arrangement's values: its chain over the patch, the patch's
@@ -405,6 +409,141 @@ fn envelope_curve(state: tauri::State<'_, Audio>) -> Vec<f32> {
         release_ms: state.bank.get_by_id("env.release").unwrap_or(0.0),
     };
     env.curve(256, (hi - lo) as f32, state.sample_rate)
+}
+
+/// How many columns the patch preview's overview and zoom are drawn from.
+const PREVIEW_COLUMNS: usize = 900;
+const PREVIEW_ZOOM_COLUMNS: usize = 320;
+/// The zoom: a window this long, this far into the pass, where the timbre is
+/// rather than the attack.
+const PREVIEW_ZOOM_MS: f32 = 20.0;
+const PREVIEW_ZOOM_AT: f32 = 0.25;
+/// The longest pass the preview draws.
+const PREVIEW_MAX_S: f32 = 8.0;
+
+/// One pass of the patch as sound scaping plays it, folded for drawing.
+#[derive(Serialize)]
+pub struct PatchPreview {
+    /// Per column, the lowest and highest sample across both channels, so
+    /// grains panned apart do not cancel.
+    pub min: Vec<f32>,
+    pub max: Vec<f32>,
+    /// The zoom window, folded the same way. Peaks, not samples: the webview
+    /// never sees a sample.
+    pub zoom_min: Vec<f32>,
+    pub zoom_max: Vec<f32>,
+    /// Where the zoom starts, 0 to 1 of the pass.
+    pub zoom_at: f32,
+    pub zoom_ms: f32,
+    /// How long the drawn pass is, after any cut.
+    pub seconds: f32,
+    /// The pass ran past the longest the preview draws.
+    pub capped: bool,
+}
+
+/// Render one pass of the patch offline and fold it for drawing. The same
+/// values, materials, readings and modulation as the live engine, heard
+/// alone as sound scaping hears it. Async and off the main thread, because a
+/// dense cloud in a debug build takes a while.
+#[tauri::command]
+async fn patch_preview(state: tauri::State<'_, Audio>) -> Result<PatchPreview, String> {
+    let sr = state.sample_rate;
+    // Snapshots, so no lock is held while rendering.
+    let bank = ParamBank::new();
+    for i in 0..bank.defs().len() {
+        bank.set(i, state.bank.get(i));
+    }
+    let arr = ParamBank::for_table(arrangement::params());
+    for i in 0..arr.defs().len() {
+        arr.set(i, state.arrangement.get(i));
+    }
+    let (materials, readings) = {
+        let pool = state.materials.lock().expect("materials poisoned");
+        let decoded = state.decoded.lock().expect("decoded poisoned");
+        let material = |g: Generator| {
+            pool.wires
+                .get(g)
+                .and_then(|id| decoded.get(&id))
+                .map(Arc::clone)
+        };
+        (
+            Generator::ALL.map(material),
+            Generator::ALL.map(|g| Audio::reading_of(&pool, &decoded, g)),
+        )
+    };
+    let mods = state
+        .modulation
+        .lock()
+        .expect("modulation poisoned")
+        .build()
+        .0;
+
+    tauri::async_runtime::spawn_blocking(move || {
+        let empty: &[f32] = &[];
+        let samples = |i: usize| materials[i].as_ref().map_or(empty, |l| &l.samples[..]);
+        let preview = shard_dsp::preview::render_pass(shard_dsp::preview::PreviewInput {
+            sample_rate: sr,
+            max_grains: LIVE_MAX_GRAINS,
+            bank: &bank,
+            arrangement: &arr,
+            player: samples(Generator::Player.index()),
+            player_reading: readings[Generator::Player.index()],
+            grain: samples(Generator::Grain.index()),
+            grain_reading: readings[Generator::Grain.index()],
+            mods,
+            max_seconds: PREVIEW_MAX_S,
+        });
+        fold_preview(&preview.samples, sr, preview.capped)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+/// Min and max per column across both channels of interleaved stereo.
+/// Silence, not garbage, when there is nothing to fold.
+fn fold_columns(samples: &[f32], columns: usize) -> (Vec<f32>, Vec<f32>) {
+    let frames = samples.len() / 2;
+    let mut min = vec![0.0f32; columns];
+    let mut max = vec![0.0f32; columns];
+    if frames == 0 {
+        return (min, max);
+    }
+    for c in 0..columns {
+        let a = (c * frames / columns).min(frames - 1);
+        let b = ((c + 1) * frames / columns).clamp(a + 1, frames);
+        let (lo, hi) = samples[a * 2..b * 2]
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), s| (lo.min(*s), hi.max(*s)));
+        min[c] = lo;
+        max[c] = hi;
+    }
+    (min, max)
+}
+
+/// The overview, and the zoom window a quarter of the way in.
+fn fold_preview(samples: &[f32], sr: f32, capped: bool) -> PatchPreview {
+    let frames = samples.len() / 2;
+    let (min, max) = fold_columns(samples, PREVIEW_COLUMNS);
+    let zoom_len = ((PREVIEW_ZOOM_MS * 0.001 * sr) as usize).min(frames);
+    let start = ((frames as f32 * PREVIEW_ZOOM_AT) as usize).min(frames - zoom_len);
+    let (zoom_min, zoom_max) = fold_columns(
+        &samples[start * 2..(start + zoom_len) * 2],
+        PREVIEW_ZOOM_COLUMNS,
+    );
+    PatchPreview {
+        min,
+        max,
+        zoom_min,
+        zoom_max,
+        zoom_at: if frames > 0 {
+            start as f32 / frames as f32
+        } else {
+            0.0
+        },
+        zoom_ms: zoom_len as f32 / sr * 1000.0,
+        seconds: frames as f32 / sr,
+        capped,
+    }
 }
 
 /// Write the document to a `.shard` file. A few kilobytes of readable JSON:
@@ -1521,7 +1660,7 @@ fn build_audio() -> Result<Audio, String> {
                 let sample_rate = config.sample_rate().0 as f32;
                 let channels = config.channels().max(1) as usize;
 
-                let mut engine = Engine::new(sample_rate, 256);
+                let mut engine = Engine::new(sample_rate, LIVE_MAX_GRAINS);
                 engine.set_source(source::startup_drone(sample_rate).samples);
                 let log = engine.grain_log();
                 let mut scratch = vec![0.0f32; 8192];
@@ -1795,6 +1934,7 @@ pub fn run() {
             tracker,
             set_tracker,
             envelope_curve,
+            patch_preview,
             save_patch,
             load_patch,
             material_wave,
@@ -2114,5 +2254,20 @@ mod tests {
                 "LinkRecord lost `{key}`"
             );
         }
+    }
+
+    #[test]
+    fn the_preview_folds_both_channels_without_cancelling() {
+        // Hard left and hard right at once: an average would draw silence.
+        let stereo: Vec<f32> = (0..1_000).flat_map(|_| [0.8, -0.6]).collect();
+        let (min, max) = fold_columns(&stereo, 10);
+        assert!(min.iter().all(|v| *v == -0.6) && max.iter().all(|v| *v == 0.8));
+        // Nothing to fold is silence, and more columns than frames is fine.
+        assert_eq!(fold_columns(&[], 4), (vec![0.0; 4], vec![0.0; 4]));
+        let (lo, _) = fold_columns(&[0.5, 0.5], 4);
+        assert_eq!(lo, vec![0.5; 4]);
+        let p = fold_preview(&stereo, 48_000.0, false);
+        assert_eq!(p.zoom_min.len(), PREVIEW_ZOOM_COLUMNS);
+        assert!(p.seconds > 0.0 && !p.capped);
     }
 }

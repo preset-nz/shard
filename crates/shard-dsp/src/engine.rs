@@ -558,6 +558,16 @@ impl Engine {
         self.playing = playing;
     }
 
+    /// Start the pass again from the top, with nothing of the last one left:
+    /// no tail fading out and no grains in flight. Smoothers, fades, LFOs and
+    /// filter state carry on. For an offline render, which settles the patch
+    /// first and then captures one clean pass; see `preview`.
+    pub fn restart_pass(&mut self) {
+        self.player.rewind();
+        self.tail_left = 0.0;
+        self.granular.clear();
+    }
+
     /// Where plain playback has reached, 0 to 1 across the *whole* source, so
     /// the drawn playhead lines up with the drawn waveform rather than with
     /// the trimmed window.

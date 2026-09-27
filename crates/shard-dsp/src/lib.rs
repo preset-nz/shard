@@ -29,6 +29,7 @@ pub mod limiter;
 pub mod modulation;
 pub mod params;
 pub mod player;
+pub mod preview;
 pub mod ringmod;
 pub mod rng;
 pub mod rt;
