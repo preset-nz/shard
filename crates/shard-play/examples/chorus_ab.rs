@@ -1,5 +1,8 @@
 //! Renders the chorus's voicings side by side so they can be listened to:
-//! `cargo run --release -p shard-play --example chorus_ab -- <out dir>`.
+//! `cargo run --release -p shard-play --example chorus_ab -- <out dir> [voice.wav]`.
+//!
+//! Given a WAV as well, it also renders that, mixed to mono, through the
+//! voicings meant for voices, at the file's own sample rate.
 //!
 //! The source is a mono "ah": a sawtooth chord (A2, E3, A3, C#4, E4, B4) held
 //! through three formant resonators, so there is plenty of harmonic content
@@ -68,15 +71,42 @@ fn source() -> Vec<f32> {
     out
 }
 
+/// A WAV as mono at half scale, and its sample rate.
+fn load(path: &str) -> (Vec<f32>, f32) {
+    let mut r = hound::WavReader::open(path).expect("a readable WAV");
+    let spec = r.spec();
+    let raw: Vec<f32> = match spec.sample_format {
+        hound::SampleFormat::Float => r.samples::<f32>().map(Result::unwrap).collect(),
+        hound::SampleFormat::Int => {
+            let full = (1i64 << (spec.bits_per_sample - 1)) as f32;
+            r.samples::<i32>()
+                .map(|s| s.unwrap() as f32 / full)
+                .collect()
+        }
+    };
+    let ch = spec.channels as usize;
+    let mut mono: Vec<f32> = raw
+        .chunks(ch)
+        .map(|f| f.iter().sum::<f32>() / ch as f32)
+        .collect();
+    let peak = mono.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+    mono.iter_mut().for_each(|x| *x *= 0.5 / peak.max(1e-9));
+    (mono, spec.sample_rate as f32)
+}
+
 fn render(dir: &str, name: &str, src: &[f32], p: Option<ChorusParams>) {
+    render_at(dir, name, src, SR, p);
+}
+
+fn render_at(dir: &str, name: &str, src: &[f32], sr: f32, p: Option<ChorusParams>) {
     let spec = hound::WavSpec {
         channels: 2,
-        sample_rate: SR as u32,
+        sample_rate: sr as u32,
         bits_per_sample: 16,
         sample_format: hound::SampleFormat::Int,
     };
     let mut w = hound::WavWriter::create(format!("{dir}/{name}.wav"), spec).unwrap();
-    let mut c = Chorus::new(SR);
+    let mut c = Chorus::new(sr);
     let mut peak = 0.0f32;
     let started = std::time::Instant::now();
     let out: Vec<(f32, f32)> = src
@@ -95,7 +125,8 @@ fn render(dir: &str, name: &str, src: &[f32], p: Option<ChorusParams>) {
         }
     }
     w.finalize().unwrap();
-    println!("{name}: peak {peak:.2}, {took:?} for {SECONDS} s");
+    let seconds = src.len() as f32 / sr;
+    println!("{name}: peak {peak:.2}, {took:?} for {seconds:.1} s");
 }
 
 fn main() {
@@ -163,5 +194,42 @@ fn main() {
             voices: 8.0,
             ..at(ChorusType::Ensemble, 0.75, 0.4, 1.0, 4.0)
         }),
+    );
+    let choir = |mix, rate, depth, voices| ChorusParams {
+        voices,
+        ..at(ChorusType::Choir, mix, rate, depth, 0.0)
+    };
+    render(
+        &dir,
+        "9-choir-mix50-rate0.6-depth70-voices6",
+        &src,
+        Some(choir(0.5, 0.6, 0.7, 6.0)),
+    );
+
+    let Some(path) = std::env::args().nth(2) else {
+        return;
+    };
+    let (voice, sr) = load(&path);
+    render_at(&dir, "voice-1-dry", &voice, sr, None);
+    render_at(
+        &dir,
+        "voice-2-chorus-mix50-rate0.6-depth50-voices4",
+        &voice,
+        sr,
+        Some(at(ChorusType::Chorus, 0.5, 0.6, 0.5, 0.0)),
+    );
+    render_at(
+        &dir,
+        "voice-3-choir-mix50-rate0.6-depth70-voices6",
+        &voice,
+        sr,
+        Some(choir(0.5, 0.6, 0.7, 6.0)),
+    );
+    render_at(
+        &dir,
+        "voice-4-choir-big-mix60-rate0.8-depth100-voices8",
+        &voice,
+        sr,
+        Some(choir(0.6, 0.8, 1.0, 8.0)),
     );
 }

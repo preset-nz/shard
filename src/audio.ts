@@ -404,7 +404,7 @@ export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
 /** `DriveType::NAMES`, in stepped order. */
 export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
 /** `ChorusType::NAMES`, in stepped order. */
-export const CHORUS_TYPES = ['Chorus', 'Ensemble'];
+export const CHORUS_TYPES = ['Chorus', 'Ensemble', 'Choir'];
 /** `FmType::NAMES`, in stepped order. */
 export const FM_TYPES = ['Phase', 'Linear', 'Exponential'];
 /** `note::Length::NAMES`, in stepped order: what sets a note's length. */
