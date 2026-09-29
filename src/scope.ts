@@ -265,9 +265,18 @@ export function rowsOf(defs: ParamInfo[], node: NodeInfo): ParamInfo[] {
   return defs.filter((p) => node.owns(p.id) && p.id !== sw);
 }
 
-/** A two-step row from 0 to 1 is a yes or no, not a choice of two. */
+/**
+ * A two-step row from 0 to 1 is a yes or no, not a choice of two, unless its
+ * steps have names: `chorus.type` is Chorus or Ensemble, not on or off.
+ */
 export function isSwitch(p: ParamInfo): boolean {
-  return p.taper === 'stepped' && p.steps === 2 && p.min === 0 && p.max === 1;
+  return (
+    p.taper === 'stepped' &&
+    p.steps === 2 &&
+    p.min === 0 &&
+    p.max === 1 &&
+    !(p.id.replace(ARRANGEMENT_PREFIX, '') in STEP_NAMES)
+  );
 }
 
 /**
