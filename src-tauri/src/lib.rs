@@ -281,6 +281,7 @@ fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
                 Unit::Semitones => "st",
                 Unit::Percent => "%",
                 Unit::Octaves => "oct",
+                Unit::Db => "dB",
             },
             smooth_ms: p.smooth_ms,
         })

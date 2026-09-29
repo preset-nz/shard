@@ -38,6 +38,7 @@ pub enum Unit {
     Semitones,
     Percent,
     Octaves,
+    Db,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -407,6 +408,60 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Hz,
         smooth_ms: 20.0,
     },
+    // The chorus, last in the process lane (Georg, 2026-09-29): three swept
+    // copies a channel, the right's LFOs between the left's, so it widens as
+    // well as thickens. Rate and depth stop where it would turn to warble
+    // (`chorus::MAX_RATE_HZ`). EQ is the Boss CH-1's: a shelf on the copies.
+    ParamDef {
+        id: "chorus.on",
+        name: "Chorus",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "chorus.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.rate",
+        name: "Rate",
+        min: 0.05,
+        max: crate::chorus::MAX_RATE_HZ,
+        default: 0.6,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.depth",
+        name: "Depth",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.eq",
+        name: "EQ",
+        min: -crate::chorus::EQ_RANGE_DB,
+        max: crate::chorus::EQ_RANGE_DB,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::Db,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "env.on",
         name: "Envelope",
@@ -676,51 +731,6 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Ms,
         smooth_ms: 0.0,
     },
-    // The master gain, after every generator and effect. Unity is bit-exact.
-    // The chorus, on the master before the filter (Georg, 2026-09-29): two
-    // swept delays, one a channel, so it also widens. It follows the envelope,
-    // so a note's tail is chorused too, and it sits before the filter so the
-    // filter can take the top off the wet signal.
-    ParamDef {
-        id: "chorus.on",
-        name: "Chorus",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "chorus.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "chorus.rate",
-        name: "Rate",
-        min: 0.05,
-        max: 10.0,
-        default: 0.8,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "chorus.depth",
-        name: "Depth",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
     // The filter, on the master after every effect (Georg, 2026-09-14). What
     // takes the harmonics away that crush and ring add. Type is stepped, and
     // the UI names its steps from `FilterType::NAMES`.
@@ -774,6 +784,7 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // The master gain, after every generator and effect. Unity is bit-exact.
     ParamDef {
         id: "amp.gain",
         name: "Gain",

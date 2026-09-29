@@ -1,9 +1,9 @@
-//! The effect chain: drive, crusher, ring modulator, then chorus, filter and gain.
+//! The effect chain: drive, crusher, ring modulator, chorus, then filter and gain.
 //!
 //! One type, so the patch and the level above it can run the same effects
 //! (`design/arrangement-layer.md`). It comes in two halves because the patch
 //! puts the tape's level and its envelope between them: `front` is drive,
-//! crush and ring, `back` is the chorus, the filter and the output gain.
+//! crush, ring and chorus, `back` is the filter and the output gain.
 //!
 //! Each effect has a switch that fades its mix over the same 10 ms as every
 //! other section, landing on an exact zero, so an effect that is off is
@@ -41,6 +41,7 @@ pub(crate) struct ChainSlots {
     pub chorus_mix: usize,
     pub chorus_rate: usize,
     pub chorus_depth: usize,
+    pub chorus_eq: usize,
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -70,6 +71,7 @@ impl ChainSlots {
             chorus_mix: at("chorus.mix"),
             chorus_rate: at("chorus.rate"),
             chorus_depth: at("chorus.depth"),
+            chorus_eq: at("chorus.eq"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -125,6 +127,7 @@ impl ChainParams {
             chorus: ChorusParams {
                 rate: value(s.chorus_rate),
                 depth: value(s.chorus_depth),
+                eq_db: value(s.chorus_eq),
                 mix: value(s.chorus_mix),
             },
             chorus_on: gate(s.chorus_on),
@@ -192,7 +195,7 @@ impl Chain {
         }
     }
 
-    /// Drive, crush, ring, for one frame. `crush_env` scales the crusher's
+    /// Drive, crush, ring, chorus, for one frame. `crush_env` scales the crusher's
     /// mix: the patch's crush envelope, or exactly one where there is none.
     #[inline]
     pub fn front(&mut self, l: f32, r: f32, p: &ChainParams, crush_env: f32) -> (f32, f32) {
@@ -224,21 +227,23 @@ impl Chain {
             mix: p.ring.mix * ring_on,
             ..p.ring
         };
-        self.ringmod.process(l, r, &ring)
-    }
+        let (l, r) = self.ringmod.process(l, r, &ring);
 
-    /// The chorus, the filter, then the output gain, for one frame. Switched
-    /// off, each effect's mix lands on an exact zero; unity gain is exact, since the
-    /// smoother starts and rests on it.
-    #[inline]
-    pub fn back(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
+        // Last in the lane (Georg, 2026-09-29), so it thickens whatever the
+        // effects before it made.
         let chorus_on = self.fades.chorus.process(p.chorus_on);
         let chorus = ChorusParams {
             mix: p.chorus.mix * chorus_on,
             ..p.chorus
         };
-        let (l, r) = self.chorus.process(l, r, &chorus);
+        self.chorus.process(l, r, &chorus)
+    }
 
+    /// The filter, then the output gain, for one frame. Switched off, the
+    /// filter's mix lands on an exact zero; unity gain is exact, since the
+    /// smoother starts and rests on it.
+    #[inline]
+    pub fn back(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
         let filter_on = self.fades.filter.process(p.filter_on);
         let filter = FilterParams {
             mix: p.filter.mix * filter_on,

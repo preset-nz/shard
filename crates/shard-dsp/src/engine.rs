@@ -1078,12 +1078,12 @@ impl Engine {
             };
             let (l, r) = (l * e, r * e);
 
-            // The filter, on the master: after every generator and effect,
-            // then the master gain.
+            // The filter, on the master: after every generator, effect and
+            // the envelope, then the master gain.
             let (l, r) = self.fx.back(l, r, &fx);
 
             // Into the arrangement: the patch's fader, then the arrangement's
-            // own drive, crush, ring, filter and output. It has no pass, so
+            // own drive, crush, ring, chorus, filter and output. It has no pass, so
             // its crusher has no envelope.
             let t = self.track_gain.process(arr.track_gain);
             let (l, r) = self.arr_fx.front(l * t, r * t, &arr.fx, 1.0);

@@ -69,7 +69,7 @@ the `.shard` document, and reach the engine through `steps::StepBank` and
 different patch does not belong in `params.rs`.
 
 **The arrangement has its own table.** Its chain over the patch (drive,
-crush, ring, filter, output), the patch's fader and the limiter live in
+crush, ring, chorus, filter, output), the patch's fader and the limiter live in
 `shard_dsp::arrangement`, ids under `arrangement.`. Its effect rows are
 borrowed from `params.rs` so the two cannot drift. It reaches the engine
 through `Engine::set_arrangement`, once a block, and sound scaping hears the

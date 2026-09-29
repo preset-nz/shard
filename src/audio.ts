@@ -209,6 +209,7 @@ export function format(p: ParamInfo, v: number): string {
   if (p.unit === 'Hz') return v >= 100 ? `${Math.round(v)} Hz` : `${v.toFixed(1)} Hz`;
   if (p.unit === 'ms') return v >= 100 ? `${Math.round(v)} ms` : `${v.toFixed(1)} ms`;
   if (p.unit === 'st') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`;
+  if (p.unit === 'dB') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} dB`;
   return v.toFixed(2);
 }
 
