@@ -677,6 +677,50 @@ pub const PARAMS: &[ParamDef] = &[
         smooth_ms: 0.0,
     },
     // The master gain, after every generator and effect. Unity is bit-exact.
+    // The chorus, on the master before the filter (Georg, 2026-09-29): two
+    // swept delays, one a channel, so it also widens. It follows the envelope,
+    // so a note's tail is chorused too, and it sits before the filter so the
+    // filter can take the top off the wet signal.
+    ParamDef {
+        id: "chorus.on",
+        name: "Chorus",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "chorus.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.rate",
+        name: "Rate",
+        min: 0.05,
+        max: 10.0,
+        default: 0.8,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.depth",
+        name: "Depth",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
     // The filter, on the master after every effect (Georg, 2026-09-14). What
     // takes the harmonics away that crush and ring add. Type is stepped, and
     // the UI names its steps from `FilterType::NAMES`.

@@ -17,6 +17,7 @@
 
 pub mod arrangement;
 pub mod chain;
+pub mod chorus;
 pub mod crush;
 pub mod drive;
 pub mod engine;
@@ -38,6 +39,7 @@ pub mod smooth;
 pub mod sources;
 pub mod steps;
 
+pub use chorus::{Chorus, ChorusParams};
 pub use crush::{Crush, CrushParams};
 pub use drive::{Drive, DriveParams, DriveType};
 pub use engine::Engine;

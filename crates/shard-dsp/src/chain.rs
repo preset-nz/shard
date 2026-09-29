@@ -1,14 +1,15 @@
-//! The effect chain: drive, crusher, ring modulator, then filter and gain.
+//! The effect chain: drive, crusher, ring modulator, then chorus, filter and gain.
 //!
 //! One type, so the patch and the level above it can run the same effects
 //! (`design/arrangement-layer.md`). It comes in two halves because the patch
 //! puts the tape's level and its envelope between them: `front` is drive,
-//! crush and ring, `back` is the filter and the output gain.
+//! crush and ring, `back` is the chorus, the filter and the output gain.
 //!
 //! Each effect has a switch that fades its mix over the same 10 ms as every
 //! other section, landing on an exact zero, so an effect that is off is
 //! bit-exact with its mix at zero.
 
+use crate::chorus::{Chorus, ChorusParams};
 use crate::crush::{Crush, CrushParams};
 use crate::drive::{Drive, DriveParams, DriveType};
 use crate::filter::{Filter, FilterParams, FilterType};
@@ -36,6 +37,10 @@ pub(crate) struct ChainSlots {
     pub ring_on: usize,
     pub ring_mix: usize,
     pub ring_freq: usize,
+    pub chorus_on: usize,
+    pub chorus_mix: usize,
+    pub chorus_rate: usize,
+    pub chorus_depth: usize,
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -61,6 +66,10 @@ impl ChainSlots {
             ring_on: at("ring.on"),
             ring_mix: at("ring.mix"),
             ring_freq: at("ring.freq"),
+            chorus_on: at("chorus.on"),
+            chorus_mix: at("chorus.mix"),
+            chorus_rate: at("chorus.rate"),
+            chorus_depth: at("chorus.depth"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -83,6 +92,8 @@ pub(crate) struct ChainParams {
     pub crush_on: f32,
     pub ring: RingModParams,
     pub ring_on: f32,
+    pub chorus: ChorusParams,
+    pub chorus_on: f32,
     pub filter: FilterParams,
     pub filter_on: f32,
     pub gain: f32,
@@ -111,6 +122,12 @@ impl ChainParams {
                 mix: value(s.ring_mix),
             },
             ring_on: gate(s.ring_on),
+            chorus: ChorusParams {
+                rate: value(s.chorus_rate),
+                depth: value(s.chorus_depth),
+                mix: value(s.chorus_mix),
+            },
+            chorus_on: gate(s.chorus_on),
             filter: FilterParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
@@ -127,6 +144,7 @@ struct ChainFades {
     drive: Ramp,
     crush: Ramp,
     ring: Ramp,
+    chorus: Ramp,
     filter: Ramp,
 }
 
@@ -134,6 +152,7 @@ pub(crate) struct Chain {
     drive: Drive,
     crush: Crush,
     ringmod: RingMod,
+    chorus: Chorus,
     filter: Filter,
     fades: ChainFades,
     crush_mix: OnePole,
@@ -159,11 +178,13 @@ impl Chain {
             drive: Drive::new(sample_rate),
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
+            chorus: Chorus::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
                 drive: ramp(s.drive_on),
                 crush: ramp(s.crush_on),
                 ring: ramp(s.ring_on),
+                chorus: ramp(s.chorus_on),
                 filter: ramp(s.filter_on),
             },
             crush_mix: smoother(s.crush_mix),
@@ -206,11 +227,18 @@ impl Chain {
         self.ringmod.process(l, r, &ring)
     }
 
-    /// The filter, then the output gain, for one frame. Switched off, the
-    /// filter's mix lands on an exact zero; unity gain is exact, since the
+    /// The chorus, the filter, then the output gain, for one frame. Switched
+    /// off, each effect's mix lands on an exact zero; unity gain is exact, since the
     /// smoother starts and rests on it.
     #[inline]
     pub fn back(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
+        let chorus_on = self.fades.chorus.process(p.chorus_on);
+        let chorus = ChorusParams {
+            mix: p.chorus.mix * chorus_on,
+            ..p.chorus
+        };
+        let (l, r) = self.chorus.process(l, r, &chorus);
+
         let filter_on = self.fades.filter.process(p.filter_on);
         let filter = FilterParams {
             mix: p.filter.mix * filter_on,

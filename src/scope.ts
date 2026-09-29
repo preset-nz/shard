@@ -173,6 +173,16 @@ export const NODES: NodeInfo[] = [
     table: 'env',
     owns: under('env'),
   },
+  // On the master, before the filter (Georg, 2026-09-29): swept delays that
+  // thicken and widen, so the filter can still take the top off the wet.
+  {
+    layer: 'patch',
+    id: 'chorus',
+    label: 'Chorus',
+    lane: 'master',
+    table: 'chorus',
+    owns: under('chorus'),
+  },
   // On the master, after every effect (Georg, 2026-09-14): what takes away
   // the harmonics crush and ring add. An EQ, if one comes, sits here too.
   {
@@ -211,6 +221,7 @@ export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('drive', 'Drive', 'process'),
   arrangementNode('crush', 'Crush', 'process'),
   arrangementNode('ring', 'Ring modulation', 'process'),
+  arrangementNode('chorus', 'Chorus', 'master'),
   arrangementNode('filter', 'Filter', 'master'),
   arrangementNode('amp', 'Output', 'master'),
 ];
