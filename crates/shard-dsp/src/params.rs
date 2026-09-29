@@ -466,6 +466,18 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
+    // Voices is continuous: the next copy fades in as it turns, so it sweeps
+    // and follows an LFO without a click. Few beat, many blur into a wall.
+    ParamDef {
+        id: "chorus.voices",
+        name: "Voices",
+        min: 1.0,
+        max: crate::chorus::MAX_VOICES as f32,
+        default: 4.0,
+        taper: Taper::Linear,
+        unit: Unit::None,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "chorus.eq",
         name: "EQ",

@@ -64,6 +64,7 @@ const ROWS: &[Row] = &[
     Row::Borrowed("arrangement.chorus.type"),
     Row::Borrowed("arrangement.chorus.rate"),
     Row::Borrowed("arrangement.chorus.depth"),
+    Row::Borrowed("arrangement.chorus.voices"),
     Row::Borrowed("arrangement.chorus.eq"),
     Row::Borrowed("arrangement.filter.on"),
     Row::Borrowed("arrangement.filter.mix"),

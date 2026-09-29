@@ -1,11 +1,16 @@
 //! Chorus.
 //!
-//! A short delay line a channel, read at three points a couple of
-//! milliseconds apart. Each read point has its own LFO sweeping it back and
-//! forth, a third of a turn from the next.
-//! A moving read point bends the pitch of its copy slightly, and three copies
+//! A short delay line a channel, read at up to eight points a millisecond or
+//! two apart. Each read point has its own LFO sweeping it back and forth. A
+//! moving read point bends the pitch of its copy slightly, and copies
 //! drifting sharp and flat against the original read as an ensemble rather
-//! than one voice. The right channel's LFOs sit a sixth of a turn from the
+//! than one voice.
+//!
+//! `voices` sets how many, and it is continuous: the next voice fades in as
+//! the control turns, so it sweeps without a click and an LFO can drive it.
+//! One or two voices beat audibly; six or eight blur the beating into a
+//! smooth wall. Voices are added in an order that keeps the ones already
+//! sounding where they were, so turning it up only adds. The right channel's LFOs sit a sixth of a turn from the
 //! left's, halfway between them, so the two sides never move together and a
 //! mono source comes out wide.
 //!
@@ -18,7 +23,7 @@
 //! the copies, down darkens them, and at zero it is flat.
 //!
 //! Ensemble is the other voicing, after the string machines (Solina, ARP,
-//! Eminent): four copies a side, spread from 9 to 25 ms, each swept by a slow
+//! Eminent): copies spread from 9 to 26 ms, each swept by a slow
 //! LFO for the swirl and a small fast one, about six times a second, for the
 //! shimmer. The two sides read the mono sum rather than their own channel, and
 //! the right sweeps against the left, so a centred source is pulled apart into
@@ -31,27 +36,25 @@
 
 use crate::smooth::OnePole;
 
-/// The centre of the middle voice's sweep, in milliseconds. Long enough to
-/// separate the copies from the dry signal, short enough not to be an echo.
-const CENTRE_MS: f32 = 10.0;
-/// How far apart the voices' centres sit. Apart, they are three different
-/// copies even at zero depth, so their equal-power sum holds its level.
-const SPREAD_MS: f32 = 2.0;
+/// The most voices a side, and the top of `chorus.voices`.
+pub const MAX_VOICES: usize = 8;
+/// Where the plain chorus's copies sit, in milliseconds, in the order they
+/// come in. Long enough to separate from the dry signal, short enough not to
+/// be an echo. All different, so the copies are different even at zero depth
+/// and their equal-power sum holds its level.
+const CENTRES_MS: [f32; MAX_VOICES] = [8.0, 10.0, 12.0, 9.0, 11.0, 13.0, 7.0, 14.0];
 /// The widest a read point strays from the centre, at full depth.
 const SWEEP_MS: f32 = 3.0;
 /// The fastest LFO. `chorus.rate` stops here, and a test holds the pitch
 /// swing this allows at full depth to under a couple of semitones.
 pub const MAX_RATE_HZ: f32 = 5.0;
-/// Voices a channel, in the plain chorus.
-const VOICES: usize = 3;
-
-/// Voices a side in the ensemble. Four a side is eight reads a frame, which
-/// the block timer shows is cheap next to the drive's oversampling.
-const ENS_VOICES: usize = 4;
-/// Where the ensemble's copies sit, in milliseconds: the left's, then the
-/// right's, interleaved between them so no two sides share a delay.
-const ENS_CENTRES_MS: [[f32; ENS_VOICES]; 2] =
-    [[9.0, 13.5, 18.0, 22.5], [11.25, 15.75, 20.25, 24.75]];
+/// Where the ensemble's copies sit, in milliseconds, in the order they come
+/// in: the left's, then the right's, interleaved so no two sides share a
+/// delay. The first four a side span the range; the next four fill between.
+const ENS_CENTRES_MS: [[f32; MAX_VOICES]; 2] = [
+    [9.0, 13.5, 18.0, 22.5, 10.1, 14.6, 19.1, 23.6],
+    [11.25, 15.75, 20.25, 24.75, 12.4, 16.9, 21.4, 25.9],
+];
 /// The slow sweep at full depth. The swirl. Kept under the plain chorus's
 /// three so the slow component alone stays a chorus's pitch swing.
 pub const ENS_SLOW_MS: f32 = 2.5;
@@ -67,7 +70,7 @@ pub const ENS_FAST_HZ: f32 = 6.3;
 const ENS_HIGHPASS_HZ: f32 = 240.0;
 /// Room for the latest ensemble copy plus both sweeps, and a margin for the
 /// interpolator's four points.
-const MAX_MS: f32 = ENS_CENTRES_MS[1][ENS_VOICES - 1] + ENS_SLOW_MS + ENS_FAST_MS + 2.0;
+const MAX_MS: f32 = ENS_CENTRES_MS[1][MAX_VOICES - 1] + ENS_SLOW_MS + ENS_FAST_MS + 2.0;
 /// Frame width of the line: left, right and their mono sum.
 const STRIDE: usize = 3;
 /// The mono sum's slot in a frame.
@@ -79,10 +82,10 @@ pub const EQ_RANGE_DB: f32 = 12.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ChorusType {
-    /// Three copies a side, each channel from its own input. The classic.
+    /// Copies close together, each channel from its own input. The classic.
     Chorus,
-    /// Four copies a side from the mono sum, slow swirl plus fast shimmer,
-    /// the low end left dry. Angelic.
+    /// Copies spread wider, from the mono sum, slow swirl plus fast shimmer,
+    /// the low end left dry.
     Ensemble,
 }
 
@@ -103,6 +106,8 @@ pub struct ChorusParams {
     pub rate: f32,
     /// How far the read points sweep, 0 to 1.
     pub depth: f32,
+    /// How many copies a side, 1 to `MAX_VOICES`, fractional between.
+    pub voices: f32,
     /// Shelf on the wet signal in decibels, ±`EQ_RANGE_DB`. Zero is flat.
     pub eq_db: f32,
     /// Dry to wet, 0 to 1.
@@ -115,6 +120,7 @@ impl Default for ChorusParams {
             kind: ChorusType::Chorus,
             rate: 0.6,
             depth: 0.5,
+            voices: 4.0,
             eq_db: 0.0,
             mix: 0.0,
         }
@@ -141,6 +147,7 @@ pub struct Chorus {
     lows_coef: f32,
     rate: OnePole,
     depth: OnePole,
+    voices: OnePole,
     eq_gain: OnePole,
     mix: OnePole,
 }
@@ -172,6 +179,8 @@ impl Chorus {
             // pitch jump. Slower than the house 20 ms for that reason.
             rate: smoother(50.0, d.rate),
             depth: smoother(50.0, d.depth),
+            // A voice fading in is a level change, not a pitch one: 20 ms.
+            voices: smoother(20.0, d.voices),
             eq_gain: smoother(20.0, 1.0),
             mix: smoother(20.0, d.mix),
         }
@@ -196,44 +205,66 @@ impl Chorus {
         ((c3 * t + c2) * t + c1) * t + x0
     }
 
-    /// One channel's voices, summed at equal power. `offset` is where its
-    /// first LFO sits in the turn.
+    /// How loud each voice is, and the equal-power sum's correction: whole
+    /// voices at one, the next fading in, the rest silent.
     #[inline]
-    fn voices(&self, ch: usize, offset: f32, sweep: f32) -> f32 {
+    fn weights(voices: f32) -> ([f32; MAX_VOICES], f32) {
+        let mut w = [0.0; MAX_VOICES];
+        let mut power = 0.0;
+        for (v, w) in w.iter_mut().enumerate() {
+            *w = (voices - v as f32).clamp(0.0, 1.0);
+            power += *w * *w;
+        }
+        (w, 1.0 / power.max(1.0).sqrt())
+    }
+
+    /// One channel's plain voices, summed at equal power. `offset` is where
+    /// its LFOs sit in the turn. The first three are a third of a turn apart;
+    /// each later three sit a ninth further on, between them.
+    #[inline]
+    fn voices(&self, ch: usize, offset: f32, sweep: f32, w: &[f32; MAX_VOICES]) -> f32 {
         let ms = 0.001 * self.sample_rate;
         let mut sum = 0.0;
-        for v in 0..VOICES {
-            let turn = self.phase + offset + v as f32 / VOICES as f32;
+        for (v, (&w, centre)) in w.iter().zip(CENTRES_MS).enumerate() {
+            if w == 0.0 {
+                break;
+            }
+            let turn = self.phase + offset + (v % 3) as f32 / 3.0 + (v / 3) as f32 / 9.0;
             let lfo = (core::f32::consts::TAU * turn).sin();
-            let centre = (CENTRE_MS + (v as f32 - 1.0) * SPREAD_MS) * ms;
-            sum += self.tap(ch, centre + sweep * lfo);
+            sum += w * self.tap(ch, centre * ms + sweep * lfo);
         }
-        sum / (VOICES as f32).sqrt()
+        sum
     }
 
     /// One side of the ensemble, from the mono sum. Each copy's read point is
-    /// its centre plus the slow sweep and the fast one; the slow LFOs sit a
-    /// quarter turn apart and the right's a half turn from the left's, so the
-    /// sides sweep against each other. The fast LFOs are spread by an
-    /// irrational-ish step so no two copies flutter together.
+    /// its centre plus the slow sweep and the fast one. The first four slow
+    /// LFOs sit a quarter turn apart, the next four an eighth past them, and
+    /// the right's a half turn from the left's, so the sides sweep against
+    /// each other. The fast LFOs are spread by an irrational-ish step so no
+    /// two copies flutter together.
     #[inline]
-    fn ensemble_side(&self, side: usize, slow: f32, fast: f32) -> f32 {
+    fn ensemble_side(&self, side: usize, slow: f32, fast: f32, w: &[f32; MAX_VOICES]) -> f32 {
         let ms = 0.001 * self.sample_rate;
         let mut sum = 0.0;
-        for (v, centre) in ENS_CENTRES_MS[side].iter().enumerate() {
-            let s_turn = self.phase + 0.5 * side as f32 + v as f32 / ENS_VOICES as f32;
+        for (v, (&w, centre)) in w.iter().zip(ENS_CENTRES_MS[side]).enumerate() {
+            if w == 0.0 {
+                break;
+            }
+            let s_turn =
+                self.phase + 0.5 * side as f32 + (v % 4) as f32 / 4.0 + (v / 4) as f32 / 8.0;
             let f_turn = self.fast_phase + 0.37 * v as f32 + 0.21 * side as f32;
             let sweep = slow * (core::f32::consts::TAU * s_turn).sin()
                 + fast * (core::f32::consts::TAU * f_turn).sin();
-            sum += self.tap(MID, centre * ms + sweep);
+            sum += w * self.tap(MID, centre * ms + sweep);
         }
-        sum / (ENS_VOICES as f32).sqrt()
+        sum
     }
 
     #[inline]
     pub fn process(&mut self, l: f32, r: f32, p: &ChorusParams) -> (f32, f32) {
         let rate = self.rate.process(p.rate.clamp(0.0, MAX_RATE_HZ));
         let depth = self.depth.process(p.depth.clamp(0.0, 1.0));
+        let voices = self.voices.process(p.voices.clamp(1.0, MAX_VOICES as f32));
         let eq_db = p.eq_db.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
         let eq_gain = self.eq_gain.process(10f32.powf(eq_db / 20.0));
         let mix = self.mix.process(p.mix.clamp(0.0, 1.0));
@@ -270,17 +301,22 @@ impl Chorus {
 
         // Only the voicing being heard is computed, or both while one fades
         // into the other.
+        let (weights, norm) = Self::weights(voices);
         let mut wet = [0.0; 2];
         if ens < 0.999 {
             let sweep = SWEEP_MS * depth * 0.001 * self.sample_rate;
-            let offset_r = 0.5 / VOICES as f32;
-            wet = [self.voices(0, 0.0, sweep), self.voices(1, offset_r, sweep)];
+            // The right's LFOs halfway between the left's first three.
+            let offset_r = 1.0 / 6.0;
+            wet = [
+                self.voices(0, 0.0, sweep, &weights) * norm,
+                self.voices(1, offset_r, sweep, &weights) * norm,
+            ];
         }
         if ens > 0.001 {
             let k = 0.001 * self.sample_rate * depth;
             let (slow, fast) = (ENS_SLOW_MS * k, ENS_FAST_MS * k);
             for (side, w) in wet.iter_mut().enumerate() {
-                let raw = self.ensemble_side(side, slow, fast);
+                let raw = self.ensemble_side(side, slow, fast, &weights) * norm;
                 self.hp_lows[side] += self.hp_coef * (raw - self.hp_lows[side]);
                 let e = raw - self.hp_lows[side];
                 *w = if ens < 0.999 { *w + ens * (e - *w) } else { e };
@@ -322,6 +358,7 @@ mod tests {
             kind: ChorusType::Chorus,
             rate,
             depth,
+            voices: 4.0,
             eq_db,
             mix: 1.0,
         }
@@ -411,10 +448,15 @@ mod tests {
         // Mix is a crossfade, like every other effect's, so turning it up
         // must not turn the sound up or down. Noise, so every frequency and
         // every phase between the voices is heard.
-        for (depth, p) in [0.0, 0.5, 1.0]
-            .into_iter()
-            .flat_map(|d| both(d, 0.6, 0.0).map(|p| (d, p)))
-        {
+        // And whatever the voice count, fractional ones included.
+        let cases = [0.0, 0.5, 1.0].into_iter().flat_map(|d| {
+            [1.0, 2.5, 4.0, MAX_VOICES as f32]
+                .into_iter()
+                .flat_map(move |voices| {
+                    both(d, 0.6, 0.0).map(|p| (d, ChorusParams { voices, ..p }))
+                })
+        });
+        for (depth, p) in cases {
             let mut c = Chorus::new(SR);
             let mut seed = 0x1234_5678;
             let (mut dry, mut out) = (0.0f64, 0.0f64);
@@ -429,8 +471,9 @@ mod tests {
             let db = 10.0 * (out / dry).log10();
             assert!(
                 db.abs() < 1.5,
-                "{:?} depth {depth}: wet is {db:.2} dB off dry",
-                p.kind
+                "{:?} depth {depth} voices {}: wet is {db:.2} dB off dry",
+                p.kind,
+                p.voices
             );
         }
     }
@@ -438,10 +481,14 @@ mod tests {
     #[test]
     fn output_is_bounded_at_the_extremes() {
         // Copies at equal power can line up, so a full-scale input can reach
-        // √3 of itself (√4 in the ensemble), plus the EQ's boost. Never more,
-        // and never anything that is not a number.
-        let bound = 4.0f32.sqrt() * 10f32.powf(EQ_RANGE_DB / 20.0) * 1.2;
+        // the square root of the voice count, plus the EQ's boost. Never
+        // more, and never anything that is not a number.
+        let bound = (MAX_VOICES as f32).sqrt() * 10f32.powf(EQ_RANGE_DB / 20.0) * 1.2;
         for p in both(1.0, MAX_RATE_HZ, EQ_RANGE_DB) {
+            let p = ChorusParams {
+                voices: MAX_VOICES as f32,
+                ..p
+            };
             let mut c = Chorus::new(SR);
             for i in 0..96_000 {
                 let x = if i % 200 < 100 { 1.0 } else { -1.0 };
@@ -553,6 +600,114 @@ mod tests {
             .zip(&b[12_000..])
             .fold(0.0f32, |m, (x, y)| m.max((x - y).abs()));
         assert!(apart > 0.1, "the voicings sound the same: {apart}");
+    }
+
+    #[test]
+    fn sweeping_the_voices_does_not_click() {
+        // A voice fades in as the control turns, so jumping from one to all
+        // of them and back steps no more than holding any count.
+        for kind in ChorusType::ALL {
+            let worst = |sweep: bool, hold: f32| {
+                let mut c = Chorus::new(SR);
+                let mut prev = 0.0f32;
+                let mut worst = 0.0f32;
+                for i in 0..96_000 {
+                    let voices = if sweep {
+                        // Up and back once a second, with jumps at the turns.
+                        if (i / 4_800) % 2 == 0 {
+                            1.0
+                        } else {
+                            MAX_VOICES as f32
+                        }
+                    } else {
+                        hold
+                    };
+                    let p = ChorusParams {
+                        kind,
+                        voices,
+                        ..wet(0.5, 0.6, 0.0)
+                    };
+                    let (l, _) = c.process(tone(i), tone(i), &p);
+                    if i > 4_800 {
+                        worst = worst.max((l - prev).abs());
+                    }
+                    prev = l;
+                }
+                worst
+            };
+            // Some counts between beat harder than either end, so the
+            // baseline is the worst of holding any of them.
+            let steady = (1..=MAX_VOICES)
+                .map(|v| worst(false, v as f32))
+                .fold(0.0, f32::max);
+            let swept = worst(true, 0.0);
+            assert!(
+                swept < steady * 1.2,
+                "{kind:?}: sweeping voices jumped {swept} vs {steady}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_voice_only_adds() {
+        // Turning voices up must keep the voices already sounding where they
+        // were: the wet at 2.5 voices lies between 2 and 3, not somewhere
+        // new. Checked on the unnormalised sums, so it is the voices and not
+        // the level correction being tested.
+        let c = {
+            let mut c = Chorus::new(SR);
+            let mut seed = 0x5eed;
+            for _ in 0..4_800 {
+                let x = noise(&mut seed);
+                c.process(x, x, &ChorusParams::default());
+            }
+            c
+        };
+        let sweep = SWEEP_MS * 0.5 * 0.001 * SR;
+        let at = |v: f32| c.voices(0, 0.0, sweep, &Chorus::weights(v).0);
+        let (two, half, three) = (at(2.0), at(2.5), at(3.0));
+        assert!(
+            (half - (two + three) / 2.0).abs() < 1e-5,
+            "{two} {half} {three}"
+        );
+        let e = |v: f32| c.ensemble_side(0, 50.0, 5.0, &Chorus::weights(v).0);
+        let (two, half, three) = (e(2.0), e(2.5), e(3.0));
+        assert!(
+            (half - (two + three) / 2.0).abs() < 1e-5,
+            "{two} {half} {three}"
+        );
+    }
+
+    #[test]
+    fn more_voices_smooth_the_beating() {
+        // One copy against the dry combs hard, and the comb sweeps, so a
+        // steady tone's level swings. More copies average that out: the
+        // swing in level shrinks as voices are added.
+        let swing = |voices: f32| {
+            let mut c = Chorus::new(SR);
+            let p = ChorusParams {
+                voices,
+                mix: 0.5,
+                ..wet(1.0, 0.6, 0.0)
+            };
+            let (mut lo, mut hi) = (f32::MAX, 0.0f32);
+            let mut acc = 0.0f32;
+            for i in 0..(SR as usize * 4) {
+                let (l, _) = c.process(tone(i), tone(i), &p);
+                acc += l * l;
+                // Short-term level every 10 ms, past the settle.
+                if i % 480 == 479 {
+                    if i > 9_600 {
+                        lo = lo.min(acc);
+                        hi = hi.max(acc);
+                    }
+                    acc = 0.0;
+                }
+            }
+            hi / lo.max(1e-9)
+        };
+        let (one, eight) = (swing(1.0), swing(MAX_VOICES as f32));
+        assert!(eight < one, "one voice swings {one}, eight swing {eight}");
     }
 
     #[test]

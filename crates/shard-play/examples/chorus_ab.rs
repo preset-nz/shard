@@ -107,6 +107,7 @@ fn main() {
         mix,
         rate,
         depth,
+        voices: 4.0,
         eq_db,
     };
     render(&dir, "1-dry", &src, None);
@@ -133,5 +134,34 @@ fn main() {
         "5-ensemble-wet-only-mix100-rate0.6-depth80-eq+3",
         &src,
         Some(at(ChorusType::Ensemble, 1.0, 0.6, 0.8, 3.0)),
+    );
+    // The voice count's two ends, against file 2 (four voices).
+    render(
+        &dir,
+        "6-chorus-1voice-mix50-rate0.6-depth50-eq0",
+        &src,
+        Some(ChorusParams {
+            voices: 1.0,
+            ..at(ChorusType::Chorus, 0.5, 0.6, 0.5, 0.0)
+        }),
+    );
+    render(
+        &dir,
+        "7-chorus-8voices-mix50-rate0.6-depth50-eq0",
+        &src,
+        Some(ChorusParams {
+            voices: 8.0,
+            ..at(ChorusType::Chorus, 0.5, 0.6, 0.5, 0.0)
+        }),
+    );
+    // File 4 with every voice: the widest, smoothest wall it makes.
+    render(
+        &dir,
+        "8-ensemble-lush-8voices-mix75-rate0.4-depth100-eq+4",
+        &src,
+        Some(ChorusParams {
+            voices: 8.0,
+            ..at(ChorusType::Ensemble, 0.75, 0.4, 1.0, 4.0)
+        }),
     );
 }
