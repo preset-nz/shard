@@ -412,6 +412,10 @@ pub const PARAMS: &[ParamDef] = &[
     // copies a channel, the right's LFOs between the left's, so it widens as
     // well as thickens. Rate and depth stop where it would turn to warble
     // (`chorus::MAX_RATE_HZ`). EQ is the Boss CH-1's: a shelf on the copies.
+    // Type picks the voicing: the plain chorus, or a string-ensemble one,
+    // wider and lusher, for the sound the plain one cannot make. Names from
+    // `ChorusType::NAMES`. In the ensemble, rate is the slow swirl and depth
+    // scales it and its fast shimmer together.
     ParamDef {
         id: "chorus.on",
         name: "Chorus",
@@ -431,6 +435,16 @@ pub const PARAMS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.type",
+        name: "Type",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
     },
     ParamDef {
         id: "chorus.rate",

@@ -27,6 +27,7 @@
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import {
   ARRANGEMENT_PREFIX,
+  CHORUS_TYPES,
   DRIVE_TYPES,
   denormalise,
   FILTER_TYPES,
@@ -278,6 +279,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'grain.window': WINDOW_NAMES,
   'filter.type': FILTER_TYPES,
   'drive.type': DRIVE_TYPES,
+  'chorus.type': CHORUS_TYPES,
   'patch.length': LENGTH_NAMES,
   'fm.type': FM_TYPES,
 };

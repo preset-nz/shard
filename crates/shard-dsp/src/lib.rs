@@ -39,7 +39,7 @@ pub mod smooth;
 pub mod sources;
 pub mod steps;
 
-pub use chorus::{Chorus, ChorusParams};
+pub use chorus::{Chorus, ChorusParams, ChorusType};
 pub use crush::{Crush, CrushParams};
 pub use drive::{Drive, DriveParams, DriveType};
 pub use engine::Engine;

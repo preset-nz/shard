@@ -9,7 +9,7 @@
 //! other section, landing on an exact zero, so an effect that is off is
 //! bit-exact with its mix at zero.
 
-use crate::chorus::{Chorus, ChorusParams};
+use crate::chorus::{Chorus, ChorusParams, ChorusType};
 use crate::crush::{Crush, CrushParams};
 use crate::drive::{Drive, DriveParams, DriveType};
 use crate::filter::{Filter, FilterParams, FilterType};
@@ -39,6 +39,7 @@ pub(crate) struct ChainSlots {
     pub ring_freq: usize,
     pub chorus_on: usize,
     pub chorus_mix: usize,
+    pub chorus_type: usize,
     pub chorus_rate: usize,
     pub chorus_depth: usize,
     pub chorus_eq: usize,
@@ -69,6 +70,7 @@ impl ChainSlots {
             ring_freq: at("ring.freq"),
             chorus_on: at("chorus.on"),
             chorus_mix: at("chorus.mix"),
+            chorus_type: at("chorus.type"),
             chorus_rate: at("chorus.rate"),
             chorus_depth: at("chorus.depth"),
             chorus_eq: at("chorus.eq"),
@@ -125,6 +127,7 @@ impl ChainParams {
             },
             ring_on: gate(s.ring_on),
             chorus: ChorusParams {
+                kind: ChorusType::from_value(raw(s.chorus_type)),
                 rate: value(s.chorus_rate),
                 depth: value(s.chorus_depth),
                 eq_db: value(s.chorus_eq),
