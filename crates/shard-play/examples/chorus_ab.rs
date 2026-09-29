@@ -139,6 +139,8 @@ fn main() {
         rate,
         depth,
         voices: 4.0,
+        spread: 1.0,
+        low_cut_hz: 240.0,
         eq_db,
     };
     render(&dir, "1-dry", &src, None);
@@ -232,4 +234,20 @@ fn main() {
         sr,
         Some(choir(0.6, 0.8, 1.0, 8.0)),
     );
+    // Spread's two ends, against voice-3 (spread 100%).
+    for (name, spread) in [
+        ("voice-5-choir-spread50-mix50-rate0.6-depth70-voices6", 0.5),
+        ("voice-6-choir-spread200-mix50-rate0.6-depth70-voices6", 2.0),
+    ] {
+        render_at(
+            &dir,
+            name,
+            &voice,
+            sr,
+            Some(ChorusParams {
+                spread,
+                ..choir(0.5, 0.6, 0.7, 6.0)
+            }),
+        );
+    }
 }

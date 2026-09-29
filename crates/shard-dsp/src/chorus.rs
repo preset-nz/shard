@@ -27,8 +27,7 @@
 //! LFO for the swirl and a small fast one, about six times a second, for the
 //! shimmer. The two sides read the mono sum rather than their own channel, and
 //! the right sweeps against the left, so a centred source is pulled apart into
-//! a wall rather than doubled. A gentle high-pass on the copies keeps the low
-//! end dry and focused; the lushness lives above it.
+//! a wall rather than doubled.
 //!
 //! Choir is for voices, and works differently. A swept delay only bends
 //! pitch while it moves, so a slow chorus barely detunes, and a voice already
@@ -44,6 +43,12 @@
 //!
 //! Switching voicings crossfades, and only the voicing being heard is
 //! computed.
+//!
+//! Two controls shape every voicing alike. Spread scales where the copies
+//! sit, from half to twice: pulled in, a chorus turns towards a flanger and a
+//! choir towards one thick voice; pushed out, towards separate singers and
+//! then a slapback. Low cut is a high-pass on the copies, so the bass stays
+//! in the dry.
 //!
 //! At zero mix the node is a bit-exact bypass. The line keeps filling, so
 //! switching on never plays stale audio.
@@ -80,9 +85,15 @@ pub const ENS_FAST_MS: f32 = 0.25;
 /// The fast LFO's rate, fixed. Around six hertz is where a string machine's
 /// vibrato-like flutter lives; `chorus.rate` moves the slow one.
 pub const ENS_FAST_HZ: f32 = 6.3;
-/// Where the ensemble's high-pass turns, in hertz. Below it the wet is left
-/// out, so the bass stays dry rather than swimming.
-const ENS_HIGHPASS_HZ: f32 = 240.0;
+/// The low cut's range, in hertz. At the bottom it passes everything that
+/// matters; at the top only the copies' presence and air are left.
+pub const LOW_CUT_MIN_HZ: f32 = 20.0;
+pub const LOW_CUT_MAX_HZ: f32 = 1_000.0;
+/// Spread's range: how far the copies' delays are scaled from where each
+/// voicing puts them. Down pulls them in towards a flanger; up pushes them
+/// out towards separate voices, and past that a slapback.
+pub const SPREAD_MIN: f32 = 0.5;
+pub const SPREAD_MAX: f32 = 2.0;
 /// Where the choir's copies start, in milliseconds, in the order they come
 /// in: each reads from here to a window further back. Left, then right, no
 /// two alike.
@@ -107,9 +118,10 @@ const CHOIR_DRIFT_RATES: [f32; MAX_VOICES] = [1.0, 1.13, 0.87, 1.21, 0.79, 1.07,
 pub const CHOIR_DRIFT_FASTEST: f32 = 1.21;
 /// The latest any choir copy starts.
 const CHOIR_LATEST_MS: f32 = 30.0;
-/// Room for the latest copy of any voicing plus its reach, and a margin for
-/// the interpolator's four points. The choir reaches furthest.
-const MAX_MS: f32 = CHOIR_LATEST_MS + CHOIR_WINDOW_MS + CHOIR_DRIFT_MS + 2.0;
+/// Room for the latest copy of any voicing at the widest spread plus its
+/// reach, and a margin for the interpolator's four points. The choir reaches
+/// furthest.
+const MAX_MS: f32 = CHOIR_LATEST_MS * SPREAD_MAX + CHOIR_WINDOW_MS + CHOIR_DRIFT_MS + 2.0;
 /// Frame width of the line: left, right and their mono sum.
 const STRIDE: usize = 3;
 /// The mono sum's slot in a frame.
@@ -150,6 +162,10 @@ pub struct ChorusParams {
     pub depth: f32,
     /// How many copies a side, 1 to `MAX_VOICES`, fractional between.
     pub voices: f32,
+    /// How far the copies' delays are scaled, `SPREAD_MIN` to `SPREAD_MAX`.
+    pub spread: f32,
+    /// Where the high-pass on the copies turns, in hertz.
+    pub low_cut_hz: f32,
     /// Shelf on the wet signal in decibels, ±`EQ_RANGE_DB`. Zero is flat.
     pub eq_db: f32,
     /// Dry to wet, 0 to 1.
@@ -163,6 +179,8 @@ impl Default for ChorusParams {
             rate: 0.6,
             depth: 0.5,
             voices: 4.0,
+            spread: 1.0,
+            low_cut_hz: 240.0,
             eq_db: 0.0,
             mix: 0.0,
         }
@@ -190,11 +208,12 @@ pub struct Chorus {
     /// How much of each voicing is heard, in `ChorusType::ALL` order: one
     /// at a time, two while switching.
     blend: [OnePole; 3],
-    /// The ensemble's and the choir's high-passes are the wet less these
-    /// low-passes, a side each.
-    ens_lows: [f32; 2],
-    choir_lows: [f32; 2],
-    hp_coef: f32,
+    /// The low cut is the wet less this low-pass, a side each.
+    cut_lows: [f32; 2],
+    low_cut: OnePole,
+    spread: OnePole,
+    /// This frame's spread, for the voicings to read.
+    spread_now: f32,
     /// Each choir copy's place in its pitch shifter's window, in turns.
     shift: [[f32; MAX_VOICES]; 2],
     wander: [[Wander; MAX_VOICES]; 2],
@@ -233,8 +252,13 @@ impl Chorus {
                 smoother(30.0, 0.0),
                 smoother(30.0, 0.0),
             ],
-            ens_lows: [0.0; 2],
-            choir_lows: [0.0; 2],
+            cut_lows: [0.0; 2],
+            low_cut: smoother(20.0, d.low_cut_hz),
+            // Spread moves every read point, and a choir copy's by up to
+            // 45 ms, so a step glides in pitch like a tape delay's time.
+            // Slow, to keep that glide to a few semitones.
+            spread: smoother(150.0, d.spread),
+            spread_now: d.spread,
             // Spread through the window, so no two copies wrap together.
             shift: [
                 core::array::from_fn(|v| (v as f32 * 0.382) % 1.0),
@@ -242,7 +266,6 @@ impl Chorus {
             ],
             wander: [[Wander::default(); MAX_VOICES]; 2],
             rng: Rng::new(0x00C4_01E5),
-            hp_coef: 1.0 - (-core::f32::consts::TAU * ENS_HIGHPASS_HZ / sample_rate).exp(),
             lows: [0.0; 2],
             lows_coef: 1.0 - (-core::f32::consts::TAU * EQ_CORNER_HZ / sample_rate).exp(),
             // Rate and depth move the read points, so a step in either is a
@@ -301,7 +324,7 @@ impl Chorus {
             }
             let turn = self.phase + offset + (v % 3) as f32 / 3.0 + (v / 3) as f32 / 9.0;
             let lfo = (core::f32::consts::TAU * turn).sin();
-            sum += w * self.tap(ch, centre * ms + sweep * lfo);
+            sum += w * self.tap(ch, centre * self.spread_now * ms + sweep * lfo);
         }
         sum
     }
@@ -325,7 +348,7 @@ impl Chorus {
             let f_turn = self.fast_phase + 0.37 * v as f32 + 0.21 * side as f32;
             let sweep = slow * (core::f32::consts::TAU * s_turn).sin()
                 + fast * (core::f32::consts::TAU * f_turn).sin();
-            sum += w * self.tap(MID, centre * ms + sweep);
+            sum += w * self.tap(MID, centre * self.spread_now * ms + sweep);
         }
         sum
     }
@@ -362,7 +385,7 @@ impl Chorus {
             }
             // Two read points half a window apart, each silent as it wraps.
             // Sine gains, so their powers sum to one.
-            let base = CHOIR_BASES_MS[side][v] * ms + drift;
+            let base = CHOIR_BASES_MS[side][v] * self.spread_now * ms + drift;
             let other = (phase + 0.5) % 1.0;
             let a = (core::f32::consts::PI * phase).sin() * self.tap(MID, base + window * phase);
             let b = (core::f32::consts::PI * other).sin() * self.tap(MID, base + window * other);
@@ -376,6 +399,10 @@ impl Chorus {
         let rate = self.rate.process(p.rate.clamp(0.0, MAX_RATE_HZ));
         let depth = self.depth.process(p.depth.clamp(0.0, 1.0));
         let voices = self.voices.process(p.voices.clamp(1.0, MAX_VOICES as f32));
+        self.spread_now = self.spread.process(p.spread.clamp(SPREAD_MIN, SPREAD_MAX));
+        let low_cut = self
+            .low_cut
+            .process(p.low_cut_hz.clamp(LOW_CUT_MIN_HZ, LOW_CUT_MAX_HZ));
         let eq_db = p.eq_db.clamp(-EQ_RANGE_DB, EQ_RANGE_DB);
         let eq_gain = self.eq_gain.process(10f32.powf(eq_db / 20.0));
         let mix = self.mix.process(p.mix.clamp(0.0, 1.0));
@@ -423,27 +450,24 @@ impl Chorus {
             let k = 0.001 * self.sample_rate * depth;
             let (slow, fast) = (ENS_SLOW_MS * k, ENS_FAST_MS * k);
             for (side, w) in wet.iter_mut().enumerate() {
-                let raw = self.ensemble_side(side, slow, fast, &weights) * norm;
-                self.ens_lows[side] += self.hp_coef * (raw - self.ens_lows[side]);
-                *w += blend[1] * (raw - self.ens_lows[side]);
+                *w += blend[1] * self.ensemble_side(side, slow, fast, &weights) * norm;
             }
-        } else {
-            self.ens_lows = [0.0; 2];
         }
         if blend[2] > 0.001 {
             let cents = CHOIR_DETUNE_CENTS * depth;
             for (side, w) in wet.iter_mut().enumerate() {
-                let raw = self.choir_side(side, cents, rate, &weights) * norm;
-                self.choir_lows[side] += self.hp_coef * (raw - self.choir_lows[side]);
-                *w += blend[2] * (raw - self.choir_lows[side]);
+                *w += blend[2] * self.choir_side(side, cents, rate, &weights) * norm;
             }
-        } else {
-            self.choir_lows = [0.0; 2];
         }
+        // The low cut, on the copies of every voicing: the bass stays dry
+        // rather than swimming.
+        let cut_coef = 1.0 - (-core::f32::consts::TAU * low_cut / self.sample_rate).exp();
         let mut out = [0.0; 2];
         for ch in 0..2 {
-            self.lows[ch] += self.lows_coef * (wet[ch] - self.lows[ch]);
-            let shaped = self.lows[ch] + (wet[ch] - self.lows[ch]) * eq_gain;
+            self.cut_lows[ch] += cut_coef * (wet[ch] - self.cut_lows[ch]);
+            let wet = wet[ch] - self.cut_lows[ch];
+            self.lows[ch] += self.lows_coef * (wet - self.lows[ch]);
+            let shaped = self.lows[ch] + (wet - self.lows[ch]) * eq_gain;
             let dry = if ch == 0 { l } else { r };
             out[ch] = dry * (1.0 - mix) + shaped * mix;
         }
@@ -475,6 +499,8 @@ mod tests {
             rate,
             depth,
             voices: 4.0,
+            spread: 1.0,
+            low_cut_hz: 240.0,
             eq_db,
             mix: 1.0,
         }
@@ -885,6 +911,8 @@ mod tests {
             let p = ChorusParams {
                 voices,
                 mix: 0.5,
+                // The tone sits under the default low cut; open it.
+                low_cut_hz: LOW_CUT_MIN_HZ,
                 ..wet(1.0, 0.6, 0.0)
             };
             let (mut lo, mut hi) = (f32::MAX, 0.0f32);
@@ -905,6 +933,103 @@ mod tests {
         };
         let (one, eight) = (swing(1.0), swing(MAX_VOICES as f32));
         assert!(eight < one, "one voice swings {one}, eight swing {eight}");
+    }
+
+    /// When a click through one copy first comes out, in frames.
+    fn arrival(kind: ChorusType, spread: f32) -> usize {
+        let mut c = Chorus::new(SR);
+        let p = ChorusParams {
+            kind,
+            voices: 1.0,
+            spread,
+            low_cut_hz: LOW_CUT_MIN_HZ,
+            ..wet(0.0, 0.05, 0.0)
+        };
+        // Let the spread settle on silence, then click.
+        for _ in 0..SR as usize {
+            c.process(0.0, 0.0, &p);
+        }
+        (0..SR as usize)
+            .position(|i| {
+                let x = if i == 0 { 1.0 } else { 0.0 };
+                c.process(x, x, &p).0.abs() > 0.05
+            })
+            .expect("the click came out")
+    }
+
+    #[test]
+    fn spread_moves_the_copies() {
+        // Pushed out, every voicing's copies arrive later; pulled in,
+        // sooner. The choir's shifter window does not scale, so its copies
+        // move by less than the others'.
+        for kind in ChorusType::ALL {
+            let (near, far) = (arrival(kind, SPREAD_MIN), arrival(kind, SPREAD_MAX));
+            assert!(
+                far as f32 > near as f32 * 1.8,
+                "{kind:?}: {near} frames pulled in, {far} pushed out"
+            );
+        }
+    }
+
+    #[test]
+    fn a_jump_in_spread_glides_rather_than_steps() {
+        // Spread moves every read point, so a jump in it bends the pitch
+        // on the way, as a tape delay's time does. Smoothed, the bend stays
+        // modest, and nothing steps.
+        for kind in ChorusType::ALL {
+            let worst = |first: f32, second: f32| {
+                let mut c = Chorus::new(SR);
+                let mut prev = 0.0f32;
+                let mut worst = 0.0f32;
+                for i in 0..96_000 {
+                    let spread = if (i / 24_000) % 2 == 0 { first } else { second };
+                    let p = ChorusParams {
+                        kind,
+                        spread,
+                        ..wet(0.5, 0.6, 0.0)
+                    };
+                    let (l, _) = c.process(tone(i), tone(i), &p);
+                    if i > 4_800 {
+                        worst = worst.max((l - prev).abs());
+                    }
+                    prev = l;
+                }
+                worst
+            };
+            let steady = worst(SPREAD_MIN, SPREAD_MIN).max(worst(SPREAD_MAX, SPREAD_MAX));
+            let jumped = worst(SPREAD_MIN, SPREAD_MAX);
+            assert!(
+                jumped < steady * 2.0,
+                "{kind:?}: a spread jump stepped {jumped} vs {steady}"
+            );
+        }
+    }
+
+    #[test]
+    fn low_cut_takes_the_bass_out_of_the_copies() {
+        // A 60 Hz tone, wet only: with the cut at the bottom the copies keep
+        // it, at the top they lose most of it. In every voicing.
+        for kind in ChorusType::ALL {
+            let level = |low_cut_hz: f32| {
+                let mut c = Chorus::new(SR);
+                let p = ChorusParams {
+                    kind,
+                    low_cut_hz,
+                    ..wet(0.5, 0.6, 0.0)
+                };
+                let mut sum = 0.0f64;
+                for i in 0..96_000 {
+                    let x = (core::f32::consts::TAU * 60.0 * i as f32 / SR).sin() * 0.5;
+                    let (l, _) = c.process(x, x, &p);
+                    if i > 9_600 {
+                        sum += (l * l) as f64;
+                    }
+                }
+                sum
+            };
+            let (open, cut) = (level(LOW_CUT_MIN_HZ), level(LOW_CUT_MAX_HZ));
+            assert!(cut < open * 0.05, "{kind:?}: open {open}, cut {cut}");
+        }
     }
 
     #[test]

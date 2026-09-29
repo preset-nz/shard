@@ -479,6 +479,28 @@ pub const PARAMS: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 20.0,
     },
+    // Spread scales where every voicing's copies sit, half to twice; low cut
+    // is a high-pass on the copies. Both shape every voicing alike.
+    ParamDef {
+        id: "chorus.spread",
+        name: "Spread",
+        min: crate::chorus::SPREAD_MIN,
+        max: crate::chorus::SPREAD_MAX,
+        default: 1.0,
+        taper: Taper::Exponential,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "chorus.lowcut",
+        name: "Low cut",
+        min: crate::chorus::LOW_CUT_MIN_HZ,
+        max: crate::chorus::LOW_CUT_MAX_HZ,
+        default: 240.0,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "chorus.eq",
         name: "EQ",
