@@ -13,6 +13,7 @@ use crate::chorus::{Chorus, ChorusParams, ChorusType};
 use crate::crush::{Crush, CrushParams};
 use crate::delay::{Delay, DelayParams};
 use crate::drive::{Drive, DriveParams, DriveType};
+use crate::echo::{Echo, EchoParams};
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
 use crate::params::ParamDef;
@@ -68,6 +69,13 @@ pub(crate) struct ChainSlots {
     pub delay_feedback: usize,
     pub delay_tone: usize,
     pub delay_pingpong: usize,
+    pub echo_on: usize,
+    pub echo_mix: usize,
+    pub echo_time: usize,
+    pub echo_feedback: usize,
+    pub echo_tone: usize,
+    pub echo_wobble: usize,
+    pub echo_grit: usize,
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -121,6 +129,13 @@ impl ChainSlots {
             delay_feedback: at("delay.feedback"),
             delay_tone: at("delay.tone"),
             delay_pingpong: at("delay.pingpong"),
+            echo_on: at("echo.on"),
+            echo_mix: at("echo.mix"),
+            echo_time: at("echo.time"),
+            echo_feedback: at("echo.feedback"),
+            echo_tone: at("echo.tone"),
+            echo_wobble: at("echo.wobble"),
+            echo_grit: at("echo.grit"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -151,6 +166,8 @@ pub(crate) struct ChainParams {
     pub wear_on: f32,
     pub delay: DelayParams,
     pub delay_on: f32,
+    pub echo: EchoParams,
+    pub echo_on: f32,
     pub filter: FilterParams,
     pub filter_on: f32,
     pub gain: f32,
@@ -215,6 +232,15 @@ impl ChainParams {
                 mix: value(s.delay_mix),
             },
             delay_on: gate(s.delay_on),
+            echo: EchoParams {
+                time_ms: value(s.echo_time),
+                feedback: value(s.echo_feedback),
+                tone_hz: value(s.echo_tone),
+                wobble: value(s.echo_wobble),
+                grit: value(s.echo_grit),
+                mix: value(s.echo_mix),
+            },
+            echo_on: gate(s.echo_on),
             filter: FilterParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
@@ -235,6 +261,7 @@ struct ChainFades {
     flanger: Ramp,
     wear: Ramp,
     delay: Ramp,
+    echo: Ramp,
     filter: Ramp,
 }
 
@@ -246,6 +273,7 @@ pub(crate) struct Chain {
     flanger: Flanger,
     wear: Wear,
     delay: Delay,
+    echo: Echo,
     filter: Filter,
     fades: ChainFades,
     crush_mix: OnePole,
@@ -275,6 +303,7 @@ impl Chain {
             flanger: Flanger::new(sample_rate),
             wear: Wear::new(sample_rate),
             delay: Delay::new(sample_rate),
+            echo: Echo::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
                 drive: ramp(s.drive_on),
@@ -284,6 +313,7 @@ impl Chain {
                 flanger: ramp(s.flanger_on),
                 wear: ramp(s.wear_on),
                 delay: ramp(s.delay_on),
+                echo: ramp(s.echo_on),
                 filter: ramp(s.filter_on),
             },
             crush_mix: smoother(s.crush_mix),
@@ -358,6 +388,14 @@ impl Chain {
             ..p.delay
         };
         let (l, r) = self.delay.process(l, r, &delay);
+
+        // After the delay, so the two can be stacked.
+        let echo_on = self.fades.echo.process(p.echo_on);
+        let echo = EchoParams {
+            mix: p.echo.mix * echo_on,
+            ..p.echo
+        };
+        let (l, r) = self.echo.process(l, r, &echo);
 
         (l, r)
     }

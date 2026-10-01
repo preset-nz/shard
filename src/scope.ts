@@ -201,6 +201,14 @@ export const NODES: NodeInfo[] = [
   },
   {
     layer: 'patch',
+    id: 'echo',
+    label: 'Echo',
+    lane: 'process',
+    table: 'echo',
+    owns: under('echo'),
+  },
+  {
+    layer: 'patch',
     id: 'env',
     label: 'Envelope',
     lane: 'process',
@@ -249,6 +257,7 @@ export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('flanger', 'Flanger', 'process'),
   arrangementNode('wear', 'Wear', 'process'),
   arrangementNode('delay', 'Delay', 'process'),
+  arrangementNode('echo', 'Echo', 'process'),
   arrangementNode('filter', 'Filter', 'master'),
   arrangementNode('amp', 'Output', 'master'),
 ];
