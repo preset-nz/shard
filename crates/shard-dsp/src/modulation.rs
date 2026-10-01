@@ -656,9 +656,9 @@ mod tests {
         // A triangle visits both ends; the sweep must reach exactly the
         // values the ends name, and never pass them.
         let mut set = ModSet::new(&[spec(1, 2.0, Shape::Triangle)]);
-        let slot = index_of("ring.freq").unwrap();
+        let slot = index_of("fx.2.ring.freq").unwrap();
         let d = &PARAMS[slot];
-        set.link("ring.freq", 1, 0.4, 0.5).unwrap();
+        set.link("fx.2.ring.freq", 1, 0.4, 0.5).unwrap();
         let (lo, hi) = (d.denormalise(0.4), d.denormalise(0.5));
         let (mut min, mut max) = (f32::MAX, f32::MIN);
         for _ in 0..4_000 {
@@ -677,7 +677,7 @@ mod tests {
             "never reached the high end: {max}"
         );
         // Low above high sweeps the other way, still inside the ends.
-        set.link("ring.freq", 1, 0.5, 0.4).unwrap();
+        set.link("fx.2.ring.freq", 1, 0.5, 0.4).unwrap();
         for _ in 0..400 {
             set.advance(BLOCK, SR);
             let v = set.apply(slot, d.default);

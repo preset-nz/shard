@@ -207,40 +207,41 @@ mod tests {
     fn a_preset_holds_its_node_but_not_its_switch_or_its_neighbours() {
         let bank = ParamBank::new();
         let mut p = Presets::default();
-        p.save(&bank, &Links::new(), "crush", "gritty").unwrap();
-        let values = &p.0["crush"]["gritty"].values;
-        assert!(values.contains_key("crush.mix"));
+        p.save(&bank, &Links::new(), "fx.1.crush", "gritty")
+            .unwrap();
+        let values = &p.0["fx.1.crush"]["gritty"].values;
+        assert!(values.contains_key("fx.1.crush.mix"));
         assert!(
-            values.contains_key("crush.env.attack"),
+            values.contains_key("fx.1.crush.env.attack"),
             "the crush envelope belongs to crush"
         );
         assert!(
-            !values.contains_key("crush.on"),
+            !values.contains_key("fx.1.crush.on"),
             "a preset must not switch a section"
         );
-        assert!(values.keys().all(|id| id.starts_with("crush.")));
+        assert!(values.keys().all(|id| id.starts_with("fx.1.crush.")));
     }
 
     #[test]
     fn applying_puts_the_values_back_and_leaves_the_switch_alone() {
         let bank = ParamBank::new();
         let mut links = Links::new();
-        set(&bank, "ring.mix", 0.75);
-        set(&bank, "ring.freq", 900.0);
+        set(&bank, "fx.2.ring.mix", 0.75);
+        set(&bank, "fx.2.ring.freq", 900.0);
         let mut p = Presets::default();
-        p.save(&bank, &links, "ring", "bell").unwrap();
+        p.save(&bank, &links, "fx.2.ring", "bell").unwrap();
 
-        set(&bank, "ring.mix", 0.25);
-        set(&bank, "ring.freq", 50.0);
-        set(&bank, "ring.on", 1.0);
-        let report = p.apply(&bank, &mut links, "ring", "bell").unwrap();
+        set(&bank, "fx.2.ring.mix", 0.25);
+        set(&bank, "fx.2.ring.freq", 50.0);
+        set(&bank, "fx.2.ring.on", 0.0);
+        let report = p.apply(&bank, &mut links, "fx.2.ring", "bell").unwrap();
 
         assert!(report.unknown.is_empty());
-        assert_eq!(bank.get_by_id("ring.mix"), Some(0.75));
-        assert_eq!(bank.get_by_id("ring.freq"), Some(900.0));
+        assert_eq!(bank.get_by_id("fx.2.ring.mix"), Some(0.75));
+        assert_eq!(bank.get_by_id("fx.2.ring.freq"), Some(900.0));
         assert_eq!(
-            bank.get_by_id("ring.on"),
-            Some(1.0),
+            bank.get_by_id("fx.2.ring.on"),
+            Some(0.0),
             "the switch is not part of it"
         );
     }
@@ -250,7 +251,7 @@ mod tests {
         let bank = ParamBank::new();
         let mut links = Links::from([
             ("grain.size".into(), link(1, 0.5)),
-            ("ring.freq".into(), link(2, 0.3)),
+            ("fx.2.ring.freq".into(), link(2, 0.3)),
         ]);
         let mut p = Presets::default();
         p.save(&bank, &links, "grain", "wobbly").unwrap();
@@ -263,7 +264,7 @@ mod tests {
         // Relink grain.size, link something new in grain, and move ring's.
         links.insert("grain.size".into(), link(3, -1.0));
         links.insert("grain.density".into(), link(1, 0.2));
-        links.insert("ring.freq".into(), link(4, 0.9));
+        links.insert("fx.2.ring.freq".into(), link(4, 0.9));
 
         let report = p.apply(&bank, &mut links, "grain", "wobbly").unwrap();
         assert!(report.unknown.is_empty(), "{report:?}");
@@ -271,7 +272,7 @@ mod tests {
             links,
             Links::from([
                 ("grain.size".into(), link(1, 0.5)),
-                ("ring.freq".into(), link(4, 0.9)),
+                ("fx.2.ring.freq".into(), link(4, 0.9)),
             ]),
             "grain's links come back as saved, density is unlinked again, and ring is left alone"
         );
@@ -314,19 +315,20 @@ mod tests {
         // Patches are text. A ring preset that names a grain value, its own
         // switch, a value that no longer exists, or a link on another node's
         // value applies none of those, and says so.
-        let text = r#"{"ring":{"odd":{
-            "values":{"ring.mix":0.5,"ring.on":1.0,"grain.gain":0.25,"ring.gone":2.0},
-            "links":{"grain.size":{"lfo":1,"lo":0.5,"hi":1.0},"ring.freq":{"lfo":1,"lo":0.4,"hi":0.5}}
+        let text = r#"{"fx.2.ring":{"odd":{
+            "values":{"fx.2.ring.mix":0.5,"fx.2.ring.on":1.0,"grain.gain":0.25,"fx.2.ring.gone":2.0},
+            "links":{"grain.size":{"lfo":1,"lo":0.5,"hi":1.0},"fx.2.ring.freq":{"lfo":1,"lo":0.4,"hi":0.5}}
         }}}"#;
         let p: Presets = serde_json::from_str(text).unwrap();
         let bank = ParamBank::new();
         let mut links = Links::new();
-        let report = p.apply(&bank, &mut links, "ring", "odd").unwrap();
+        let report = p.apply(&bank, &mut links, "fx.2.ring", "odd").unwrap();
         assert_eq!(report.applied, 1);
         assert_eq!(report.unknown.len(), 4, "{report:?}");
         assert!(report.unknown.contains(&"grain.size".to_string()));
-        assert_eq!(bank.get_by_id("ring.on"), Some(0.0));
+        // The switch is left as it was found: on, since an added effect arrives on.
+        assert_eq!(bank.get_by_id("fx.2.ring.on"), Some(1.0));
         assert_eq!(bank.get_by_id("grain.gain"), Some(1.0));
-        assert_eq!(links.keys().collect::<Vec<_>>(), vec!["ring.freq"]);
+        assert_eq!(links.keys().collect::<Vec<_>>(), vec!["fx.2.ring.freq"]);
     }
 }

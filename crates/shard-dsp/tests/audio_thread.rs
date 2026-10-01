@@ -181,22 +181,29 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
     let bank = ParamBank::new();
     for id in [
         "grain.on",
-        "ring.on",
-        "crush.on",
+        "fx.2.ring.on",
+        "fx.1.crush.on",
         "filter.on",
-        "drive.on",
-        "chorus.on",
-        "delay.on",
-        "reverb.on",
-        "overtone.on",
-        "rise.on",
-        "echo.on",
-        "wear.on",
-        "flanger.on",
+        "fx.0.drive.on",
+        "fx.3.chorus.on",
+        "fx.7.delay.on",
+        "fx.10.reverb.on",
+        "fx.4.overtone.on",
+        "fx.9.rise.on",
+        "fx.8.echo.on",
+        "fx.6.wear.on",
+        "fx.5.flanger.on",
     ] {
         bank.set_by_id(id, 1.0);
     }
     bank.set_by_id("grain.gain", 1.0);
+    // The first copy of every effect in the chain, then the second copies
+    // until it is full.
+    let mut chain = shard_dsp::fx::Order::EMPTY;
+    for n in 0..shard_dsp::fx::INSTANCES {
+        chain.push(n);
+    }
+    shard_dsp::fx::set_order(&bank, &chain);
     // Every step at the top tempo, so retriggers and their tails run in
     // nearly every block. Handed in per block, as the callback does.
     let steps = StepParams {
@@ -397,4 +404,72 @@ fn swapping_a_source_hands_the_old_buffer_back_instead_of_freeing_it() {
         24_000,
         "swapping the cloud's source must leave the player's alone"
     );
+}
+
+#[test]
+fn adding_removing_and_reordering_effects_never_touches_the_allocator() {
+    // Every effect switched on and audible, and the chain changed every few
+    // blocks in the patch and the arrangement: filled, emptied, reversed,
+    // rotated through the second copies, a pair swapped. Adding resets an
+    // instance, removing fades it out, reordering ducks the chain; none of it
+    // may allocate, and the largest reset (the reverb's) happens here.
+    use shard_dsp::fx::{self, Order, INSTANCES, ORDER_LEN};
+
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(96_000));
+    let bank = ParamBank::new();
+    let arr = ParamBank::for_table(arrangement::params());
+    for n in 0..INSTANCES {
+        let (kind, _) = fx::POOL[n];
+        for (b, prefix) in [(&bank, ""), (&arr, arrangement::PREFIX)] {
+            b.set_by_id(&format!("{prefix}fx.{n}.{}.on", kind.name()), 1.0);
+            b.set_by_id(&format!("{prefix}fx.{n}.{}.mix", kind.name()), 1.0);
+        }
+    }
+    e.set_playing(true);
+
+    let orders = |step: usize| -> Order {
+        let mut o = Order::EMPTY;
+        match step % 6 {
+            0 => (0..ORDER_LEN).for_each(|n| {
+                o.push(n);
+            }),
+            1 => {}
+            2 => (0..ORDER_LEN).rev().for_each(|n| {
+                o.push(n);
+            }),
+            3 => (INSTANCES - ORDER_LEN..INSTANCES).for_each(|n| {
+                o.push(n);
+            }),
+            4 => {
+                o.push(10);
+                o.push(3);
+                o.push(7);
+            }
+            _ => {
+                o.push(3);
+                o.push(10);
+                o.push(7);
+            }
+        }
+        o
+    };
+
+    let mut out = vec![0.0f32; 512];
+    for block in 0..600 {
+        // The host changes the chain between blocks; that is not the callback.
+        if block % 5 == 0 {
+            fx::set_order(&bank, &orders(block / 5));
+            fx::set_order(&arr, &orders(block / 5 + 2));
+        }
+        let ((), caught) = no_alloc(|| {
+            e.set_arrangement(&arr, false);
+            e.process_block(&mut out, &bank);
+        });
+        assert_eq!(
+            caught, 0,
+            "block {block} touched the allocator {caught} time(s)"
+        );
+        assert!(out.iter().all(|v| v.is_finite()), "block {block}");
+    }
 }

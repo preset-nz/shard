@@ -30,6 +30,8 @@ enum Row {
     /// A patch row under `PREFIX`. The string is the arrangement id.
     Borrowed(&'static str),
     Own(ParamDef),
+    /// The palette's rows, expanded where this sits.
+    Fx,
 }
 
 /// In panel order: the patch's fader, the process lane, then the master.
@@ -47,73 +49,10 @@ const ROWS: &[Row] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     }),
-    Row::Borrowed("arrangement.drive.on"),
-    Row::Borrowed("arrangement.drive.mix"),
-    Row::Borrowed("arrangement.drive.amount"),
-    Row::Borrowed("arrangement.drive.tone"),
-    Row::Borrowed("arrangement.drive.type"),
-    Row::Borrowed("arrangement.crush.on"),
-    Row::Borrowed("arrangement.crush.mix"),
-    Row::Borrowed("arrangement.crush.bits"),
-    Row::Borrowed("arrangement.crush.rate"),
-    Row::Borrowed("arrangement.ring.on"),
-    Row::Borrowed("arrangement.ring.mix"),
-    Row::Borrowed("arrangement.ring.freq"),
-    Row::Borrowed("arrangement.overtone.on"),
-    Row::Borrowed("arrangement.overtone.mix"),
-    Row::Borrowed("arrangement.overtone.sub"),
-    Row::Borrowed("arrangement.overtone.octave"),
-    Row::Borrowed("arrangement.overtone.fifth"),
-    Row::Borrowed("arrangement.overtone.tone"),
-    Row::Borrowed("arrangement.chorus.on"),
-    Row::Borrowed("arrangement.chorus.mix"),
-    Row::Borrowed("arrangement.chorus.type"),
-    Row::Borrowed("arrangement.chorus.rate"),
-    Row::Borrowed("arrangement.chorus.depth"),
-    Row::Borrowed("arrangement.chorus.voices"),
-    Row::Borrowed("arrangement.chorus.spread"),
-    Row::Borrowed("arrangement.chorus.lowcut"),
-    Row::Borrowed("arrangement.chorus.eq"),
-    Row::Borrowed("arrangement.flanger.on"),
-    Row::Borrowed("arrangement.flanger.mix"),
-    Row::Borrowed("arrangement.flanger.manual"),
-    Row::Borrowed("arrangement.flanger.rate"),
-    Row::Borrowed("arrangement.flanger.depth"),
-    Row::Borrowed("arrangement.flanger.feedback"),
-    Row::Borrowed("arrangement.wear.on"),
-    Row::Borrowed("arrangement.wear.mix"),
-    Row::Borrowed("arrangement.wear.wow"),
-    Row::Borrowed("arrangement.wear.flutter"),
-    Row::Borrowed("arrangement.wear.unstable"),
-    Row::Borrowed("arrangement.wear.dropouts"),
-    Row::Borrowed("arrangement.wear.dull"),
-    Row::Borrowed("arrangement.delay.on"),
-    Row::Borrowed("arrangement.delay.mix"),
-    Row::Borrowed("arrangement.delay.time"),
-    Row::Borrowed("arrangement.delay.feedback"),
-    Row::Borrowed("arrangement.delay.tone"),
-    Row::Borrowed("arrangement.delay.pingpong"),
-    Row::Borrowed("arrangement.echo.on"),
-    Row::Borrowed("arrangement.echo.mix"),
-    Row::Borrowed("arrangement.echo.time"),
-    Row::Borrowed("arrangement.echo.feedback"),
-    Row::Borrowed("arrangement.echo.tone"),
-    Row::Borrowed("arrangement.echo.wobble"),
-    Row::Borrowed("arrangement.echo.grit"),
-    Row::Borrowed("arrangement.rise.on"),
-    Row::Borrowed("arrangement.rise.mix"),
-    Row::Borrowed("arrangement.rise.time"),
-    Row::Borrowed("arrangement.rise.feedback"),
-    Row::Borrowed("arrangement.rise.shift"),
-    Row::Borrowed("arrangement.rise.wobble"),
-    Row::Borrowed("arrangement.rise.tone"),
-    Row::Borrowed("arrangement.reverb.on"),
-    Row::Borrowed("arrangement.reverb.mix"),
-    Row::Borrowed("arrangement.reverb.type"),
-    Row::Borrowed("arrangement.reverb.decay"),
-    Row::Borrowed("arrangement.reverb.size"),
-    Row::Borrowed("arrangement.reverb.tone"),
-    Row::Borrowed("arrangement.reverb.predelay"),
+    // The palette: every instance's rows and the order rows, borrowed from
+    // the patch's by `fx::rows`. Which effects run, and in what order, is the
+    // arrangement's own: the patch's order is not heard here.
+    Row::Fx,
     Row::Borrowed("arrangement.filter.on"),
     Row::Borrowed("arrangement.filter.mix"),
     Row::Borrowed("arrangement.filter.cutoff"),
@@ -160,15 +99,26 @@ fn source_of(id: &str) -> &'static ParamDef {
 pub fn params() -> &'static [ParamDef] {
     static TABLE: OnceLock<Vec<ParamDef>> = OnceLock::new();
     TABLE.get_or_init(|| {
-        ROWS.iter()
-            .map(|row| match row {
-                Row::Borrowed(id) => ParamDef {
+        let mut out = Vec::new();
+        for row in ROWS {
+            match row {
+                Row::Borrowed(id) => out.push(ParamDef {
                     id,
                     ..*source_of(id)
-                },
-                Row::Own(def) => *def,
-            })
-            .collect()
+                }),
+                Row::Own(def) => out.push(*def),
+                Row::Fx => out.extend(
+                    crate::fx::rows()
+                        .iter()
+                        .filter(|def| !def.id.contains(".env."))
+                        .map(|def| ParamDef {
+                            id: Box::leak(format!("{PREFIX}{}", def.id).into_boxed_str()),
+                            ..*def
+                        }),
+                ),
+            }
+        }
+        out
     })
 }
 
@@ -204,6 +154,31 @@ mod tests {
             assert_eq!(ours.taper, theirs.taper, "{id}");
             assert_eq!(ours.unit, theirs.unit, "{id}");
             assert_eq!(ours.smooth_ms, theirs.smooth_ms, "{id}");
+        }
+    }
+
+    #[test]
+    fn every_palette_row_is_mirrored_in_the_same_order() {
+        let ours: Vec<_> = params()
+            .iter()
+            .filter(|p| p.id.starts_with("arrangement.fx."))
+            .collect();
+        // The crusher's envelope follows a pass, and the arrangement has none.
+        let theirs: Vec<_> = crate::fx::rows()
+            .iter()
+            .filter(|d| !d.id.contains(".env."))
+            .collect();
+        assert_eq!(ours.len(), theirs.len());
+        for (a, b) in ours.iter().zip(theirs.iter()) {
+            assert_eq!(a.id, format!("{PREFIX}{}", b.id));
+            assert_eq!(
+                (a.name, a.min, a.max, a.default),
+                (b.name, b.min, b.max, b.default)
+            );
+            assert_eq!(
+                (a.taper, a.unit, a.smooth_ms),
+                (b.taper, b.unit, b.smooth_ms)
+            );
         }
     }
 

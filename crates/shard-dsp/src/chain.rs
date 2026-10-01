@@ -1,9 +1,24 @@
-//! The effect chain: drive, crusher, ring modulator, chorus, delay, then filter and gain.
+//! The effect chain: the palette's effects in the order you chose, then the
+//! filter and the output gain.
 //!
 //! One type, so the patch and the level above it can run the same effects
 //! (`design/arrangement-layer.md`). It comes in two halves because the patch
-//! puts the tape's level and its envelope between them: `front` is drive,
-//! crush, ring and chorus, `back` is the filter and the output gain.
+//! puts the tape's level and its envelope between them: `front` is the
+//! palette, `back` is the filter and the output gain.
+//!
+//! **The palette** (`design/effect-palette.md`). The chain owns a fixed pool
+//! of instances, `crate::fx::POOL`, built once. The order rows say which of
+//! them run and in what order. An instance the order does not name costs
+//! nothing, and an empty order is a bit-exact passthrough.
+//!
+//! **Changing the chain does not click.**
+//! - *Adding* resets the instance, so a tail from its last use cannot replay,
+//!   then fades it in over `BYPASS_MS`.
+//! - *Removing* fades it out over `BYPASS_MS` and keeps it running until the
+//!   fade lands; only then is it dropped.
+//! - *Reordering* changes the signal path at once, and effects hold state, so
+//!   the chain's output ducks over `DUCK_MS`, swaps while silent, and comes
+//!   back. Existing effects keep their state through it.
 //!
 //! Each effect has a switch that fades its mix over the same 10 ms as every
 //! other section, landing on an exact zero, so an effect that is off is
@@ -16,6 +31,7 @@ use crate::drive::{Drive, DriveParams, DriveType};
 use crate::echo::{Echo, EchoParams};
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
+use crate::fx::{self, Kind, Order, CRUSH_ENV_INSTANCE, INSTANCES, ORDER_LEN, POOL};
 use crate::overtone::{Overtone, OvertoneParams};
 use crate::params::ParamDef;
 use crate::reverb::{Reverb, ReverbParams, ReverbType};
@@ -28,77 +44,27 @@ use crate::wear::{Wear, WearParams};
 /// that cutting a loud section in or out never clicks.
 pub(crate) const BYPASS_MS: f32 = 10.0;
 
+/// How long the chain's output takes to go down, and again to come back, when
+/// effects already in the chain are reordered.
+pub(crate) const DUCK_MS: f32 = 5.0;
+
+/// How long a removed effect keeps running after its fade has landed. Each
+/// module smooths its own mix over about 20 ms and snaps to an exact zero only
+/// when the smoothing has settled, and an effect dropped before that would cut
+/// its own tail off with a step.
+pub(crate) const GRACE_MS: f32 = 500.0;
+
+/// The most rows an instance has that the chain reads, counting `on` and
+/// `mix`.
+const MAX_ROWS: usize = 10;
+
 /// Where a chain's rows sit in its table, resolved once at construction so
 /// the audio thread never compares a string.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChainSlots {
-    pub drive_on: usize,
-    pub drive_mix: usize,
-    pub drive_amount: usize,
-    pub drive_tone: usize,
-    pub drive_type: usize,
-    pub crush_on: usize,
-    pub crush_mix: usize,
-    pub crush_bits: usize,
-    pub crush_rate: usize,
-    pub ring_on: usize,
-    pub ring_mix: usize,
-    pub ring_freq: usize,
-    pub overtone_on: usize,
-    pub overtone_mix: usize,
-    pub overtone_sub: usize,
-    pub overtone_octave: usize,
-    pub overtone_fifth: usize,
-    pub overtone_tone: usize,
-    pub chorus_on: usize,
-    pub chorus_mix: usize,
-    pub chorus_type: usize,
-    pub chorus_rate: usize,
-    pub chorus_depth: usize,
-    pub chorus_voices: usize,
-    pub chorus_spread: usize,
-    pub chorus_lowcut: usize,
-    pub chorus_eq: usize,
-    pub flanger_on: usize,
-    pub flanger_mix: usize,
-    pub flanger_manual: usize,
-    pub flanger_rate: usize,
-    pub flanger_depth: usize,
-    pub flanger_feedback: usize,
-    pub wear_on: usize,
-    pub wear_mix: usize,
-    pub wear_wow: usize,
-    pub wear_flutter: usize,
-    pub wear_unstable: usize,
-    pub wear_dropouts: usize,
-    pub wear_dull: usize,
-    pub delay_on: usize,
-    pub delay_mix: usize,
-    pub delay_time: usize,
-    pub delay_feedback: usize,
-    pub delay_tone: usize,
-    pub delay_pingpong: usize,
-    pub echo_on: usize,
-    pub echo_mix: usize,
-    pub echo_time: usize,
-    pub echo_feedback: usize,
-    pub echo_tone: usize,
-    pub echo_wobble: usize,
-    pub echo_grit: usize,
-    pub rise_on: usize,
-    pub rise_mix: usize,
-    pub rise_time: usize,
-    pub rise_feedback: usize,
-    pub rise_shift: usize,
-    pub rise_wobble: usize,
-    pub rise_tone: usize,
-    pub reverb_on: usize,
-    pub reverb_mix: usize,
-    pub reverb_type: usize,
-    pub reverb_decay: usize,
-    pub reverb_size: usize,
-    pub reverb_tone: usize,
-    pub reverb_predelay: usize,
+    /// Per instance, its rows in template order: `on`, `mix`, then the rest.
+    pub inst: [[usize; MAX_ROWS]; INSTANCES],
+    pub order: [usize; ORDER_LEN],
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -108,77 +74,30 @@ pub(crate) struct ChainSlots {
 }
 
 impl ChainSlots {
-    /// `at` maps an id without its prefix, such as `crush.mix`, to a slot.
-    /// It panics on a miss, since the tables are compile-time constants.
+    /// `at` maps an id without its prefix, such as `fx.3.chorus.mix`, to a
+    /// slot. It panics on a miss, since the tables are compile-time constants.
     pub fn resolve(at: impl Fn(&str) -> usize) -> Self {
+        let mut inst = [[0; MAX_ROWS]; INSTANCES];
+        for (n, (kind, _)) in POOL.iter().enumerate() {
+            let mut j = 0;
+            for row in kind.rows() {
+                // The crusher's envelope is read by the engine, and the
+                // arrangement has none.
+                if row.id.starts_with("crush.env.") {
+                    continue;
+                }
+                assert!(j < MAX_ROWS, "{} has too many rows", kind.name());
+                inst[n][j] = at(&fx::row_id(n, row.id));
+                j += 1;
+            }
+        }
+        let mut order = [0; ORDER_LEN];
+        for (p, slot) in order.iter_mut().enumerate() {
+            *slot = at(&fx::order_id(p));
+        }
         Self {
-            drive_on: at("drive.on"),
-            drive_mix: at("drive.mix"),
-            drive_amount: at("drive.amount"),
-            drive_tone: at("drive.tone"),
-            drive_type: at("drive.type"),
-            crush_on: at("crush.on"),
-            crush_mix: at("crush.mix"),
-            crush_bits: at("crush.bits"),
-            crush_rate: at("crush.rate"),
-            ring_on: at("ring.on"),
-            ring_mix: at("ring.mix"),
-            ring_freq: at("ring.freq"),
-            overtone_on: at("overtone.on"),
-            overtone_mix: at("overtone.mix"),
-            overtone_sub: at("overtone.sub"),
-            overtone_octave: at("overtone.octave"),
-            overtone_fifth: at("overtone.fifth"),
-            overtone_tone: at("overtone.tone"),
-            chorus_on: at("chorus.on"),
-            chorus_mix: at("chorus.mix"),
-            chorus_type: at("chorus.type"),
-            chorus_rate: at("chorus.rate"),
-            chorus_depth: at("chorus.depth"),
-            chorus_voices: at("chorus.voices"),
-            chorus_spread: at("chorus.spread"),
-            chorus_lowcut: at("chorus.lowcut"),
-            chorus_eq: at("chorus.eq"),
-            flanger_on: at("flanger.on"),
-            flanger_mix: at("flanger.mix"),
-            flanger_manual: at("flanger.manual"),
-            flanger_rate: at("flanger.rate"),
-            flanger_depth: at("flanger.depth"),
-            flanger_feedback: at("flanger.feedback"),
-            wear_on: at("wear.on"),
-            wear_mix: at("wear.mix"),
-            wear_wow: at("wear.wow"),
-            wear_flutter: at("wear.flutter"),
-            wear_unstable: at("wear.unstable"),
-            wear_dropouts: at("wear.dropouts"),
-            wear_dull: at("wear.dull"),
-            delay_on: at("delay.on"),
-            delay_mix: at("delay.mix"),
-            delay_time: at("delay.time"),
-            delay_feedback: at("delay.feedback"),
-            delay_tone: at("delay.tone"),
-            delay_pingpong: at("delay.pingpong"),
-            echo_on: at("echo.on"),
-            echo_mix: at("echo.mix"),
-            echo_time: at("echo.time"),
-            echo_feedback: at("echo.feedback"),
-            echo_tone: at("echo.tone"),
-            echo_wobble: at("echo.wobble"),
-            echo_grit: at("echo.grit"),
-            rise_on: at("rise.on"),
-            rise_mix: at("rise.mix"),
-            rise_time: at("rise.time"),
-            rise_feedback: at("rise.feedback"),
-            rise_shift: at("rise.shift"),
-            rise_wobble: at("rise.wobble"),
-            rise_tone: at("rise.tone"),
-            reverb_on: at("reverb.on"),
-            reverb_mix: at("reverb.mix"),
-            reverb_type: at("reverb.type"),
-            reverb_decay: at("reverb.decay"),
-            reverb_size: at("reverb.size"),
-            reverb_tone: at("reverb.tone"),
-            reverb_predelay: at("reverb.predelay"),
+            inst,
+            order,
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -189,34 +108,144 @@ impl ChainSlots {
     }
 }
 
+/// One instance's values for a block, in the shape its module takes.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum FxParams {
+    Drive(DriveParams),
+    Crush(CrushParams),
+    Ring(RingModParams),
+    Chorus(ChorusParams),
+    Overtone(OvertoneParams),
+    Flanger(FlangerParams),
+    Wear(WearParams),
+    Delay(DelayParams),
+    Echo(EchoParams),
+    Rise(RiseParams),
+    Reverb(ReverbParams),
+}
+
+/// The rows of each kind that `read_fx` takes, after `on` and `mix`, in the
+/// order it takes them. A test holds this against the templates, so reordering
+/// a template without touching the reader fails.
+#[cfg(test)]
+pub(crate) fn read_order(kind: Kind) -> &'static [&'static str] {
+    match kind {
+        Kind::Drive => &["amount", "tone", "type"],
+        Kind::Crush => &["bits", "rate"],
+        Kind::Ring => &["freq"],
+        Kind::Chorus => &["type", "rate", "depth", "voices", "spread", "lowcut", "eq"],
+        Kind::Overtone => &["sub", "octave", "fifth", "tone"],
+        Kind::Flanger => &["manual", "rate", "depth", "feedback"],
+        Kind::Wear => &["wow", "flutter", "unstable", "dropouts", "dull"],
+        Kind::Delay => &["time", "feedback", "tone", "pingpong"],
+        Kind::Echo => &["time", "feedback", "tone", "wobble", "grit"],
+        Kind::Rise => &["time", "feedback", "shift", "wobble", "tone"],
+        Kind::Reverb => &["type", "decay", "size", "tone", "predelay"],
+    }
+}
+
+fn read_fx(
+    kind: Kind,
+    s: &[usize; MAX_ROWS],
+    value: &impl Fn(usize) -> f32,
+    raw: &impl Fn(usize) -> f32,
+) -> FxParams {
+    // Row 0 is `on`, row 1 is `mix`; the rest follow `read_order`.
+    let v = |j: usize| value(s[j]);
+    let r = |j: usize| raw(s[j]);
+    let mix = v(1);
+    match kind {
+        Kind::Drive => FxParams::Drive(DriveParams {
+            amount_db: v(2),
+            tone_hz: v(3),
+            kind: DriveType::from_value(r(4)),
+            mix,
+        }),
+        Kind::Crush => FxParams::Crush(CrushParams {
+            bits: v(2),
+            rate: v(3),
+            mix,
+        }),
+        Kind::Ring => FxParams::Ring(RingModParams { freq: v(2), mix }),
+        Kind::Chorus => FxParams::Chorus(ChorusParams {
+            kind: ChorusType::from_value(r(2)),
+            rate: v(3),
+            depth: v(4),
+            voices: v(5),
+            spread: v(6),
+            low_cut_hz: v(7),
+            eq_db: v(8),
+            mix,
+        }),
+        Kind::Overtone => FxParams::Overtone(OvertoneParams {
+            sub: v(2),
+            octave: v(3),
+            fifth: v(4),
+            tone_hz: v(5),
+            mix,
+        }),
+        Kind::Flanger => FxParams::Flanger(FlangerParams {
+            manual_ms: v(2),
+            rate_hz: v(3),
+            depth: v(4),
+            feedback: v(5),
+            mix,
+        }),
+        Kind::Wear => FxParams::Wear(WearParams {
+            wow: v(2),
+            flutter: v(3),
+            unstable: v(4),
+            dropouts: v(5),
+            dull: v(6),
+            mix,
+        }),
+        Kind::Delay => FxParams::Delay(DelayParams {
+            time_ms: v(2),
+            feedback: v(3),
+            tone_hz: v(4),
+            cross: v(5),
+            mix,
+        }),
+        Kind::Echo => FxParams::Echo(EchoParams {
+            time_ms: v(2),
+            feedback: v(3),
+            tone_hz: v(4),
+            wobble: v(5),
+            grit: v(6),
+            mix,
+        }),
+        Kind::Rise => FxParams::Rise(RiseParams {
+            time_ms: v(2),
+            feedback: v(3),
+            shift_st: v(4),
+            wobble: v(5),
+            tone_hz: v(6),
+            mix,
+        }),
+        Kind::Reverb => FxParams::Reverb(ReverbParams {
+            kind: ReverbType::from_value(r(2)),
+            decay_s: v(3),
+            size: v(4),
+            tone_hz: v(5),
+            predelay_ms: v(6),
+            mix,
+        }),
+    }
+}
+
+/// One instance's block: its switch and its values.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct InstParams {
+    pub on: f32,
+    pub p: FxParams,
+}
+
 /// One block's worth of targets for a chain. The switches are gates, zero or
 /// one; the ramps turn them into fades.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct ChainParams {
-    pub drive: DriveParams,
-    pub drive_on: f32,
-    pub crush_bits: f32,
-    pub crush_rate: f32,
-    pub crush_mix: f32,
-    pub crush_on: f32,
-    pub ring: RingModParams,
-    pub ring_on: f32,
-    pub overtone: OvertoneParams,
-    pub overtone_on: f32,
-    pub chorus: ChorusParams,
-    pub chorus_on: f32,
-    pub flanger: FlangerParams,
-    pub flanger_on: f32,
-    pub wear: WearParams,
-    pub wear_on: f32,
-    pub delay: DelayParams,
-    pub delay_on: f32,
-    pub echo: EchoParams,
-    pub echo_on: f32,
-    pub rise: RiseParams,
-    pub rise_on: f32,
-    pub reverb: ReverbParams,
-    pub reverb_on: f32,
+    pub order: Order,
+    pub inst: [InstParams; INSTANCES],
     pub filter: FilterParams,
     pub filter_on: f32,
     pub gain: f32,
@@ -225,97 +254,21 @@ pub(crate) struct ChainParams {
 impl ChainParams {
     /// Read once a block. `value` is a continuous row as heard, which for the
     /// patch means through its LFOs; `raw` is a stepped row or a switch,
-    /// which no LFO moves.
+    /// which no LFO moves. The order is read raw: no LFO may reorder a chain.
     pub fn read(s: &ChainSlots, value: impl Fn(usize) -> f32, raw: impl Fn(usize) -> f32) -> Self {
         let gate = |slot: usize| if raw(slot) >= 0.5 { 1.0 } else { 0.0 };
+        let mut order_values = [0.0; ORDER_LEN];
+        for (v, slot) in order_values.iter_mut().zip(s.order) {
+            *v = raw(slot);
+        }
+        let order = Order::sanitise(order_values);
+        let inst = std::array::from_fn(|n| InstParams {
+            on: gate(s.inst[n][0]),
+            p: read_fx(POOL[n].0, &s.inst[n], &value, &raw),
+        });
         Self {
-            drive: DriveParams {
-                amount_db: value(s.drive_amount),
-                tone_hz: value(s.drive_tone),
-                kind: DriveType::from_value(raw(s.drive_type)),
-                mix: value(s.drive_mix),
-            },
-            drive_on: gate(s.drive_on),
-            crush_bits: value(s.crush_bits),
-            crush_rate: value(s.crush_rate),
-            crush_mix: value(s.crush_mix),
-            crush_on: gate(s.crush_on),
-            ring: RingModParams {
-                freq: value(s.ring_freq),
-                mix: value(s.ring_mix),
-            },
-            ring_on: gate(s.ring_on),
-            overtone: OvertoneParams {
-                sub: value(s.overtone_sub),
-                octave: value(s.overtone_octave),
-                fifth: value(s.overtone_fifth),
-                tone_hz: value(s.overtone_tone),
-                mix: value(s.overtone_mix),
-            },
-            overtone_on: gate(s.overtone_on),
-            chorus: ChorusParams {
-                kind: ChorusType::from_value(raw(s.chorus_type)),
-                rate: value(s.chorus_rate),
-                depth: value(s.chorus_depth),
-                voices: value(s.chorus_voices),
-                spread: value(s.chorus_spread),
-                low_cut_hz: value(s.chorus_lowcut),
-                eq_db: value(s.chorus_eq),
-                mix: value(s.chorus_mix),
-            },
-            chorus_on: gate(s.chorus_on),
-            flanger: FlangerParams {
-                manual_ms: value(s.flanger_manual),
-                rate_hz: value(s.flanger_rate),
-                depth: value(s.flanger_depth),
-                feedback: value(s.flanger_feedback),
-                mix: value(s.flanger_mix),
-            },
-            flanger_on: gate(s.flanger_on),
-            wear: WearParams {
-                wow: value(s.wear_wow),
-                flutter: value(s.wear_flutter),
-                unstable: value(s.wear_unstable),
-                dropouts: value(s.wear_dropouts),
-                dull: value(s.wear_dull),
-                mix: value(s.wear_mix),
-            },
-            wear_on: gate(s.wear_on),
-            delay: DelayParams {
-                time_ms: value(s.delay_time),
-                feedback: value(s.delay_feedback),
-                tone_hz: value(s.delay_tone),
-                cross: value(s.delay_pingpong),
-                mix: value(s.delay_mix),
-            },
-            delay_on: gate(s.delay_on),
-            echo: EchoParams {
-                time_ms: value(s.echo_time),
-                feedback: value(s.echo_feedback),
-                tone_hz: value(s.echo_tone),
-                wobble: value(s.echo_wobble),
-                grit: value(s.echo_grit),
-                mix: value(s.echo_mix),
-            },
-            echo_on: gate(s.echo_on),
-            rise: RiseParams {
-                time_ms: value(s.rise_time),
-                feedback: value(s.rise_feedback),
-                shift_st: value(s.rise_shift),
-                wobble: value(s.rise_wobble),
-                tone_hz: value(s.rise_tone),
-                mix: value(s.rise_mix),
-            },
-            rise_on: gate(s.rise_on),
-            reverb: ReverbParams {
-                kind: ReverbType::from_value(raw(s.reverb_type)),
-                decay_s: value(s.reverb_decay),
-                size: value(s.reverb_size),
-                tone_hz: value(s.reverb_tone),
-                predelay_ms: value(s.reverb_predelay),
-                mix: value(s.reverb_mix),
-            },
-            reverb_on: gate(s.reverb_on),
+            order,
+            inst,
             filter: FilterParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
@@ -326,38 +279,159 @@ impl ChainParams {
             gain: value(s.gain),
         }
     }
+
+    /// The same values with every effect taken out of the chain. What sound
+    /// scaping hears of the arrangement: the ramps fade the change in 10 ms.
+    pub fn without_effects(mut self) -> Self {
+        self.order = Order::EMPTY;
+        self.filter_on = 0.0;
+        self.gain = 1.0;
+        self
+    }
 }
 
-struct ChainFades {
-    drive: Ramp,
-    crush: Ramp,
-    ring: Ramp,
-    overtone: Ramp,
-    chorus: Ramp,
-    flanger: Ramp,
-    wear: Ramp,
-    delay: Ramp,
-    echo: Ramp,
-    rise: Ramp,
-    reverb: Ramp,
-    filter: Ramp,
+enum Proc {
+    Drive(Drive),
+    Crush(Crush),
+    Ring(RingMod),
+    Chorus(Chorus),
+    Overtone(Overtone),
+    Flanger(Flanger),
+    Wear(Wear),
+    Delay(Delay),
+    Echo(Echo),
+    Rise(Rise),
+    Reverb(Reverb),
+}
+
+impl Proc {
+    fn new(kind: Kind, sr: f32) -> Self {
+        match kind {
+            Kind::Drive => Proc::Drive(Drive::new(sr)),
+            Kind::Crush => Proc::Crush(Crush::new(sr)),
+            Kind::Ring => Proc::Ring(RingMod::new(sr)),
+            Kind::Chorus => Proc::Chorus(Chorus::new(sr)),
+            Kind::Overtone => Proc::Overtone(Overtone::new(sr)),
+            Kind::Flanger => Proc::Flanger(Flanger::new(sr)),
+            Kind::Wear => Proc::Wear(Wear::new(sr)),
+            Kind::Delay => Proc::Delay(Delay::new(sr)),
+            Kind::Echo => Proc::Echo(Echo::new(sr)),
+            Kind::Rise => Proc::Rise(Rise::new(sr)),
+            Kind::Reverb => Proc::Reverb(Reverb::new(sr)),
+        }
+    }
+
+    fn reset(&mut self) {
+        match self {
+            Proc::Drive(x) => x.reset(),
+            Proc::Crush(x) => x.reset(),
+            Proc::Ring(x) => x.reset(),
+            Proc::Chorus(x) => x.reset(),
+            Proc::Overtone(x) => x.reset(),
+            Proc::Flanger(x) => x.reset(),
+            Proc::Wear(x) => x.reset(),
+            Proc::Delay(x) => x.reset(),
+            Proc::Echo(x) => x.reset(),
+            Proc::Rise(x) => x.reset(),
+            Proc::Reverb(x) => x.reset(),
+        }
+    }
+}
+
+struct Instance {
+    proc: Proc,
+    /// The bypass switch's fade.
+    on: Ramp,
+    /// 1 while the order names it, 0 while it is leaving or absent.
+    presence: Ramp,
+    /// The crusher's mix is smoothed here, before the envelope scales it.
+    crush_mix: OnePole,
+    /// Samples spent fully faded out and not named by the order.
+    idle: u32,
+}
+
+/// The instances being run, in order. Longer than the order, because an
+/// instance that has been taken out stays until its fade lands.
+#[derive(Debug, Clone, Copy)]
+struct Run {
+    items: [u8; INSTANCES],
+    len: usize,
+}
+
+impl Run {
+    const EMPTY: Run = Run {
+        items: [0; INSTANCES],
+        len: 0,
+    };
+
+    fn as_slice(&self) -> &[u8] {
+        &self.items[..self.len]
+    }
+
+    fn contains(&self, n: u8) -> bool {
+        self.as_slice().contains(&n)
+    }
+
+    fn from_order(order: &Order) -> Run {
+        let mut run = Run::EMPTY;
+        for &n in order.as_slice() {
+            run.items[run.len] = n;
+            run.len += 1;
+        }
+        run
+    }
+}
+
+/// Whether the instances `run` and `target` have in common come in the same
+/// order. If they do, the target can be reached without moving anything that
+/// is already running.
+fn same_relative_order(run: &[u8], target: &[u8]) -> bool {
+    let a = run.iter().filter(|n| target.contains(n));
+    let b = target.iter().filter(|n| run.contains(n));
+    a.eq(b)
+}
+
+/// The run list for `target` that keeps every leaving instance (one in `run`
+/// the target no longer names) just after the nearest earlier instance that
+/// stays, or first if there is none. Only valid when `same_relative_order`.
+fn merge(run: &[u8], target: &[u8]) -> Run {
+    let mut out = Run::EMPTY;
+    let push = |out: &mut Run, n: u8| {
+        out.items[out.len] = n;
+        out.len += 1;
+    };
+    // Leaving instances ahead of every staying one.
+    for &n in run {
+        if target.contains(&n) {
+            break;
+        }
+        push(&mut out, n);
+    }
+    for &t in target {
+        push(&mut out, t);
+        if let Some(at) = run.iter().position(|&n| n == t) {
+            for &n in &run[at + 1..] {
+                if target.contains(&n) {
+                    break;
+                }
+                push(&mut out, n);
+            }
+        }
+    }
+    out
 }
 
 pub(crate) struct Chain {
-    drive: Drive,
-    crush: Crush,
-    ringmod: RingMod,
-    overtone: Overtone,
-    chorus: Chorus,
-    flanger: Flanger,
-    wear: Wear,
-    delay: Delay,
-    echo: Echo,
-    rise: Rise,
-    reverb: Reverb,
+    inst: Vec<Instance>,
+    run: Run,
+    /// Who the order names this block, as 0 or 1: the presence targets.
+    named: [f32; INSTANCES],
+    /// A reordering waiting for the duck to land.
+    pending: Option<Order>,
+    grace: u32,
+    duck: Ramp,
     filter: Filter,
-    fades: ChainFades,
-    crush_mix: OnePole,
+    filter_fade: Ramp,
     gain: OnePole,
 }
 
@@ -365,9 +439,9 @@ impl Chain {
     /// Settled at each row's default in `defs`, so nothing fades or glides on
     /// launch.
     pub fn new(sample_rate: f32, defs: &[ParamDef], s: &ChainSlots) -> Self {
-        let ramp = |slot: usize| {
-            let mut r = Ramp::new(defs[slot].default);
-            r.set_time(BYPASS_MS, sample_rate);
+        let ramp = |value: f32, ms: f32| {
+            let mut r = Ramp::new(value);
+            r.set_time(ms, sample_rate);
             r
         };
         let smoother = |slot: usize| {
@@ -376,139 +450,219 @@ impl Chain {
             p.reset(defs[slot].default);
             p
         };
+        let inst = POOL
+            .iter()
+            .enumerate()
+            .map(|(n, (kind, _))| Instance {
+                proc: Proc::new(*kind, sample_rate),
+                on: ramp(defs[s.inst[n][0]].default, BYPASS_MS),
+                presence: ramp(0.0, BYPASS_MS),
+                crush_mix: smoother(s.inst[n][1]),
+                idle: 0,
+            })
+            .collect();
         Self {
-            drive: Drive::new(sample_rate),
-            crush: Crush::new(sample_rate),
-            ringmod: RingMod::new(sample_rate),
-            overtone: Overtone::new(sample_rate),
-            chorus: Chorus::new(sample_rate),
-            flanger: Flanger::new(sample_rate),
-            wear: Wear::new(sample_rate),
-            delay: Delay::new(sample_rate),
-            echo: Echo::new(sample_rate),
-            rise: Rise::new(sample_rate),
-            reverb: Reverb::new(sample_rate),
+            inst,
+            run: Run::EMPTY,
+            named: [0.0; INSTANCES],
+            pending: None,
+            grace: (GRACE_MS * 0.001 * sample_rate) as u32,
+            duck: ramp(1.0, DUCK_MS),
             filter: Filter::new(sample_rate),
-            fades: ChainFades {
-                drive: ramp(s.drive_on),
-                crush: ramp(s.crush_on),
-                ring: ramp(s.ring_on),
-                overtone: ramp(s.overtone_on),
-                chorus: ramp(s.chorus_on),
-                flanger: ramp(s.flanger_on),
-                wear: ramp(s.wear_on),
-                delay: ramp(s.delay_on),
-                echo: ramp(s.echo_on),
-                rise: ramp(s.rise_on),
-                reverb: ramp(s.reverb_on),
-                filter: ramp(s.filter_on),
-            },
-            crush_mix: smoother(s.crush_mix),
+            filter_fade: ramp(defs[s.filter_on].default, BYPASS_MS),
             gain: smoother(s.gain),
         }
     }
 
-    /// Drive, crush, ring, chorus, delay, for one frame. `crush_env` scales the crusher's
+    /// Once a block, before the first frame: take in who the order names.
+    pub fn prepare(&mut self, p: &ChainParams) {
+        let target = p.order.as_slice();
+        for (n, named) in self.named.iter_mut().enumerate() {
+            *named = if p.order.contains(n) { 1.0 } else { 0.0 };
+        }
+
+        // Instances that finished leaving, and have had time to settle, are
+        // dropped.
+        let mut kept = Run::EMPTY;
+        let mut dropped = false;
+        for &n in self.run.as_slice() {
+            let gone = self.named[n as usize] == 0.0 && self.inst[n as usize].idle >= self.grace;
+            if gone {
+                dropped = true;
+            } else {
+                kept.items[kept.len] = n;
+                kept.len += 1;
+            }
+        }
+        if dropped {
+            self.run = kept;
+        }
+
+        if self.pending.is_some() {
+            // A reordering is already ducking; it wants the latest order.
+            self.pending = Some(p.order);
+            return;
+        }
+        if !same_relative_order(self.run.as_slice(), target) {
+            self.pending = Some(p.order);
+            return;
+        }
+        let merged = merge(self.run.as_slice(), target);
+        for &n in merged.as_slice() {
+            if !self.run.contains(n) {
+                // New to the chain: forget whatever it held last time. It
+                // fades in from silence, so the reset is not heard.
+                self.inst[n as usize].proc.reset();
+                self.inst[n as usize].idle = 0;
+            }
+        }
+        self.run = merged;
+    }
+
+    /// The chain has gone quiet: swap to the new order. Effects that were
+    /// leaving keep going, after the new order, so their fades finish; being
+    /// silent, the swap itself is not heard.
+    fn swap(&mut self, to: Order) {
+        let old = self.run;
+        let mut next = Run::from_order(&to);
+        for &n in old.as_slice() {
+            if !to.contains(n as usize) && self.inst[n as usize].idle < self.grace {
+                next.items[next.len] = n;
+                next.len += 1;
+            }
+        }
+        for &n in to.as_slice() {
+            if !old.contains(n) {
+                // New to the chain: forget what it held, and fade it in.
+                self.inst[n as usize].proc.reset();
+                self.inst[n as usize].presence.set(0.0);
+                self.inst[n as usize].idle = 0;
+            }
+        }
+        self.run = next;
+    }
+
+    /// The palette, for one frame. `crush_env` scales the first crusher's
     /// mix: the patch's crush envelope, or exactly one where there is none.
     #[inline]
     pub fn front(&mut self, l: f32, r: f32, p: &ChainParams, crush_env: f32) -> (f32, f32) {
-        // Driven first, so the crusher and the ring modulator get the
-        // harmonics the curve added. Order stops being fixed the day the
-        // modifier stack lands.
-        let drive_on = self.fades.drive.process(p.drive_on);
-        let drive = DriveParams {
-            mix: p.drive.mix * drive_on,
-            ..p.drive
-        };
-        let (l, r) = self.drive.process(l, r, &drive);
-
-        // Crushed before the ring modulator, so the modulator has the extra
-        // partials the crusher just generated to fold against. Switched off,
-        // the mix lands on an exact zero, which the crusher already treats as
-        // a true bypass.
-        let crush = CrushParams {
-            bits: p.crush_bits,
-            rate: p.crush_rate,
-            mix: self.crush_mix.process(p.crush_mix)
-                * crush_env
-                * self.fades.crush.process(p.crush_on),
-        };
-        let (l, r) = self.crush.process(l, r, &crush);
-
-        let ring_on = self.fades.ring.process(p.ring_on);
-        let ring = RingModParams {
-            mix: p.ring.mix * ring_on,
-            ..p.ring
-        };
-        let (l, r) = self.ringmod.process(l, r, &ring);
-
-        // First of the modulators, so the chorus and everything after thicken the layers too.
-        let overtone_on = self.fades.overtone.process(p.overtone_on);
-        let overtone = OvertoneParams {
-            mix: p.overtone.mix * overtone_on,
-            ..p.overtone
-        };
-        let (l, r) = self.overtone.process(l, r, &overtone);
-
-        // Last in the lane (Georg, 2026-09-29), so it thickens whatever the
-        // effects before it made.
-        let chorus_on = self.fades.chorus.process(p.chorus_on);
-        let chorus = ChorusParams {
-            mix: p.chorus.mix * chorus_on,
-            ..p.chorus
-        };
-        let (l, r) = self.chorus.process(l, r, &chorus);
-
-        // Right after the chorus, which it is the close cousin of.
-        let flanger_on = self.fades.flanger.process(p.flanger_on);
-        let flanger = FlangerParams {
-            mix: p.flanger.mix * flanger_on,
-            ..p.flanger
-        };
-        let (l, r) = self.flanger.process(l, r, &flanger);
-
-        // Before the delay, so what the delay repeats is already worn.
-        let wear_on = self.fades.wear.process(p.wear_on);
-        let wear = WearParams {
-            mix: p.wear.mix * wear_on,
-            ..p.wear
-        };
-        let (l, r) = self.wear.process(l, r, &wear);
-
-        // After the chorus, so the repeats carry its width. Its line keeps
-        // running while it is off, so switching it on never plays stale audio.
-        let delay_on = self.fades.delay.process(p.delay_on);
-        let delay = DelayParams {
-            mix: p.delay.mix * delay_on,
-            ..p.delay
-        };
-        let (l, r) = self.delay.process(l, r, &delay);
-
-        // After the delay, so the two can be stacked.
-        let echo_on = self.fades.echo.process(p.echo_on);
-        let echo = EchoParams {
-            mix: p.echo.mix * echo_on,
-            ..p.echo
-        };
-        let (l, r) = self.echo.process(l, r, &echo);
-
-        // After the echo.
-        let rise_on = self.fades.rise.process(p.rise_on);
-        let rise = RiseParams {
-            mix: p.rise.mix * rise_on,
-            ..p.rise
-        };
-        let (l, r) = self.rise.process(l, r, &rise);
-
-        // Last of the effects, before the filter.
-        let reverb_on = self.fades.reverb.process(p.reverb_on);
-        let reverb = ReverbParams {
-            mix: p.reverb.mix * reverb_on,
-            ..p.reverb
-        };
-        let (l, r) = self.reverb.process(l, r, &reverb);
-
-        (l, r)
+        let duck = self
+            .duck
+            .process(if self.pending.is_some() { 0.0 } else { 1.0 });
+        if duck == 0.0 {
+            if let Some(to) = self.pending.take() {
+                self.swap(to);
+            }
+        }
+        let (mut l, mut r) = (l, r);
+        for k in 0..self.run.len {
+            let n = self.run.items[k] as usize;
+            let inst = &mut self.inst[n];
+            let presence = inst.presence.process(self.named[n]);
+            if presence == 0.0 && self.named[n] == 0.0 {
+                inst.idle = inst.idle.saturating_add(1);
+            } else {
+                inst.idle = 0;
+            }
+            let on = inst.on.process(p.inst[n].on);
+            let level = on * presence;
+            let env = if n == CRUSH_ENV_INSTANCE {
+                crush_env
+            } else {
+                1.0
+            };
+            (l, r) = match (&mut inst.proc, &p.inst[n].p) {
+                (Proc::Drive(x), FxParams::Drive(q)) => x.process(
+                    l,
+                    r,
+                    &DriveParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Crush(x), FxParams::Crush(q)) => {
+                    let mix = inst.crush_mix.process(q.mix) * env * level;
+                    x.process(l, r, &CrushParams { mix, ..*q })
+                }
+                (Proc::Ring(x), FxParams::Ring(q)) => x.process(
+                    l,
+                    r,
+                    &RingModParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Chorus(x), FxParams::Chorus(q)) => x.process(
+                    l,
+                    r,
+                    &ChorusParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Overtone(x), FxParams::Overtone(q)) => x.process(
+                    l,
+                    r,
+                    &OvertoneParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Flanger(x), FxParams::Flanger(q)) => x.process(
+                    l,
+                    r,
+                    &FlangerParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Wear(x), FxParams::Wear(q)) => x.process(
+                    l,
+                    r,
+                    &WearParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Delay(x), FxParams::Delay(q)) => x.process(
+                    l,
+                    r,
+                    &DelayParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Echo(x), FxParams::Echo(q)) => x.process(
+                    l,
+                    r,
+                    &EchoParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Rise(x), FxParams::Rise(q)) => x.process(
+                    l,
+                    r,
+                    &RiseParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Reverb(x), FxParams::Reverb(q)) => x.process(
+                    l,
+                    r,
+                    &ReverbParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                // The pool and the params are built from the same list, so a
+                // mismatch cannot happen; pass the signal on rather than
+                // panic on the audio thread.
+                _ => (l, r),
+            };
+        }
+        (l * duck, r * duck)
     }
 
     /// The filter, then the output gain, for one frame. Switched off, the
@@ -516,7 +670,7 @@ impl Chain {
     /// smoother starts and rests on it.
     #[inline]
     pub fn back(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
-        let filter_on = self.fades.filter.process(p.filter_on);
+        let filter_on = self.filter_fade.process(p.filter_on);
         let filter = FilterParams {
             mix: p.filter.mix * filter_on,
             ..p.filter
@@ -524,5 +678,230 @@ impl Chain {
         let (l, r) = self.filter.process(l, r, &filter);
         let g = self.gain.process(p.gain);
         (l * g, r * g)
+    }
+
+    /// How many effects are being run, including any still fading out.
+    #[cfg(test)]
+    pub fn running(&self) -> usize {
+        self.run.len
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_reader_takes_the_rows_in_the_order_the_templates_give_them() {
+        for kind in Kind::ALL {
+            let rows = kind.rows();
+            assert!(rows[0].id.ends_with(".on"), "{}", kind.name());
+            assert!(rows[1].id.ends_with(".mix"), "{}", kind.name());
+            for (j, suffix) in read_order(kind).iter().enumerate() {
+                let want = format!("{}.{suffix}", kind.name());
+                assert_eq!(rows[2 + j].id, want, "{} row {}", kind.name(), 2 + j);
+            }
+        }
+    }
+
+    #[test]
+    fn no_kind_has_more_rows_than_a_slot_array() {
+        for kind in Kind::ALL {
+            let read = kind
+                .rows()
+                .iter()
+                .filter(|r| !r.id.starts_with("crush.env."))
+                .count();
+            assert!(read <= MAX_ROWS, "{}", kind.name());
+        }
+    }
+
+    #[test]
+    fn relative_order_ignores_who_came_and_went() {
+        assert!(same_relative_order(&[1, 2, 3], &[1, 3]));
+        assert!(same_relative_order(&[1, 3], &[1, 2, 3]));
+        assert!(same_relative_order(&[], &[4, 5]));
+        assert!(!same_relative_order(&[1, 2, 3], &[3, 2]));
+        assert!(!same_relative_order(&[1, 2], &[2, 1]));
+    }
+
+    #[test]
+    fn merge_keeps_leavers_where_they_were() {
+        // 2 is leaving between 1 and 3; 9 is new.
+        let run = merge(&[1, 2, 3], &[1, 9, 3]);
+        assert_eq!(run.as_slice(), &[1, 2, 9, 3]);
+        // A leaver at the front stays at the front.
+        let run = merge(&[7, 1, 3], &[1, 3]);
+        assert_eq!(run.as_slice(), &[7, 1, 3]);
+        // Everyone leaving keeps their order.
+        let run = merge(&[4, 5, 6], &[]);
+        assert_eq!(run.as_slice(), &[4, 5, 6]);
+        // From nothing, it is the target.
+        let run = merge(&[], &[2, 8]);
+        assert_eq!(run.as_slice(), &[2, 8]);
+    }
+
+    // The chain, driven by hand: a bank, the slots resolved against its table,
+    // and blocks of 64 frames like the engine's.
+    use crate::params::{index_of, ParamBank, PARAMS};
+
+    struct Rig {
+        chain: Chain,
+        slots: ChainSlots,
+        bank: ParamBank,
+    }
+
+    impl Rig {
+        fn new() -> Self {
+            let at = |id: &str| index_of(id).unwrap_or_else(|| panic!("no row {id}"));
+            let slots = ChainSlots::resolve(at);
+            Rig {
+                chain: Chain::new(48_000.0, &PARAMS, &slots),
+                slots,
+                bank: ParamBank::new(),
+            }
+        }
+
+        fn set(&self, id: &str, v: f32) {
+            assert!(self.bank.set_by_id(id, v), "{id}");
+        }
+
+        fn order(&self, kinds: &[Kind]) {
+            let mut o = Order::EMPTY;
+            for k in kinds {
+                o.add(*k).unwrap();
+            }
+            fx::set_order(&self.bank, &o);
+        }
+
+        /// One block of `n` frames from `input`, returning the output.
+        fn run(&mut self, n: usize, input: impl Fn(usize) -> f32) -> Vec<f32> {
+            let p = ChainParams::read(&self.slots, |s| self.bank.get(s), |s| self.bank.get(s));
+            self.chain.prepare(&p);
+            (0..n)
+                .map(|i| {
+                    let x = input(i);
+                    self.chain.front(x, -x, &p, 1.0).0
+                })
+                .collect()
+        }
+
+        fn run_for(&mut self, blocks: usize, input: impl Fn(usize) -> f32) -> Vec<f32> {
+            let mut all = Vec::new();
+            for b in 0..blocks {
+                all.extend(self.run(64, |i| input(b * 64 + i)));
+            }
+            all
+        }
+    }
+
+    fn noise_at(i: usize) -> f32 {
+        let mut x = (i as u32).wrapping_mul(2_654_435_761).wrapping_add(12_345);
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        x as f32 / u32::MAX as f32 * 2.0 - 1.0
+    }
+
+    #[test]
+    fn an_empty_chain_is_the_input_exactly() {
+        let mut rig = Rig::new();
+        // Every effect set up to be loud, none of them named in the order.
+        for (n, (kind, _)) in POOL.iter().enumerate() {
+            rig.set(&format!("fx.{n}.{}.mix", kind.name()), 1.0);
+        }
+        let out = rig.run_for(100, noise_at);
+        for (i, v) in out.iter().enumerate() {
+            assert_eq!(*v, noise_at(i), "frame {i}");
+        }
+    }
+
+    #[test]
+    fn an_effect_in_the_chain_is_heard_and_out_of_it_is_not() {
+        let mut rig = Rig::new();
+        rig.set("fx.2.ring.mix", 1.0);
+        rig.set("fx.2.ring.freq", 440.0);
+        rig.order(&[Kind::Ring]);
+        let with = rig.run_for(200, noise_at);
+        assert!(with
+            .iter()
+            .skip(1000)
+            .zip(1000..)
+            .any(|(v, i)| *v != noise_at(i)));
+        rig.order(&[]);
+        rig.run_for(400, noise_at); // the fade lands, it settles, it is dropped
+        assert_eq!(rig.chain.running(), 0);
+        let without = rig.run_for(20, |i| noise_at(i + 99_999));
+        for (i, v) in without.iter().enumerate() {
+            assert_eq!(*v, noise_at(i + 99_999));
+        }
+    }
+
+    #[test]
+    fn a_removed_effect_keeps_running_until_it_has_faded() {
+        let mut rig = Rig::new();
+        rig.set("fx.7.delay.mix", 1.0);
+        rig.order(&[Kind::Delay]);
+        rig.run_for(20, noise_at);
+        assert_eq!(rig.chain.running(), 1);
+        rig.order(&[]);
+        // Still there after its 10 ms fade (480 frames) and well into the grace
+        // period, gone once that has passed (500 ms is 24 000 frames).
+        rig.run_for(10, noise_at);
+        assert_eq!(rig.chain.running(), 1);
+        rig.run_for(400, noise_at);
+        assert_eq!(rig.chain.running(), 0);
+    }
+
+    #[test]
+    fn putting_an_effect_back_does_not_replay_what_it_held() {
+        let mut rig = Rig::new();
+        rig.set("fx.7.delay.mix", 1.0);
+        rig.set("fx.7.delay.feedback", 0.9);
+        rig.set("fx.7.delay.time", 400.0);
+        rig.order(&[Kind::Delay]);
+        // A long, loud tail on the delay line...
+        rig.run_for(300, noise_at);
+        // ...taken out, and left out until it has gone...
+        rig.order(&[]);
+        rig.run_for(400, |_| 0.0);
+        assert_eq!(rig.chain.running(), 0);
+        // ...and put back into silence: nothing may come out of it.
+        rig.order(&[Kind::Delay]);
+        let out = rig.run_for(400, |_| 0.0);
+        assert!(
+            out.iter().all(|v| *v == 0.0),
+            "an old repeat came back after {} frames",
+            out.iter().position(|v| *v != 0.0).unwrap_or(0)
+        );
+    }
+
+    #[test]
+    fn effects_keep_their_state_through_a_reorder() {
+        let mut rig = Rig::new();
+        rig.set("fx.7.delay.mix", 1.0);
+        rig.set("fx.7.delay.feedback", 0.0);
+        rig.set("fx.7.delay.time", 400.0);
+        rig.set("fx.3.chorus.mix", 0.0);
+        rig.order(&[Kind::Chorus, Kind::Delay]);
+        // One burst goes into the delay line...
+        rig.run_for(10, noise_at);
+        // ...the two are swapped, and the burst still comes out 400 ms later.
+        rig.order(&[Kind::Delay, Kind::Chorus]);
+        let out = rig.run_for(600, |_| 0.0);
+        let loud = out.iter().map(|v| v.abs()).fold(0.0, f32::max);
+        assert!(loud > 0.1, "the delay line was lost in the reorder: {loud}");
+    }
+
+    #[test]
+    fn a_duplicated_or_impossible_order_runs_each_effect_once() {
+        let rig = Rig::new();
+        // A hand-edited file: the same effect twice, an impossible number,
+        // and a gap.
+        rig.set("fx.order.0", 5.0);
+        rig.set("fx.order.1", 0.0);
+        rig.set("fx.order.2", 5.0);
+        let p = ChainParams::read(&rig.slots, |s| rig.bank.get(s), |s| rig.bank.get(s));
+        assert_eq!(p.order.as_slice(), &[4]);
     }
 }

@@ -27,6 +27,8 @@ pub mod envelope;
 pub mod filter;
 pub mod flanger;
 pub mod fm;
+pub mod fx;
+mod fx_rows;
 pub mod granular;
 pub mod inspect;
 pub mod limiter;

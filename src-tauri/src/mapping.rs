@@ -292,7 +292,7 @@ mod tests {
 
     #[test]
     fn the_ends_land_exactly_on_min_and_max_through_every_taper() {
-        for d in PARAMS {
+        for d in PARAMS.iter() {
             let mut p = Pickup::default();
             // Caught by construction: base sits where the knob is.
             let at_min = p.turn(1, 0, None, d, d.min);
@@ -341,7 +341,7 @@ mod tests {
 
     #[test]
     fn an_encoder_clamps_at_the_ends_rather_than_wrapping() {
-        for d in PARAMS {
+        for d in PARAMS.iter() {
             let mut p = Pickup::default();
             let Turn::Write(v) = p.turn(1, 1, Some(-127), d, d.min) else {
                 panic!("writes");

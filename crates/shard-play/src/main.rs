@@ -108,9 +108,13 @@ fn render(source: Vec<f32>, sample_rate: f32, seconds: f32, out: &str) -> Result
     let mut engine = Engine::new(sample_rate, 256);
     engine.set_source(source);
     let bank = ParamBank::new();
-    for id in ["grain.on", "ring.on"] {
+    for id in ["grain.on", "fx.2.ring.on"] {
         bank.set_by_id(id, 1.0);
     }
+    // The ring modulator is a palette effect: it runs only if the chain names it.
+    let mut chain = shard_dsp::fx::Order::EMPTY;
+    chain.add(shard_dsp::fx::Kind::Ring);
+    shard_dsp::fx::set_order(&bank, &chain);
     // The cloud on its own, so the playground is heard as grains.
     bank.set_by_id("material.on", 0.0);
 
@@ -134,8 +138,8 @@ fn render(source: Vec<f32>, sample_rate: f32, seconds: f32, out: &str) -> Result
         bank.set_normalised("grain.position", osc(0.13, 0.0));
         bank.set_normalised("grain.size", osc(0.19, 0.3));
         bank.set_normalised("grain.density", 0.50 + 0.4 * osc(0.11, 0.6));
-        bank.set_by_id("ring.mix", 0.5 * osc(0.23, 0.8));
-        bank.set_normalised("ring.freq", osc(0.17, 0.5));
+        bank.set_by_id("fx.2.ring.mix", 0.5 * osc(0.23, 0.8));
+        bank.set_normalised("fx.2.ring.freq", osc(0.17, 0.5));
 
         engine.process_block(&mut buf, &bank);
         for s in &buf {
@@ -200,9 +204,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let bank = Arc::new(ParamBank::new());
     // Effects start off in the table. The playground is here to demonstrate
     // the cloud and the ring modulator, so it switches both on.
-    for id in ["grain.on", "ring.on"] {
+    for id in ["grain.on", "fx.2.ring.on"] {
         bank.set_by_id(id, 1.0);
     }
+    // The ring modulator is a palette effect: it runs only if the chain names it.
+    let mut chain = shard_dsp::fx::Order::EMPTY;
+    chain.add(shard_dsp::fx::Kind::Ring);
+    shard_dsp::fx::set_order(&bank, &chain);
     // The cloud on its own, so the playground is heard as grains.
     bank.set_by_id("material.on", 0.0);
     let audio_bank = Arc::clone(&bank);
@@ -288,11 +296,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             bank.set_normalised("grain.size", osc(0.019, 0.3));
             bank.set_normalised("grain.density", 0.50 + 0.4 * osc(0.011, 0.6));
             bank.set_normalised("grain.jitter", 0.1 + 0.3 * osc(0.007, 0.2));
-            bank.set_normalised("ring.freq", osc(0.017, 0.5));
+            bank.set_normalised("fx.2.ring.freq", osc(0.017, 0.5));
             // Hold off the ring modulator so the granular layer is audible
             // on its own first, then bring it in and let it breathe.
             let ring = ((t - 8.0) / 12.0).clamp(0.0, 1.0);
-            bank.set_by_id("ring.mix", ring * (0.25 + 0.45 * osc(0.023, 0.8)));
+            bank.set_by_id("fx.2.ring.mix", ring * (0.25 + 0.45 * osc(0.023, 0.8)));
         }
         // Once a second, the slowest block since the last report. The average
         // would flatter; the worst case is the one that drops out.

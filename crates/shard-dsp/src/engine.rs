@@ -83,11 +83,26 @@ impl Slots {
             pan: at("grain.pan"),
             reverse: at("grain.reverse"),
             window: at("grain.window"),
-            crush_env_amount: at("crush.env.amount"),
-            crush_env_attack: at("crush.env.attack"),
-            crush_env_decay: at("crush.env.decay"),
-            crush_env_sustain: at("crush.env.sustain"),
-            crush_env_release: at("crush.env.release"),
+            crush_env_amount: at(&crate::fx::row_id(
+                crate::fx::CRUSH_ENV_INSTANCE,
+                "crush.env.amount",
+            )),
+            crush_env_attack: at(&crate::fx::row_id(
+                crate::fx::CRUSH_ENV_INSTANCE,
+                "crush.env.attack",
+            )),
+            crush_env_decay: at(&crate::fx::row_id(
+                crate::fx::CRUSH_ENV_INSTANCE,
+                "crush.env.decay",
+            )),
+            crush_env_sustain: at(&crate::fx::row_id(
+                crate::fx::CRUSH_ENV_INSTANCE,
+                "crush.env.sustain",
+            )),
+            crush_env_release: at(&crate::fx::row_id(
+                crate::fx::CRUSH_ENV_INSTANCE,
+                "crush.env.release",
+            )),
             grain_gain: at("grain.gain"),
             material_on: at("material.on"),
             material_gain: at("material.gain"),
@@ -156,24 +171,12 @@ impl ArrangementBlock {
         let mut fx = ChainParams::read(&s.fx, value, value);
         let mut track_gain = value(s.track_gain);
         // The patch alone, as sound scaping hears it (Georg, 2026-09-26). Not
-        // a separate path: every arrangement effect is switched off and both
-        // gains go to unity, so the ramps fade the change in 10 ms, and once
-        // they land the chain is bit-exact with no arrangement at all. The
-        // chain keeps running, so a filter switched back in has no stale state.
+        // a separate path: the arrangement's chain is emptied and both gains
+        // go to unity, so the ramps fade the change in 10 ms, and once they
+        // land the chain is bit-exact with no arrangement at all. The filter
+        // keeps running, so one switched back in has no stale state.
         if patch_alone {
-            fx.drive_on = 0.0;
-            fx.crush_on = 0.0;
-            fx.ring_on = 0.0;
-            fx.chorus_on = 0.0;
-            fx.delay_on = 0.0;
-            fx.reverb_on = 0.0;
-            fx.overtone_on = 0.0;
-            fx.rise_on = 0.0;
-            fx.echo_on = 0.0;
-            fx.wear_on = 0.0;
-            fx.flanger_on = 0.0;
-            fx.filter_on = 0.0;
-            fx.gain = 1.0;
+            fx = fx.without_effects();
             track_gain = 1.0;
         }
         Self {
@@ -219,7 +222,7 @@ struct Fades {
 
 impl Fades {
     fn new(sample_rate: f32, slots: &Slots) -> Self {
-        let defs = crate::params::PARAMS;
+        let defs = &crate::params::PARAMS[..];
         // Settled at each switch's own default, so nothing fades in or out
         // on launch. Effects start off and the envelope starts on.
         let ramp = |slot: usize| {
@@ -355,7 +358,7 @@ impl Engine {
             p.set_time(ms, sample_rate);
             p
         };
-        let defs = crate::params::PARAMS;
+        let defs = &crate::params::PARAMS[..];
         let mut smooth = Smoothers {
             position: mk(defs[slots.position].smooth_ms),
             jitter: mk(defs[slots.jitter].smooth_ms),
@@ -805,6 +808,10 @@ impl Engine {
             Length::Hold => false,
         };
         let arr = self.arr;
+        // Who the order names this block, for the patch's chain and the
+        // arrangement's. Reorders, resets and fades start here.
+        self.fx.prepare(&fx);
+        self.arr_fx.prepare(&arr.fx);
         let env = EnvParams {
             amount: read(&self.mods, bank, self.slots.env_mix),
             attack_ms: read(&self.mods, bank, self.slots.env_attack),
@@ -1257,10 +1264,10 @@ mod tests {
         bank.set_by_id("grain.density", 200.0);
         bank.set_by_id("grain.size", 500.0);
         bank.set_by_id("amp.gain", 1.5);
-        bank.set_by_id("ring.mix", 1.0);
+        bank.set_by_id("fx.2.ring.mix", 1.0);
         // Every effect in, or the range check is only checking the dry path.
-        bank.set_by_id("ring.on", 1.0);
-        bank.set_by_id("crush.on", 1.0);
+        set(&bank, "fx.2.ring.on", 1.0);
+        set(&bank, "fx.1.crush.on", 1.0);
         bank.set_by_id("grain.on", 1.0);
         let mut out = vec![0.0; 512];
         for _ in 0..500 {
@@ -1534,72 +1541,72 @@ mod tests {
             ),
             (
                 "crush",
-                "crush.on",
-                &[("crush.mix", 1.0), ("crush.bits", 4.0)],
-                &[("crush.mix", 0.0), ("crush.bits", 4.0)],
+                "fx.1.crush.on",
+                &[("fx.1.crush.mix", 1.0), ("fx.1.crush.bits", 4.0)],
+                &[("fx.1.crush.mix", 0.0), ("fx.1.crush.bits", 4.0)],
                 true,
             ),
             (
                 "ring",
-                "ring.on",
-                &[("ring.mix", 1.0)],
-                &[("ring.mix", 0.0)],
+                "fx.2.ring.on",
+                &[("fx.2.ring.mix", 1.0)],
+                &[("fx.2.ring.mix", 0.0)],
                 true,
             ),
             (
                 "chorus",
-                "chorus.on",
-                &[("chorus.mix", 1.0)],
-                &[("chorus.mix", 0.0)],
+                "fx.3.chorus.on",
+                &[("fx.3.chorus.mix", 1.0)],
+                &[("fx.3.chorus.mix", 0.0)],
                 true,
             ),
             (
                 "delay",
-                "delay.on",
-                &[("delay.mix", 1.0)],
-                &[("delay.mix", 0.0)],
+                "fx.7.delay.on",
+                &[("fx.7.delay.mix", 1.0)],
+                &[("fx.7.delay.mix", 0.0)],
                 true,
             ),
             (
                 "flanger",
-                "flanger.on",
-                &[("flanger.mix", 1.0)],
-                &[("flanger.mix", 0.0)],
+                "fx.5.flanger.on",
+                &[("fx.5.flanger.mix", 1.0)],
+                &[("fx.5.flanger.mix", 0.0)],
                 true,
             ),
             (
                 "wear",
-                "wear.on",
-                &[("wear.mix", 1.0)],
-                &[("wear.mix", 0.0)],
+                "fx.6.wear.on",
+                &[("fx.6.wear.mix", 1.0)],
+                &[("fx.6.wear.mix", 0.0)],
                 true,
             ),
             (
                 "echo",
-                "echo.on",
-                &[("echo.mix", 1.0)],
-                &[("echo.mix", 0.0)],
+                "fx.8.echo.on",
+                &[("fx.8.echo.mix", 1.0)],
+                &[("fx.8.echo.mix", 0.0)],
                 true,
             ),
             (
                 "rise",
-                "rise.on",
-                &[("rise.mix", 1.0)],
-                &[("rise.mix", 0.0)],
+                "fx.9.rise.on",
+                &[("fx.9.rise.mix", 1.0)],
+                &[("fx.9.rise.mix", 0.0)],
                 true,
             ),
             (
                 "overtone",
-                "overtone.on",
-                &[("overtone.mix", 1.0)],
-                &[("overtone.mix", 0.0)],
+                "fx.4.overtone.on",
+                &[("fx.4.overtone.mix", 1.0)],
+                &[("fx.4.overtone.mix", 0.0)],
                 true,
             ),
             (
                 "reverb",
-                "reverb.on",
-                &[("reverb.mix", 1.0)],
-                &[("reverb.mix", 0.0)],
+                "fx.10.reverb.on",
+                &[("fx.10.reverb.mix", 1.0)],
+                &[("fx.10.reverb.mix", 0.0)],
                 true,
             ),
             (
@@ -1651,17 +1658,17 @@ mod tests {
             e.set_playing(true);
             let bank = ParamBank::new();
             set(&bank, "grain.gain", 0.5);
-            set(&bank, "ring.mix", 1.0);
+            set(&bank, "fx.2.ring.mix", 1.0);
             // The steady baseline is both sections on and audible.
             set(&bank, "grain.on", 1.0);
-            set(&bank, "ring.on", 1.0);
+            set(&bank, "fx.2.ring.on", 1.0);
             let mut out = vec![0.0; 256];
             let (mut prev, mut worst) = (0.0f32, 0.0f32);
             for block in 0..400 {
                 if toggle {
                     let on = if (block / 25) % 2 == 0 { 1.0 } else { 0.0 };
                     set(&bank, "grain.on", on);
-                    set(&bank, "ring.on", on);
+                    set(&bank, "fx.2.ring.on", on);
                 }
                 e.process_block(&mut out, &bank);
                 for s in out.iter().step_by(2) {
@@ -2109,6 +2116,15 @@ mod tests {
 
     fn set(bank: &ParamBank, id: &str, v: f32) {
         assert!(bank.set_by_id(id, v), "no such parameter: {id}");
+        // Switching an effect on in a test means having it in the chain.
+        if v >= 0.5 && id.ends_with(".on") {
+            if let Some((n, _)) = crate::fx::parse_row(id) {
+                let mut order = crate::fx::order_of(bank);
+                if order.push(n) {
+                    crate::fx::set_order(bank, &order);
+                }
+            }
+        }
     }
 
     #[test]
@@ -2213,9 +2229,9 @@ mod tests {
         let neutral = render_crushed(&[]);
         // Switched on, so this tests the mix at zero rather than the bypass.
         let destructive = render_crushed(&[
-            ("crush.on", 1.0),
-            ("crush.bits", 1.0),
-            ("crush.rate", 200.0),
+            ("fx.1.crush.on", 1.0),
+            ("fx.1.crush.bits", 1.0),
+            ("fx.1.crush.rate", 200.0),
         ]);
         assert_eq!(neutral.len(), destructive.len());
         for (i, (a, b)) in neutral.iter().zip(destructive.iter()).enumerate() {
@@ -2230,13 +2246,13 @@ mod tests {
         // effect fully in by the end of it.
         let clean = render_crushed(&[]);
         let swelling = render_crushed(&[
-            ("crush.on", 1.0),
-            ("crush.bits", 1.0),
-            ("crush.rate", 400.0),
-            ("crush.mix", 1.0),
-            ("crush.env.amount", 1.0),
+            ("fx.1.crush.on", 1.0),
+            ("fx.1.crush.bits", 1.0),
+            ("fx.1.crush.rate", 400.0),
+            ("fx.1.crush.mix", 1.0),
+            ("fx.1.crush.env.amount", 1.0),
             // 900 ms of attack across a one-second pass.
-            ("crush.env.attack", 900.0),
+            ("fx.1.crush.env.attack", 900.0),
         ]);
 
         // The first 50 ms: the envelope has barely opened, so this is still
@@ -2268,10 +2284,10 @@ mod tests {
         // fades the pass out while the crush envelope fades the effect in.
         // Neither may cancel the other.
         let out = render_crushed(&[
-            ("crush.on", 1.0),
-            ("crush.bits", 2.0),
-            ("crush.mix", 1.0),
-            ("crush.env.attack", 900.0),
+            ("fx.1.crush.on", 1.0),
+            ("fx.1.crush.bits", 2.0),
+            ("fx.1.crush.mix", 1.0),
+            ("fx.1.crush.env.attack", 900.0),
             ("env.release", 400.0),
         ]);
         assert!(out.iter().all(|s| s.is_finite()));
@@ -2726,8 +2742,8 @@ mod tests {
             for (id, v) in [
                 ("grain.on", 1.0),
                 ("grain.gain", 0.5),
-                ("ring.on", 1.0),
-                ("ring.mix", 0.3),
+                ("fx.2.ring.on", 1.0),
+                ("fx.2.ring.mix", 0.3),
             ] {
                 set(&bank, id, v);
             }
@@ -3111,11 +3127,11 @@ mod tests {
             e.set_source(tone(48_000));
             e.set_playing(true);
             let bank = ParamBank::new();
-            set(&bank, "ring.on", 1.0);
-            set(&bank, "ring.mix", 0.5);
+            set(&bank, "fx.2.ring.on", 1.0);
+            set(&bank, "fx.2.ring.mix", 0.5);
             if linked {
                 let mut mods = ModSet::new(&[lfo(1, 5.0, crate::modulation::Shape::Square)]);
-                mods.link("ring.mix", 1, 0.0, 0.5).unwrap();
+                mods.link("fx.2.ring.mix", 1, 0.0, 0.5).unwrap();
                 drop(e.set_modulation(mods));
             }
             let mut out = vec![0.0; 256];
@@ -3346,13 +3362,13 @@ mod tests {
     fn busy_patch() -> ParamBank {
         let bank = ParamBank::new();
         for (id, v) in [
-            ("drive.on", 1.0),
-            ("drive.amount", 18.0),
-            ("crush.on", 1.0),
-            ("crush.mix", 0.7),
-            ("crush.bits", 6.0),
-            ("ring.on", 1.0),
-            ("ring.mix", 0.5),
+            ("fx.0.drive.on", 1.0),
+            ("fx.0.drive.amount", 18.0),
+            ("fx.1.crush.on", 1.0),
+            ("fx.1.crush.mix", 0.7),
+            ("fx.1.crush.bits", 6.0),
+            ("fx.2.ring.on", 1.0),
+            ("fx.2.ring.mix", 0.5),
             ("filter.on", 1.0),
             ("filter.cutoff", 900.0),
             ("grain.on", 1.0),
@@ -3368,9 +3384,9 @@ mod tests {
         let arr = ParamBank::for_table(arrangement::params());
         for (id, v) in [
             ("arrangement.track.gain", 0.4),
-            ("arrangement.crush.on", 1.0),
-            ("arrangement.crush.mix", 1.0),
-            ("arrangement.crush.bits", 4.0),
+            ("arrangement.fx.1.crush.on", 1.0),
+            ("arrangement.fx.1.crush.mix", 1.0),
+            ("arrangement.fx.1.crush.bits", 4.0),
             ("arrangement.filter.on", 1.0),
             ("arrangement.filter.cutoff", 300.0),
             ("arrangement.amp.gain", 0.8),

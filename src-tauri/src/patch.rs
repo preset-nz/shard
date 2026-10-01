@@ -181,7 +181,7 @@ impl Patch {
             }
         }
 
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             if !self.params.contains_key(p.id) {
                 report.missing.push(p.id.to_string());
             }
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn the_arrangement_sits_above_the_patch_and_round_trips() {
         let arr = ParamBank::for_table(shard_dsp::arrangement::params());
-        arr.set_by_id("arrangement.crush.on", 1.0);
+        arr.set_by_id("arrangement.fx.1.crush.on", 0.0);
         arr.set_by_id("arrangement.track.gain", 0.25);
         let mut doc = Document::new(Tracker::default(), patch_of("{}"));
         doc.arrangement = capture_arrangement(&arr);
@@ -440,9 +440,10 @@ mod tests {
     fn a_document_without_an_arrangement_gets_the_default_one() {
         let doc = Document::from_json(&round_trip(patch_of("{}")).to_json().unwrap()).unwrap();
         let bank = ParamBank::for_table(shard_dsp::arrangement::params());
-        bank.set_by_id("arrangement.crush.on", 1.0);
+        bank.set_by_id("arrangement.fx.1.crush.on", 0.0);
         apply_arrangement(&BTreeMap::new(), &bank);
         assert!(doc.arrangement.is_empty());
-        assert_eq!(bank.get_by_id("arrangement.crush.on"), Some(0.0));
+        // An added effect arrives on, so that is the default it goes back to.
+        assert_eq!(bank.get_by_id("arrangement.fx.1.crush.on"), Some(1.0));
     }
 }

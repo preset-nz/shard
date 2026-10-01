@@ -734,10 +734,12 @@ mod tests {
     fn a_knob_finds_the_arrangements_rows_in_the_arrangements_bank() {
         let dir = scratch("locate");
         let c = load(&dir.join("controllers.json"));
-        let (bank, i) = c.locate("arrangement.crush.mix").expect("arrangement row");
-        assert_eq!(bank.defs()[i].id, "arrangement.crush.mix");
-        let (bank, i) = c.locate("crush.mix").expect("patch row");
-        assert_eq!(bank.defs()[i].id, "crush.mix");
-        assert!(c.locate("arrangement.crush.env.amount").is_none());
+        let (bank, i) = c
+            .locate("arrangement.fx.1.crush.mix")
+            .expect("arrangement row");
+        assert_eq!(bank.defs()[i].id, "arrangement.fx.1.crush.mix");
+        let (bank, i) = c.locate("fx.1.crush.mix").expect("patch row");
+        assert_eq!(bank.defs()[i].id, "fx.1.crush.mix");
+        assert!(c.locate("arrangement.fx.1.crush.env.amount").is_none());
     }
 }

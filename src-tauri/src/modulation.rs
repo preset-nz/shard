@@ -442,7 +442,7 @@ mod tests {
     fn shapes_are_spelled_by_name_in_the_file() {
         let doc = Modulation {
             lfos: vec![lfo(3, "smooth-random"), lfo(4, "elastic-in-out")],
-            links: Links::from([("ring.freq".into(), link(3, -0.25))]),
+            links: Links::from([("fx.2.ring.freq".into(), link(3, -0.25))]),
             ..Default::default()
         };
         let text = serde_json::to_string(&doc).unwrap();

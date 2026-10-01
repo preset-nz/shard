@@ -228,7 +228,7 @@ impl ModulationView {
 
 #[tauri::command]
 fn param_defs() -> Vec<ParamInfo> {
-    infos(PARAMS)
+    infos(&PARAMS[..])
 }
 
 /// The arrangement's table, as `param_defs` gives the patch's.

@@ -88,6 +88,12 @@ impl Ramp {
         self.value
     }
 
+    /// Jumps to `value` without moving through anything between. For a
+    /// section that is silent, or being reset, when nothing would be heard.
+    pub fn set(&mut self, value: f32) {
+        self.value = value;
+    }
+
     #[inline]
     pub fn process(&mut self, target: f32) -> f32 {
         let distance = target - self.value;

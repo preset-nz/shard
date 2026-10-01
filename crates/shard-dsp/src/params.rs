@@ -13,6 +13,7 @@
 //!   selector rather than a slider.
 
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::LazyLock;
 
 /// How a normalised 0-to-1 control position maps onto the real value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -118,7 +119,7 @@ impl ParamDef {
 /// repeats its node's name, because the section header already says it:
 /// "Frequency", not "Ring freq". The panel draws rows in table order, so order
 /// here is layout. The tests at the bottom hold all of this.
-pub const PARAMS: &[ParamDef] = &[
+const BASE: &[ParamDef] = &[
     // The patch's own settings, before any node (Georg, 2026-09-27): what
     // sets a note's length. See `note.rs`. Sample by default, which is how
     // every patch played before the setting existed.
@@ -380,614 +381,6 @@ pub const PARAMS: &[ParamDef] = &[
         smooth_ms: 0.0,
     },
     ParamDef {
-        id: "ring.on",
-        name: "Ring modulation",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "ring.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "ring.freq",
-        name: "Frequency",
-        min: 1.0,
-        max: 5000.0,
-        default: 140.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    // Overtone: layers made from the incoming sound, an octave down, an octave up and a fifth up, each with its own level. An effect on the sound, not a synth.
-    // First of the modulators, so the chorus and everything after thicken the layers too.
-    ParamDef {
-        id: "overtone.on",
-        name: "Overtone",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "overtone.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "overtone.sub",
-        name: "Sub",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "overtone.octave",
-        name: "Octave",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "overtone.fifth",
-        name: "Fifth",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "overtone.tone",
-        name: "Tone",
-        min: crate::overtone::TONE_MIN_HZ,
-        max: crate::overtone::TONE_MAX_HZ,
-        default: 5000.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    // The chorus, last in the process lane (Georg, 2026-09-29): three swept
-    // copies a channel, the right's LFOs between the left's, so it widens as
-    // well as thickens. Rate and depth stop where it would turn to warble
-    // (`chorus::MAX_RATE_HZ`). EQ is the Boss CH-1's: a shelf on the copies.
-    // Type picks the voicing: the plain chorus; a string-ensemble one, wider
-    // and lusher; or Choir, copies held sharp and flat for voices, where
-    // depth is the detune and rate how fast the copies wander. Names from
-    // `ChorusType::NAMES`. In the ensemble, rate is the slow swirl and depth
-    // scales it and its fast shimmer together.
-    ParamDef {
-        id: "chorus.on",
-        name: "Chorus",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "chorus.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "chorus.type",
-        name: "Type",
-        min: 0.0,
-        max: 2.0,
-        default: 0.0,
-        taper: Taper::Stepped(3),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "chorus.rate",
-        name: "Rate",
-        min: 0.05,
-        max: crate::chorus::MAX_RATE_HZ,
-        default: 0.6,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "chorus.depth",
-        name: "Depth",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    // Voices is continuous: the next copy fades in as it turns, so it sweeps
-    // and follows an LFO without a click. Few beat, many blur into a wall.
-    ParamDef {
-        id: "chorus.voices",
-        name: "Voices",
-        min: 1.0,
-        max: crate::chorus::MAX_VOICES as f32,
-        default: 4.0,
-        taper: Taper::Linear,
-        unit: Unit::None,
-        smooth_ms: 20.0,
-    },
-    // Spread scales where every voicing's copies sit, half to twice; low cut
-    // is a high-pass on the copies. Both shape every voicing alike.
-    ParamDef {
-        id: "chorus.spread",
-        name: "Spread",
-        min: crate::chorus::SPREAD_MIN,
-        max: crate::chorus::SPREAD_MAX,
-        default: 1.0,
-        taper: Taper::Exponential,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "chorus.lowcut",
-        name: "Low cut",
-        min: crate::chorus::LOW_CUT_MIN_HZ,
-        max: crate::chorus::LOW_CUT_MAX_HZ,
-        default: 240.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "chorus.eq",
-        name: "EQ",
-        min: -crate::chorus::EQ_RANGE_DB,
-        max: crate::chorus::EQ_RANGE_DB,
-        default: 0.0,
-        taper: Taper::Bipolar,
-        unit: Unit::Db,
-        smooth_ms: 20.0,
-    },
-    // The flanger: a very short swept delay summed with the dry, so comb notches sweep the spectrum. Feedback is bipolar: negative is the hollow comb, positive the ringing one.
-    // Right after the chorus, which it is the close cousin of.
-    ParamDef {
-        id: "flanger.on",
-        name: "Flanger",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "flanger.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "flanger.manual",
-        name: "Manual",
-        min: crate::flanger::MANUAL_MIN_MS,
-        max: crate::flanger::MANUAL_MAX_MS,
-        default: 1.5,
-        taper: Taper::Exponential,
-        unit: Unit::Ms,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "flanger.rate",
-        name: "Rate",
-        min: crate::flanger::MIN_RATE_HZ,
-        max: crate::flanger::MAX_RATE_HZ,
-        default: 0.25,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "flanger.depth",
-        name: "Depth",
-        min: 0.0,
-        max: 1.0,
-        default: 0.7,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "flanger.feedback",
-        name: "Feedback",
-        min: -crate::flanger::MAX_FEEDBACK,
-        max: crate::flanger::MAX_FEEDBACK,
-        default: 0.5,
-        taper: Taper::Bipolar,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    // Wear: a cassette that has been looked after badly. Wow and flutter bend the pitch, Unstable lurches it on a chaotic path that never repeats, Dropouts dip the level, and Dull closes a low-pass that follows the level, so quiet parts go muffled.
-    // Before the delay, so what the delay repeats is already worn.
-    ParamDef {
-        id: "wear.on",
-        name: "Wear",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "wear.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.7,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "wear.wow",
-        name: "Wow",
-        min: 0.0,
-        max: 1.0,
-        default: 0.4,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "wear.flutter",
-        name: "Flutter",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "wear.unstable",
-        name: "Unstable",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "wear.dropouts",
-        name: "Dropouts",
-        min: 0.0,
-        max: 1.0,
-        default: 0.2,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "wear.dull",
-        name: "Dull",
-        min: 0.0,
-        max: 1.0,
-        default: 0.4,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    // The clean delay: faithful repeats, darkened only by
-    // Tone in the loop. Time glides, so turning it bends pitch. Ping-pong
-    // sends each repeat to the other side. The degraded one is `echo`.
-    ParamDef {
-        id: "delay.on",
-        name: "Delay",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "delay.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "delay.time",
-        name: "Time",
-        min: crate::delay::DELAY_MIN_MS,
-        max: crate::delay::DELAY_MAX_MS,
-        default: 350.0,
-        taper: Taper::Exponential,
-        unit: Unit::Ms,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "delay.feedback",
-        name: "Feedback",
-        min: 0.0,
-        max: crate::delay::FEEDBACK_MAX,
-        default: 0.4,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "delay.tone",
-        name: "Tone",
-        min: crate::delay::TONE_MIN_HZ,
-        max: crate::delay::TONE_MAX_HZ,
-        default: 8000.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "delay.pingpong",
-        name: "Ping-pong",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    // The echo: the degraded counterpart of the delay. Each repeat comes back darker and more saturated, with the pitch wandering a little, like a loop of tape.
-    // After the delay, so the two can be stacked.
-    ParamDef {
-        id: "echo.on",
-        name: "Echo",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "echo.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.35,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "echo.time",
-        name: "Time",
-        min: crate::echo::ECHO_MIN_MS,
-        max: crate::echo::ECHO_MAX_MS,
-        default: 300.0,
-        taper: Taper::Exponential,
-        unit: Unit::Ms,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "echo.feedback",
-        name: "Feedback",
-        min: 0.0,
-        max: crate::echo::MAX_FEEDBACK,
-        default: 0.45,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "echo.tone",
-        name: "Tone",
-        min: crate::echo::TONE_MIN_HZ,
-        max: crate::echo::TONE_MAX_HZ,
-        default: 3500.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "echo.wobble",
-        name: "Wobble",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "echo.grit",
-        name: "Grit",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    // Rise: cascading pitch-shifted repeats. Each repeat arrives Shift semitones above the last, so the trail climbs. Wobble wanders the shift; Tone keeps the climbing repeats from turning to glass.
-    // After the echo.
-    ParamDef {
-        id: "rise.on",
-        name: "Rise",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "rise.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.4,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "rise.time",
-        name: "Time",
-        min: crate::rise::RISE_MIN_MS,
-        max: crate::rise::RISE_MAX_MS,
-        default: 380.0,
-        taper: Taper::Exponential,
-        unit: Unit::Ms,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "rise.feedback",
-        name: "Feedback",
-        min: 0.0,
-        max: crate::rise::MAX_FEEDBACK,
-        default: 0.6,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "rise.shift",
-        name: "Shift",
-        min: -crate::rise::MAX_SHIFT_ST,
-        max: crate::rise::MAX_SHIFT_ST,
-        default: 7.0,
-        taper: Taper::Bipolar,
-        unit: Unit::Semitones,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "rise.wobble",
-        name: "Wobble",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "rise.tone",
-        name: "Tone",
-        min: crate::rise::TONE_MIN_HZ,
-        max: crate::rise::TONE_MAX_HZ,
-        default: 6000.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    // The reverb, last of the effects: an eight-line feedback network. Type picks the room, Decay is how long the tail lasts, Size scales the space, Tone is how fast the highs die, Pre-delay gaps it from the dry.
-    // Last of the effects, before the filter.
-    ParamDef {
-        id: "reverb.on",
-        name: "Reverb",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "reverb.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.3,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "reverb.type",
-        name: "Type",
-        min: 0.0,
-        max: 2.0,
-        default: 0.0,
-        taper: Taper::Stepped(3),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "reverb.decay",
-        name: "Decay",
-        min: crate::reverb::MIN_DECAY_S,
-        max: crate::reverb::MAX_DECAY_S,
-        default: 2.5,
-        taper: Taper::Exponential,
-        unit: Unit::Seconds,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "reverb.size",
-        name: "Size",
-        min: 0.0,
-        max: 1.0,
-        default: 0.5,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "reverb.tone",
-        name: "Tone",
-        min: crate::reverb::MIN_TONE_HZ,
-        max: crate::reverb::MAX_TONE_HZ,
-        default: 6000.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "reverb.predelay",
-        name: "Pre-delay",
-        min: 0.0,
-        max: crate::reverb::MAX_PREDELAY_MS,
-        default: 12.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
         id: "env.on",
         name: "Envelope",
         min: 0.0,
@@ -1042,158 +435,6 @@ pub const PARAMS: &[ParamDef] = &[
     ParamDef {
         id: "env.release",
         name: "Release",
-        min: 0.0,
-        max: 4000.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
-    // Drive, first of the processes (Georg, 2026-09-14): shape the material
-    // before the crusher and the ring modulator have it. Type names come
-    // from `DriveType::NAMES`.
-    ParamDef {
-        id: "drive.on",
-        name: "Drive",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "drive.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "drive.amount",
-        name: "Amount",
-        min: 0.0,
-        max: 48.0,
-        default: 24.0,
-        taper: Taper::Linear,
-        unit: Unit::None,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "drive.tone",
-        name: "Tone",
-        min: 200.0,
-        max: 20_000.0,
-        default: 8_000.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "drive.type",
-        name: "Type",
-        min: 0.0,
-        max: 3.0,
-        default: 0.0,
-        taper: Taper::Stepped(4),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.on",
-        name: "Crush",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    },
-    // Defaults to zero, like the ring modulator: loading a patch and pressing
-    // play gives you the material, not an effect you did not ask for.
-    ParamDef {
-        id: "crush.mix",
-        name: "Mix",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "crush.bits",
-        name: "Bits",
-        min: 1.0,
-        max: 16.0,
-        default: 16.0,
-        // Bits are already the logarithm of the level count, so a linear
-        // control here is the perceptually even one.
-        taper: Taper::Linear,
-        unit: Unit::None,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "crush.rate",
-        name: "Rate",
-        min: 200.0,
-        max: 48_000.0,
-        default: 48_000.0,
-        taper: Taper::Exponential,
-        unit: Unit::Hz,
-        smooth_ms: 20.0,
-    },
-    // The crush envelope. Multiplies `crush.mix` rather than the signal, so
-    // an attack is "starts clean, then crushes" and a release is the reverse.
-    // Its neutral shape is a flat one, which leaves the knob untouched.
-    ParamDef {
-        id: "crush.env.amount",
-        name: "Env amount",
-        min: 0.0,
-        max: 1.0,
-        // Full depth, like the amplitude envelope. Harmless as a default
-        // because a neutral ADSR is flat whatever the depth is set to.
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "crush.env.attack",
-        name: "Env attack",
-        min: 0.0,
-        max: 4000.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.env.decay",
-        name: "Env decay",
-        min: 0.0,
-        max: 4000.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.env.sustain",
-        name: "Env sustain",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.env.release",
-        name: "Env release",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -1322,6 +563,20 @@ pub const PARAMS: &[ParamDef] = &[
     },
 ];
 
+/// Every row: the fixed ones, with the palette's instance rows and order rows
+/// placed where the process lane begins.
+pub static PARAMS: LazyLock<Vec<ParamDef>> = LazyLock::new(|| {
+    let env = BASE
+        .iter()
+        .position(|p| p.id == "env.on")
+        .expect("the envelope's switch is in the base table");
+    let mut all = Vec::with_capacity(BASE.len() + crate::fx::rows().len());
+    all.extend_from_slice(&BASE[..env]);
+    all.extend_from_slice(crate::fx::rows());
+    all.extend_from_slice(&BASE[env..]);
+    all
+});
+
 /// The switchable nodes that make sound rather than shape it. They lead with
 /// Gain; every other switchable node is an effect and leads with Mix.
 pub const GENERATORS: &[&str] = &["material", "grain", "fm"];
@@ -1347,7 +602,7 @@ pub struct ParamBank {
 impl ParamBank {
     /// A bank for the patch table.
     pub fn new() -> Self {
-        Self::for_table(PARAMS)
+        Self::for_table(&PARAMS[..])
     }
 
     /// A bank for any table, at its defaults.
@@ -1447,7 +702,11 @@ pub(crate) fn leads_with_its_level(table: &[ParamDef], prefix: &str) {
 #[cfg(test)]
 pub(crate) fn repeats_no_node_name(table: &[ParamDef], prefix: &str) {
     for p in table.iter().filter(|p| !p.id.ends_with(".on")) {
-        let node = p.id.trim_start_matches(prefix).split('.').next().unwrap();
+        // `fx.3.chorus.rate` belongs to the chorus, not to "fx".
+        let node = match crate::fx::parse_row(p.id) {
+            Some((_, template)) => template.split('.').next().unwrap(),
+            None => p.id.trim_start_matches(prefix).split('.').next().unwrap(),
+        };
         assert!(
             !p.name.to_lowercase().starts_with(node),
             "{} repeats its node in the name {:?}",
@@ -1464,14 +723,14 @@ mod tests {
     #[test]
     fn ids_are_unique() {
         let mut seen = std::collections::HashSet::new();
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             assert!(seen.insert(p.id), "duplicate id: {}", p.id);
         }
     }
 
     #[test]
     fn defaults_sit_inside_their_range() {
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             assert!(
                 p.default >= p.min && p.default <= p.max,
                 "{} default {} outside {}..{}",
@@ -1488,7 +747,7 @@ mod tests {
         // Geometric interpolation is undefined through zero. A parameter
         // tagged exponential with a zero minimum would silently fall back to
         // linear, which is the bug this test exists to catch.
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             if p.taper == Taper::Exponential {
                 assert!(
                     p.min > 0.0,
@@ -1502,7 +761,7 @@ mod tests {
 
     #[test]
     fn stepped_params_never_smooth() {
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             if matches!(p.taper, Taper::Stepped(_)) {
                 assert_eq!(p.smooth_ms, 0.0, "{} is stepped but smooths", p.id);
             }
@@ -1511,7 +770,7 @@ mod tests {
 
     #[test]
     fn denormalise_hits_both_ends() {
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             assert!((p.denormalise(0.0) - p.min).abs() < 1e-3, "{} at 0", p.id);
             assert!((p.denormalise(1.0) - p.max).abs() < 1e-3, "{} at 1", p.id);
         }
@@ -1519,7 +778,7 @@ mod tests {
 
     #[test]
     fn normalise_round_trips() {
-        for p in PARAMS {
+        for p in PARAMS.iter() {
             for step in 0..=20 {
                 let t = step as f32 / 20.0;
                 let v = p.denormalise(t);
@@ -1566,12 +825,12 @@ mod tests {
 
     #[test]
     fn every_switchable_node_leads_with_its_level() {
-        leads_with_its_level(PARAMS, "");
+        leads_with_its_level(&PARAMS, "");
     }
 
     #[test]
     fn no_parameter_repeats_its_node_name() {
-        repeats_no_node_name(PARAMS, "");
+        repeats_no_node_name(&PARAMS, "");
     }
 
     #[test]
