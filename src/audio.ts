@@ -142,6 +142,8 @@ export interface MaterialView {
   /** The window's ends, 0 to 1 of the file. */
   trim_start: number;
   trim_end: number;
+  /** The note it sounds at, as a MIDI number (60 is C4), or null if unknown. */
+  root: number | null;
 }
 
 /** Which material each generator reads, by node id. Null is silent. */
@@ -168,8 +170,13 @@ export const removeMaterial = (id: number) => invoke<MaterialsView>('remove_mate
 export const wireMaterial = (node: string, material: number | null) =>
   invoke<MaterialsView>('wire_material', { node, material });
 /** Set a material's octave and trim. Tauri takes command arguments in camelCase. */
-export const setMaterial = (id: number, octave: number, trimStart: number, trimEnd: number) =>
-  invoke<MaterialsView>('set_material', { id, octave, trimStart, trimEnd });
+export const setMaterial = (
+  id: number,
+  octave: number,
+  trimStart: number,
+  trimEnd: number,
+  root: number | null,
+) => invoke<MaterialsView>('set_material', { id, octave, trimStart, trimEnd, root });
 
 /** Everything spawned since the last call. Drains, so poll it steadily. */
 export const grainLog = () => invoke<GrainInfo[]>('grain_log');

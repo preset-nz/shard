@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Track, Tracker } from '@/audio';
 import { Slider } from '@/components/ui/slider';
+import { noteName } from '@/lib/notes';
 
 const LENGTHS = [4, 8, 16];
 const TEMPO_MIN = 40;
@@ -32,11 +33,14 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
 export function StepStrip({
   tracker,
   step,
+  root,
   onChange,
 }: {
   tracker: Tracker;
   /** The step playing, from zero, or -1. */
   step: number;
+  /** The Sample material's root note, a MIDI number, so pitches show as names. */
+  root: number | null;
   onChange: (next: Tracker) => void;
 }) {
   const track = tracker.tracks[0];
@@ -157,6 +161,7 @@ export function StepStrip({
               key={i}
               step={i}
               semis={track.pitches[i] ?? 0}
+              root={root}
               set={((track.pattern >> i) & 1) === 1}
               onChange={(semis) => {
                 const pitches = Array.from({ length: 16 }, (_, j) => track.pitches[j] ?? 0);
@@ -210,11 +215,14 @@ const PX_PER_SEMITONE = 6;
 function PitchCell({
   step,
   semis,
+  root,
   set,
   onChange,
 }: {
   step: number;
   semis: number;
+  /** The material's root note, so the cell can show the note. */
+  root: number | null;
   /** Whether the step above it is on; an off step's pitch is drawn quieter. */
   set: boolean;
   onChange: (semis: number) => void;
@@ -235,7 +243,7 @@ function PitchCell({
       aria-valuemin={-PITCH_RANGE}
       aria-valuemax={PITCH_RANGE}
       aria-valuenow={semis}
-      title={`Step ${step + 1}: ${semis > 0 ? '+' : ''}${semis} semitones. Drag or use the arrows, Shift for an octave. Double-click to clear.`}
+      title={`Step ${step + 1}: ${root === null ? '' : `${noteName(root + semis)}, `}${semis > 0 ? '+' : ''}${semis} semitones from the sample. Drag or use the arrows, Shift for an octave. Double-click to clear.`}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         drag.current = { y: e.clientY, from: semis };
@@ -263,7 +271,7 @@ function PitchCell({
         step > 0 && step % 4 === 0 ? 'ml-2' : ''
       } ${tone}`}
     >
-      {semis > 0 ? `+${semis}` : semis}
+      {root !== null ? noteName(root + semis) : semis > 0 ? `+${semis}` : semis}
     </div>
   );
 }

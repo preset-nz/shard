@@ -22,6 +22,9 @@ use serde::{Deserialize, Serialize};
 use shard_dsp::sources::OCTAVE_RANGE;
 use shard_dsp::{Generator, Reading};
 
+/// The highest MIDI note a root can be.
+pub const MAX_ROOT: u8 = 127;
+
 /// What the built-in drone is called in the tree.
 pub const DRONE_NAME: &str = "Built-in drone";
 
@@ -42,6 +45,11 @@ pub struct MaterialRecord {
     pub trim_start: f32,
     #[serde(default = "one")]
     pub trim_end: f32,
+    /// The note the material sounds at, as a MIDI number (60 is C4), when it
+    /// has one. Step pitches are semitones from the sample whatever it is; a
+    /// root lets the tracker show them as note names. None means unknown.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root: Option<u8>,
 }
 
 fn one() -> f32 {
@@ -162,6 +170,7 @@ impl Pool {
             octave: 0.0,
             trim_start: 0.0,
             trim_end: 1.0,
+            root: None,
         });
         id
     }
@@ -227,6 +236,17 @@ impl Pool {
         m.octave = octave.round().clamp(-OCTAVE_RANGE, OCTAVE_RANGE);
         m.trim_start = trim_start.clamp(0.0, 1.0);
         m.trim_end = trim_end.clamp(0.0, 1.0);
+        Ok(())
+    }
+
+    /// The note a material sounds at, or none. Brought into MIDI's range.
+    pub fn set_root(&mut self, id: u64, root: Option<u8>) -> Result<(), String> {
+        let m = self
+            .materials
+            .iter_mut()
+            .find(|m| m.id == id)
+            .ok_or_else(|| format!("there is no material {id}"))?;
+        m.root = root.map(|n| n.min(MAX_ROOT));
         Ok(())
     }
 
@@ -423,5 +443,36 @@ mod tests {
         // Also after a save, since the counter is saved.
         let mut back: Pool = serde_json::from_str(&serde_json::to_string(&pool).unwrap()).unwrap();
         assert!(back.add("d.wav", "/d.wav") > c);
+    }
+
+    #[test]
+    fn a_root_note_is_kept_clamped_and_left_out_of_the_file_when_unset() {
+        let mut pool = Pool::with_drone();
+        let id = pool.wires.material.unwrap();
+        assert_eq!(pool.materials[0].root, None);
+        let bare = serde_json::to_string(&pool.materials[0]).unwrap();
+        assert!(
+            !bare.contains("root"),
+            "unset roots are not written: {bare}"
+        );
+
+        pool.set_root(id, Some(64)).unwrap();
+        assert_eq!(pool.materials[0].root, Some(64));
+        pool.set_root(id, Some(200)).unwrap();
+        assert_eq!(pool.materials[0].root, Some(MAX_ROOT));
+        let text = serde_json::to_string(&pool.materials[0]).unwrap();
+        let back: MaterialRecord = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.root, Some(MAX_ROOT));
+
+        // A file from before roots existed reads as none.
+        let old = r#"{"id":1,"name":"x","octave":0.0,"trim_start":0.0,"trim_end":1.0}"#;
+        assert_eq!(
+            serde_json::from_str::<MaterialRecord>(old).unwrap().root,
+            None
+        );
+
+        pool.set_root(id, None).unwrap();
+        assert_eq!(pool.materials[0].root, None);
+        assert!(pool.set_root(999, Some(60)).is_err());
     }
 }

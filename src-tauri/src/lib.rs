@@ -994,6 +994,8 @@ pub struct MaterialView {
     pub octave: f32,
     pub trim_start: f32,
     pub trim_end: f32,
+    /// The note it sounds at, as a MIDI number, or none.
+    pub root: Option<u8>,
 }
 
 /// The pool in the tree's order, and what each generator reads.
@@ -1020,6 +1022,7 @@ impl MaterialsView {
                     octave: m.octave,
                     trim_start: m.trim_start,
                     trim_end: m.trim_end,
+                    root: m.root,
                 })
                 .collect(),
             wires: pool.wires,
@@ -1115,7 +1118,7 @@ fn wire_material(
     Ok(view)
 }
 
-/// Set a material's octave and trim. Every generator reading it follows at
+/// Set a material's octave, trim and root note. Every generator reading it follows at
 /// the next block.
 #[tauri::command]
 fn set_material(
@@ -1124,10 +1127,12 @@ fn set_material(
     octave: f32,
     trim_start: f32,
     trim_end: f32,
+    root: Option<u8>,
 ) -> Result<MaterialsView, String> {
     let view = {
         let mut pool = state.materials.lock().expect("materials poisoned");
         pool.set_values(id, octave, trim_start, trim_end)?;
+        pool.set_root(id, root)?;
         MaterialsView::of(&pool)
     };
     state.send_readings();

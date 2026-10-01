@@ -8,6 +8,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Slider } from '@/components/ui/slider';
+import { noteName, ROOT_NOTES } from '@/lib/notes';
 
 /** Whole octaves, as the engine reads them. */
 const OCTAVES = [-2, -1, 0, 1, 2];
@@ -62,6 +63,31 @@ export function MaterialEditor({
             {OCTAVES.map((o) => (
               <SelectItem key={o} value={String(o)} className="text-xs">
                 {o > 0 ? `+${o}` : o} oct
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </Row>
+      <Row label="Root">
+        <Select
+          value={material.root === null ? 'none' : String(material.root)}
+          onValueChange={(v) => onChange({ ...material, root: v === 'none' ? null : Number(v) })}
+        >
+          <SelectTrigger
+            size="sm"
+            aria-label="Root note"
+            title="The note this sounds at. With it, the tracker shows each step as a note name."
+            className="h-7 w-24 text-xs"
+          >
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="none" className="text-xs">
+              Unknown
+            </SelectItem>
+            {ROOT_NOTES.map((n) => (
+              <SelectItem key={n} value={String(n)} className="text-xs">
+                {noteName(n)}
               </SelectItem>
             ))}
           </SelectContent>

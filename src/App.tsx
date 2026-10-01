@@ -617,7 +617,7 @@ export default function App() {
     }));
     const seq = ++materialSeq.current;
     try {
-      const view = await setMaterial(m.id, m.octave, m.trim_start, m.trim_end);
+      const view = await setMaterial(m.id, m.octave, m.trim_start, m.trim_end, m.root);
       if (seq === materialSeq.current) setPool(view);
     } catch (e) {
       setError(String(e));
@@ -1160,6 +1160,7 @@ export default function App() {
             <StepStrip
               tracker={tracker}
               step={meter.step}
+              root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
               onChange={(next) => void changeTracker(next)}
             />
           )}
