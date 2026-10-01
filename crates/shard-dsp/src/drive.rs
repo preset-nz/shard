@@ -116,6 +116,12 @@ impl Oversampler {
         }
     }
 
+    /// Empty both tap lines. The coefficients and write position stay.
+    fn reset(&mut self) {
+        self.up.fill(0.0);
+        self.down.fill(0.0);
+    }
+
     #[inline]
     fn fir(buf: &[f32], coef: &[f32], pos: usize) -> f32 {
         let n = buf.len();
@@ -166,6 +172,11 @@ impl HighPass {
         self.y1 = y;
         y
     }
+
+    fn reset(&mut self) {
+        self.x1 = 0.0;
+        self.y1 = 0.0;
+    }
 }
 
 /// One channel's state: the filters around the curve and its oversampler.
@@ -183,6 +194,18 @@ struct Lane {
     sag: f32,
     tone: OnePole,
     over: Oversampler,
+}
+
+impl Lane {
+    fn reset(&mut self) {
+        self.pre_od.reset();
+        self.pre_ds.reset();
+        self.dc.reset();
+        self.wool = 0.0;
+        self.sag = 0.0;
+        self.tone.reset(0.0);
+        self.over.reset();
+    }
 }
 
 pub struct Drive {
@@ -233,6 +256,13 @@ impl Drive {
             mix,
             sample_rate,
         }
+    }
+
+    /// Forget the audio held inside: the filters, the fuzz's sag and the
+    /// oversampler's taps. The controls keep following their settings.
+    pub fn reset(&mut self) {
+        self.left.reset();
+        self.right.reset();
     }
 
     #[inline]
@@ -579,6 +609,46 @@ mod tests {
             for _ in 0..5_000 {
                 let (l, r) = d.process(0.0, 0.0, &p);
                 assert!(l.abs() < 1e-6 && r.abs() < 1e-6, "{kind:?}: {l}");
+            }
+        }
+    }
+
+    #[test]
+    fn reset_forgets_everything_it_held() {
+        for kind in DriveType::ALL {
+            let mut d = Drive::new(SR);
+            let p = DriveParams {
+                amount_db: 40.0,
+                tone_hz: 20_000.0,
+                kind,
+                mix: 1.0,
+            };
+            let mut seed = 12_345u32;
+            for _ in 0..48_000 {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let x = (seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0;
+                d.process(x, -x, &p);
+            }
+            d.reset();
+            for i in 0..4_800 {
+                assert_eq!(d.process(0.0, 0.0, &p), (0.0, 0.0), "{kind:?} at {i}");
+            }
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_drive_changes_nothing() {
+        for kind in DriveType::ALL {
+            let p = DriveParams {
+                kind,
+                mix: 1.0,
+                ..Default::default()
+            };
+            let mut fresh = Drive::new(SR);
+            let mut reset = Drive::new(SR);
+            reset.reset();
+            for x in tone(220.0, 4_800, 0.5) {
+                assert_eq!(fresh.process(x, x, &p), reset.process(x, x, &p));
             }
         }
     }

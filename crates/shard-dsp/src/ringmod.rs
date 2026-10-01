@@ -54,6 +54,10 @@ impl RingMod {
         }
     }
 
+    /// Nothing to forget: the node holds no audio, only a carrier phase that
+    /// free-runs and is not signal. Present so every effect can be reset alike.
+    pub fn reset(&mut self) {}
+
     /// Both channels share one carrier. Two would cause the stereo image to
     /// drift apart as the phases diverge.
     #[inline]
@@ -226,5 +230,37 @@ mod tests {
             (a - b).abs() < 0.01,
             "carrier amplitude drifted: {a} then {b}"
         );
+    }
+
+    #[test]
+    fn reset_leaves_no_tail_after_silence() {
+        let mut rm = RingMod::new(48_000.0);
+        let p = RingModParams {
+            freq: 300.0,
+            mix: 1.0,
+        };
+        for i in 0..48_000 {
+            let x = (i as f32 * 0.37).sin();
+            rm.process(x, -x, &p);
+        }
+        rm.reset();
+        for i in 0..4_800 {
+            assert_eq!(rm.process(0.0, 0.0, &p), (0.0, 0.0), "at {i}");
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_ring_mod_changes_nothing() {
+        let p = RingModParams {
+            freq: 300.0,
+            mix: 1.0,
+        };
+        let mut fresh = RingMod::new(48_000.0);
+        let mut reset = RingMod::new(48_000.0);
+        reset.reset();
+        for i in 0..4_800 {
+            let x = (i as f32 * 0.05).sin();
+            assert_eq!(fresh.process(x, x, &p), reset.process(x, x, &p));
+        }
     }
 }

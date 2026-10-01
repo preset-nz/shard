@@ -394,6 +394,14 @@ impl Chorus {
         sum
     }
 
+    /// Forgets all audio held in the delay line and the filters. The sweeps
+    /// and the choir copies' wander carry on where they were.
+    pub fn reset(&mut self) {
+        self.line.fill(0.0);
+        self.cut_lows = [0.0; 2];
+        self.lows = [0.0; 2];
+    }
+
     #[inline]
     pub fn process(&mut self, l: f32, r: f32, p: &ChorusParams) -> (f32, f32) {
         let rate = self.rate.process(p.rate.clamp(0.0, MAX_RATE_HZ));
@@ -547,6 +555,37 @@ mod tests {
             }
             for _ in 0..1_000 {
                 assert_eq!(c.process(0.5, -0.25, &off), (0.5, -0.25));
+            }
+        }
+    }
+
+    #[test]
+    fn reset_forgets_the_audio() {
+        for p in every(1.0, 2.0, 0.0) {
+            let mut c = Chorus::new(SR);
+            let mut seed = 0x1234_5678u32;
+            for _ in 0..48_000 {
+                c.process(noise(&mut seed), noise(&mut seed), &p);
+            }
+            c.reset();
+            // The line is the longest tail; run well past it.
+            for _ in 0..(c.frames * 2) {
+                assert_eq!(c.process(0.0, 0.0, &p), (0.0, 0.0));
+            }
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_chorus_changes_nothing() {
+        for p in every(0.7, 1.5, 3.0) {
+            let mut a = Chorus::new(SR);
+            let mut b = Chorus::new(SR);
+            b.reset();
+            for i in 0..10_000 {
+                assert_eq!(
+                    a.process(tone(i), tone(i), &p),
+                    b.process(tone(i), tone(i), &p)
+                );
             }
         }
     }

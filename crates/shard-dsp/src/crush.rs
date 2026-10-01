@@ -77,6 +77,13 @@ impl Crush {
         }
     }
 
+    /// Forget the held samples, so nothing of the old signal is repeated. The
+    /// hold clock is a timer, not audio, and keeps running.
+    pub fn reset(&mut self) {
+        self.held_l = 0.0;
+        self.held_r = 0.0;
+    }
+
     /// Both channels share one hold clock. Two would drift apart and smear the
     /// stereo image, the same reason the ring modulator shares its carrier.
     #[inline]
@@ -256,6 +263,41 @@ mod tests {
         for s in tone(24_000) {
             let (l, r) = c.process(s, s, &p);
             assert_eq!(l, r, "channels diverged");
+        }
+    }
+
+    #[test]
+    fn reset_forgets_the_held_samples() {
+        // A very low rate makes the hold last as long as possible: the held
+        // value would otherwise sound for the whole period.
+        let p = CrushParams {
+            bits: 4.0,
+            rate: 2.0,
+            mix: 1.0,
+        };
+        let mut c = Crush::new(SR);
+        for s in tone(48_000) {
+            c.process(s, -s, &p);
+        }
+        c.reset();
+        // Silence is the held value too, whenever the clock next fires.
+        for i in 0..48_000 {
+            assert_eq!(c.process(0.0, 0.0, &p), (0.0, 0.0), "at {i}");
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_crush_changes_nothing() {
+        let p = CrushParams {
+            bits: 6.0,
+            rate: 3_000.0,
+            mix: 1.0,
+        };
+        let mut fresh = Crush::new(SR);
+        let mut reset = Crush::new(SR);
+        reset.reset();
+        for s in tone(4_800) {
+            assert_eq!(fresh.process(s, s, &p), reset.process(s, s, &p));
         }
     }
 }
