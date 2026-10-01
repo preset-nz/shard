@@ -88,6 +88,12 @@ impl PitchShifter {
         }
     }
 
+    /// Forgets the audio it holds, without allocating. The ratio smoother
+    /// keeps its place: it follows a control, not a signal.
+    pub fn reset(&mut self) {
+        self.line.fill(0.0);
+    }
+
     /// What `process` delays the signal by at a ratio of one, in samples:
     /// half the window and the nearest-read margin.
     pub fn latency_samples(&self) -> usize {
@@ -278,5 +284,17 @@ mod tests {
         assert!((semitones_to_ratio(12.0) - 2.0).abs() < 1e-6);
         assert!((semitones_to_ratio(-12.0) - 0.5).abs() < 1e-6);
         assert_eq!(semitones_to_ratio(0.0), 1.0);
+    }
+
+    #[test]
+    fn reset_forgets_what_it_held() {
+        let mut s = PitchShifter::new(48_000.0);
+        for i in 0..4_800 {
+            s.process(((i % 97) as f32 / 97.0) - 0.5, 1.5);
+        }
+        s.reset();
+        for _ in 0..4_800 {
+            assert_eq!(s.process(0.0, 1.5), 0.0);
+        }
     }
 }
