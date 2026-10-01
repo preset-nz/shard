@@ -124,6 +124,8 @@ export const fxMove = (layer: ChainLevel, n: number, by: number) =>
  * The values arrive with the next poll; the tracker and the modulation are
  * fetched again by the caller.
  */
+/** Every patch parameter back to its default: the sound only. One step of Undo. */
+export const resetSound = () => invoke<boolean>('reset_sound');
 export const undoEdit = () => invoke<string | null>('undo');
 
 /** What Undo and Redo would do, by name; null when there is nothing. */

@@ -51,6 +51,7 @@ import {
   removeEnvelope,
   removeLfo,
   removeMaterial,
+  resetSound,
   type SourceInfo,
   savePatch,
   setHistoryMenu,
@@ -891,6 +892,11 @@ export default function App() {
         break;
       case 'file-add-material':
         void pickFiles();
+        break;
+      case 'file-reset-sound':
+        void resetSound().then((changed) => {
+          if (changed) setNote('Reset the sound to its defaults. Undo brings it back.');
+        });
         break;
       // The menu owns Cmd+Z, so a text field never sees it. In one, undo the
       // text (a preset's name, the tempo), not the document.

@@ -105,6 +105,12 @@ pub fn install(app: &AppHandle<Wry>) -> tauri::Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &item(
                 app,
+                "file-reset-sound",
+                "Reset Sound",
+                Some("CmdOrCtrl+Shift+R"),
+            )?,
+            &item(
+                app,
                 "file-add-material",
                 "Add Material…",
                 Some("CmdOrCtrl+Shift+O"),

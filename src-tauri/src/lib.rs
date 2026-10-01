@@ -912,6 +912,12 @@ fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<Modulation
     })
 }
 
+/// Put every patch parameter back to its default. One step of Undo.
+#[tauri::command]
+fn reset_sound(state: tauri::State<'_, Audio>) -> bool {
+    state.reset_sound()
+}
+
 /// What Undo and Redo would do, by name, for the UI.
 #[tauri::command]
 fn history_state(state: tauri::State<'_, Audio>) -> history::HistoryView {
@@ -1701,6 +1707,26 @@ impl Audio {
         apply_tracker(self, next)
     }
 
+    /// Every patch parameter back to its default, as one step of Undo; none if
+    /// they all are already. The sound only (roadmap row 2): the material and
+    /// its trim, the tracker, the arrangement and the LFOs and links are left
+    /// alone. The effect chain is among the parameters, so it empties.
+    fn reset_sound(&self) -> bool {
+        let defs = self.bank.defs();
+        if defs
+            .iter()
+            .enumerate()
+            .all(|(i, p)| (self.bank.get(i) - p.default).abs() < 1.0e-6)
+        {
+            return false;
+        }
+        self.record_edit(None, "Reset the sound");
+        for (i, p) in defs.iter().enumerate() {
+            self.bank.set(i, p.default);
+        }
+        true
+    }
+
     /// Step back one edit; the name of what was undone.
     fn undo_one(&self) -> Option<String> {
         let current = self.snapshot();
@@ -2206,6 +2232,7 @@ pub fn run() {
             fx_remove,
             fx_move,
             history_state,
+            reset_sound,
             set_history_menu,
             undo,
             redo,
@@ -2772,5 +2799,45 @@ mod tests {
             a.tracker.lock().unwrap().tracks[0].steps[0].on,
             "and restored the steps"
         );
+    }
+
+    #[test]
+    fn resetting_the_sound_restores_defaults_in_one_undoable_step() {
+        use shard_dsp::fx::{self, Kind};
+        let a = headless();
+        edit(&a, "grain.size", 123.0);
+        let n = fx::add_to_chain(&a.bank, Kind::Delay).unwrap();
+        a.bank.set_by_id(&fx::row_id(n, "delay.time"), 777.0);
+        // Things the reset must leave alone.
+        a.arrangement.set_by_id("arrangement.track.gain", 0.25);
+        let mut t = a.tracker.lock().unwrap().clone();
+        t.tempo = 90.0;
+        apply_tracker(&a, t);
+
+        assert!(a.reset_sound());
+        for (i, p) in a.bank.defs().iter().enumerate() {
+            assert_eq!(a.bank.get(i), p.default, "{}", p.id);
+        }
+        assert!(
+            fx::order_of(&a.bank).is_empty(),
+            "the chain empties with it"
+        );
+        assert_eq!(
+            a.arrangement.get_by_id("arrangement.track.gain"),
+            Some(0.25)
+        );
+        assert_eq!(a.tracker.lock().unwrap().tempo, 90.0);
+
+        assert_eq!(a.undo_one().as_deref(), Some("Reset the sound"));
+        assert_eq!(a.bank.get_by_id("grain.size"), Some(123.0));
+        assert!(fx::order_of(&a.bank).contains(n), "the chain is back");
+        assert_eq!(a.bank.get_by_id(&fx::row_id(n, "delay.time")), Some(777.0));
+    }
+
+    #[test]
+    fn resetting_a_sound_that_is_already_default_is_not_an_edit() {
+        let a = headless();
+        assert!(!a.reset_sound());
+        assert!(a.undo_one().is_none());
     }
 }
