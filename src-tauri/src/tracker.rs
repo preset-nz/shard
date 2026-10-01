@@ -16,7 +16,7 @@
 //! Saved in the same `.shard` file as the patch, above it. See `patch.rs`.
 
 use serde::{Deserialize, Serialize};
-use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS};
+use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::StepParams;
 
 pub const TEMPO_MIN: f32 = 40.0;
@@ -50,7 +50,7 @@ pub struct Track {
 }
 
 /// One sixteenth of a track.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Step {
     /// Whether it triggers the patch.
@@ -61,6 +61,20 @@ pub struct Step {
     /// How long its note is held, in sixteenths; zero is the patch's own Hold
     /// time. Only heard while the patch's Length is Hold.
     pub hold: u8,
+    /// How hard it plays, 0 to `VELOCITY_MAX`; full is the default, so a step
+    /// never given one sounds as it always did.
+    pub velocity: u8,
+}
+
+impl Default for Step {
+    fn default() -> Self {
+        Self {
+            on: false,
+            pitch: 0,
+            hold: 0,
+            velocity: VELOCITY_MAX,
+        }
+    }
 }
 
 impl Default for Tracker {
@@ -85,6 +99,7 @@ impl Default for Track {
                     on: (p.pattern >> i) & 1 == 1,
                     pitch: p.pitches[i],
                     hold: p.holds[i],
+                    velocity: p.velocities[i],
                 })
                 .collect(),
         }
@@ -122,6 +137,7 @@ impl Tracker {
             for step in &mut t.steps {
                 step.pitch = step.pitch.clamp(-PITCH_RANGE, PITCH_RANGE);
                 step.hold = step.hold.min(HOLD_MAX);
+                step.velocity = step.velocity.min(VELOCITY_MAX);
             }
         }
         self
@@ -138,11 +154,13 @@ impl Tracker {
             pattern: 0,
             pitches: [0; STEPS],
             holds: [0; STEPS],
+            velocities: [VELOCITY_MAX; STEPS],
         };
         for (i, step) in t.steps.iter().take(STEPS).enumerate() {
             p.pattern |= u64::from(step.on) << i;
             p.pitches[i] = step.pitch;
             p.holds[i] = step.hold;
+            p.velocities[i] = step.velocity;
         }
         p
     }
@@ -261,6 +279,7 @@ mod tests {
                 on: true,
                 pitch: 99,
                 hold: 99,
+                velocity: 200,
             };
             3
         ];
@@ -274,6 +293,7 @@ mod tests {
             "two octaves up at most"
         );
         assert_eq!(t.tracks[0].steps[0].hold, HOLD_MAX, "a bar at most");
+        assert_eq!(t.tracks[0].steps[0].velocity, VELOCITY_MAX, "full at most");
         assert!(!t.tracks[0].steps[3].on, "the padding is empty steps");
         let fast = Tracker {
             tempo: 500.0,
@@ -334,6 +354,7 @@ mod tests {
                 on: true,
                 pitch: -100,
                 hold: 3,
+                velocity: 5,
             };
             100
         ];
@@ -355,6 +376,7 @@ mod tests {
                 pattern: u64::MAX,
                 pitches: [-PITCH_RANGE; STEPS],
                 holds: [3; STEPS],
+                velocities: [5; STEPS],
             }
         );
     }
@@ -365,6 +387,7 @@ mod tests {
         for step in &mut first.steps {
             step.pitch = 7;
             step.hold = 2;
+            step.velocity = 64;
         }
         let t = Tracker {
             tempo: 82.0,
@@ -381,6 +404,7 @@ mod tests {
                 pattern: 0b1001,
                 pitches: [7; STEPS],
                 holds: [2; STEPS],
+                velocities: [64; STEPS],
             }
         );
     }
@@ -392,6 +416,7 @@ mod tests {
             on: true,
             pitch: -5,
             hold: 8,
+            velocity: 40,
         };
         let p = Tracker {
             tracks: vec![t],
@@ -401,7 +426,7 @@ mod tests {
         .params();
         assert_eq!(p.length, 64);
         assert_eq!(p.pattern, 1 << 63);
-        assert_eq!((p.pitches[63], p.holds[63]), (-5, 8));
+        assert_eq!((p.pitches[63], p.holds[63], p.velocities[63]), (-5, 8, 40));
     }
 
     #[test]
@@ -411,6 +436,7 @@ mod tests {
             on: true,
             pitch: 7,
             hold: 3,
+            velocity: 90,
         };
         let text = serde_json::to_string(&t).unwrap();
         let back: Tracker = serde_json::from_str(&text).unwrap();
@@ -421,6 +447,10 @@ mod tests {
         let t = t.sanitised();
         assert!(t.tracks[0].steps[0].on);
         assert_eq!(t.tracks[0].steps[1].pitch, 5);
+        assert_eq!(
+            t.tracks[0].steps[1].velocity, VELOCITY_MAX,
+            "a missing velocity is full"
+        );
         assert_eq!(t.tracks[0].steps.len(), STEPS);
     }
 

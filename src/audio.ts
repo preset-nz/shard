@@ -414,6 +414,8 @@ export interface Step {
    * Hold time. Only heard while the patch's Length is Hold.
    */
   hold: number;
+  /** How hard it plays, 0 to 127; 127 is full. */
+  velocity: number;
 }
 
 /** A track of steps. Monophonic: a new step cuts the last. */

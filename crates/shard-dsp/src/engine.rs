@@ -21,6 +21,9 @@ use crate::smooth::{OnePole, Ramp};
 use crate::sources::{Generator, Reading};
 use crate::steps::{StepClock, StepParams};
 
+/// How long a change of velocity takes to arrive, in ms.
+const VELOCITY_MS: f32 = 3.0;
+
 /// Resolved indices into the parameter table, looked up once at construction
 /// so the audio thread never does a string comparison.
 struct Slots {
@@ -321,6 +324,11 @@ pub struct Engine {
     /// The ratio the tail was read at, so a pitch change fades out at the
     /// old pitch rather than jumping to the new one.
     tail_ratio: f32,
+    /// The step's velocity as a gain, glided over a few milliseconds so a
+    /// step that is quieter than the last does not click, and what it is
+    /// gliding to. Unity while the steps are off.
+    vel: Ramp,
+    vel_target: f32,
     /// The patch's own effects and output.
     fx: Chain,
     /// The arrangement's chain, over the patch, and the patch's fader into it.
@@ -422,6 +430,12 @@ impl Engine {
             pass_ratio: 1.0,
             pass_semis: 0.0,
             tail_ratio: 1.0,
+            vel: {
+                let mut r = Ramp::new(1.0);
+                r.set_time(VELOCITY_MS, sample_rate);
+                r
+            },
+            vel_target: 1.0,
             fx: Chain::new(sample_rate, defs, &slots.fx),
             arr_fx: Chain::new(sample_rate, arr_defs, &arr_slots.fx),
             arr_slots,
@@ -799,6 +813,7 @@ impl Engine {
         if steps_off {
             self.pass_ratio = 1.0;
             self.pass_semis = 0.0;
+            self.vel_target = 1.0;
         }
         // Whether the sample loops: always for Loop, never for Hold, and for
         // Sample, whenever the steps are off, as it always has.
@@ -937,6 +952,7 @@ impl Engine {
                     self.tail_ratio = self.pass_ratio;
                 }
                 (self.pass_ratio, self.pass_semis) = steps.pitch_of(k);
+                self.vel_target = steps.velocity_of(k);
                 // A step with its own hold gates its note for that many
                 // sixteenths, instead of the patch's Hold time.
                 let hold = steps.hold_of(k);
@@ -1100,6 +1116,8 @@ impl Engine {
                 );
                 faded_env.gain_of(self.note.amp_shape)
             };
+            // A step's velocity scales its whole note, with the envelope.
+            let e = e * self.vel.process(self.vel_target);
             let (l, r) = (l * e, r * e);
 
             // The filter, on the master: after every generator, effect and
@@ -3061,6 +3079,102 @@ mod tests {
         assert!(v[60..195].iter().all(|p| *p == 0.0), "the gap");
         assert!(v[205..345].iter().all(|p| *p > 0.5), "the long note");
         assert!(v[360..399].iter().all(|p| *p == 0.0));
+    }
+
+    /// Peaks per 5 ms block of two held steps, a half bar apart, with the
+    /// given velocities (steps one and nine).
+    fn two_velocities(first: u8, second: u8) -> Vec<f32> {
+        let mut v = [crate::steps::VELOCITY_MAX; crate::steps::STEPS];
+        v[0] = first;
+        v[8] = second;
+        fm_blocks(
+            &[
+                ("patch.length", HOLD),
+                ("patch.hold", 150.0),
+                ("env.on", 0.0),
+            ],
+            0.0,
+            StepParams {
+                on: true,
+                length: 16,
+                pattern: 0b1_0000_0001,
+                velocities: v,
+                ..Default::default()
+            },
+            420,
+        )
+    }
+
+    #[test]
+    fn a_steps_velocity_scales_its_note() {
+        let v = two_velocities(127, 64);
+        let loud = v[10..25].iter().fold(0.0f32, |m, p| m.max(*p));
+        let soft = v[210..225].iter().fold(0.0f32, |m, p| m.max(*p));
+        assert!(loud > 0.5, "the full step is silent: {loud}");
+        assert!(
+            (soft / loud - 64.0 / 127.0).abs() < 0.03,
+            "half velocity should be about half: {soft} against {loud}"
+        );
+    }
+
+    #[test]
+    fn a_step_at_velocity_zero_is_silent_and_full_is_unity() {
+        let silent = two_velocities(127, 0);
+        assert!(silent[210..225].iter().all(|p| *p < 1e-4));
+        // Full is exactly the old behaviour: bit-exact with steps that never
+        // heard of velocity (the default of every other test here).
+        let full = two_velocities(127, 127);
+        let default = fm_blocks(
+            &[
+                ("patch.length", HOLD),
+                ("patch.hold", 150.0),
+                ("env.on", 0.0),
+            ],
+            0.0,
+            StepParams {
+                on: true,
+                length: 16,
+                pattern: 0b1_0000_0001,
+                ..Default::default()
+            },
+            420,
+        );
+        assert_eq!(full, default);
+    }
+
+    #[test]
+    fn velocity_is_forgotten_when_the_steps_stop() {
+        // A quiet step then the steps switched off: the patch plays at unity.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(96_000));
+        let bank = ParamBank::new();
+        set(&bank, "material.on", 0.0);
+        set(&bank, "fm.on", 1.0);
+        set(&bank, "fm.index", 0.0);
+        e.set_playing(true);
+        let mut v = [crate::steps::VELOCITY_MAX; crate::steps::STEPS];
+        v[0] = 20;
+        e.set_steps(StepParams {
+            on: true,
+            length: 16,
+            pattern: 1,
+            velocities: v,
+            ..Default::default()
+        });
+        let mut out = vec![0.0; 480];
+        for _ in 0..40 {
+            e.process_block(&mut out, &bank);
+        }
+        e.set_steps(StepParams::default());
+        let mut peak = 0.0f32;
+        for _ in 0..120 {
+            e.process_block(&mut out, &bank);
+            peak = out.iter().fold(peak, |m, s| m.max(s.abs()));
+        }
+        assert!(
+            peak > 0.5,
+            "the steps ended and left the patch quiet: {peak}"
+        );
     }
 
     #[test]

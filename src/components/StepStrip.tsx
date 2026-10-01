@@ -53,7 +53,8 @@ export function StepStrip({
   const track = tracker.tracks[0];
   const setTrack = (change: Partial<Track>) =>
     onChange({ ...tracker, tracks: [{ ...track, ...change }, ...tracker.tracks.slice(1)] });
-  const stepAt = (i: number): Step => track.steps[i] ?? { on: false, pitch: 0, hold: 0 };
+  const stepAt = (i: number): Step =>
+    track.steps[i] ?? { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX };
   const setStep = (i: number, change: Partial<Step>) => {
     const steps = Array.from({ length: STEPS }, (_, j) => stepAt(j));
     steps[i] = { ...steps[i], ...change };
@@ -127,7 +128,7 @@ export function StepStrip({
       setStep(i, { on: true, pitch: midi - (root ?? 60) });
       focusStep(row, Math.min(track.length - 1, i + 1));
     } else if (row === 'steps' && (e.key === 'Backspace' || e.key === 'Delete')) {
-      setStep(i, { on: false, pitch: 0, hold: 0 });
+      setStep(i, { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX });
     } else {
       return;
     }
@@ -263,22 +264,38 @@ export function StepStrip({
               </fieldset>
               <fieldset className="flex min-w-0 items-center gap-1" aria-label="Pitch">
                 {cells.map((i) => (
-                  <PitchCell
+                  <NumberCell
                     key={i}
+                    kind={PITCH}
                     step={i}
-                    semis={stepAt(i).pitch}
+                    value={stepAt(i).pitch}
                     root={root}
                     set={stepAt(i).on}
                     onChange={(pitch) => setStep(i, { pitch })}
                   />
                 ))}
               </fieldset>
+              <fieldset className="flex min-w-0 items-center gap-1" aria-label="Velocity">
+                {cells.map((i) => (
+                  <NumberCell
+                    key={i}
+                    kind={VELOCITY}
+                    step={i}
+                    value={stepAt(i).velocity}
+                    root={root}
+                    set={stepAt(i).on}
+                    onChange={(velocity) => setStep(i, { velocity })}
+                  />
+                ))}
+              </fieldset>
               <fieldset className="flex min-w-0 items-center gap-1" aria-label="Hold">
                 {cells.map((i) => (
-                  <HoldCell
+                  <NumberCell
                     key={i}
+                    kind={HOLD}
                     step={i}
-                    sixteenths={stepAt(i).hold}
+                    value={stepAt(i).hold}
+                    root={root}
                     set={stepAt(i).on}
                     onChange={(hold) => setStep(i, { hold })}
                   />
@@ -294,88 +311,6 @@ export function StepStrip({
           +{hiddenSteps(track)} past step {track.length}
         </span>
       )}
-    </div>
-  );
-}
-
-/** Semitones a step can be pitched, either way. `PITCH_RANGE` in Rust. */
-const PITCH_RANGE = 24;
-/** How far a drag moves before the pitch moves a semitone. */
-const PX_PER_SEMITONE = 6;
-
-/**
- * One step's pitch, in semitones. Varispeed, as Octave is: up plays the
- * sample faster and shorter.
- *
- * Drag up or down, or focus it and use the arrows, Shift for an octave.
- * Double-click, Backspace or 0 clears it. A focusable element rather than a
- * button or a number field, so Space still starts and stops playback while a
- * cell has focus.
- */
-function PitchCell({
-  step,
-  semis,
-  root,
-  set,
-  onChange,
-}: {
-  step: number;
-  semis: number;
-  /** The material's root note, so the cell can show the note. */
-  root: number | null;
-  /** Whether the step above it is on; an off step's pitch is drawn quieter. */
-  set: boolean;
-  onChange: (semis: number) => void;
-}) {
-  const drag = useRef<{ y: number; from: number } | null>(null);
-  const commit = (next: number) => {
-    const clamped = Math.max(-PITCH_RANGE, Math.min(PITCH_RANGE, Math.round(next)));
-    if (clamped !== semis) onChange(clamped);
-  };
-  const tone =
-    semis === 0 ? 'text-muted-foreground/40' : set ? 'text-foreground' : 'text-muted-foreground';
-
-  return (
-    <div
-      role="spinbutton"
-      tabIndex={0}
-      data-row="pitch"
-      data-step={step}
-      aria-label={`Step ${step + 1} pitch`}
-      aria-valuemin={-PITCH_RANGE}
-      aria-valuemax={PITCH_RANGE}
-      aria-valuenow={semis}
-      title={`Step ${step + 1}: ${root === null ? '' : `${noteName(root + semis)}, `}${semis > 0 ? '+' : ''}${semis} semitones from the sample. Drag or use the arrows, Shift for an octave. Double-click to clear.`}
-      onPointerDown={(e) => {
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { y: e.clientY, from: semis };
-      }}
-      onPointerMove={(e) => {
-        const d = drag.current;
-        if (d) commit(d.from + (d.y - e.clientY) / PX_PER_SEMITONE);
-      }}
-      onPointerUp={() => {
-        drag.current = null;
-      }}
-      onPointerCancel={() => {
-        drag.current = null;
-      }}
-      onDoubleClick={() => commit(0)}
-      onKeyDown={(e) => {
-        // ⌘, Ctrl and Alt are the strip's bar and effect shortcuts.
-        if (e.metaKey || e.ctrlKey || e.altKey) return;
-        const by = e.shiftKey ? 12 : 1;
-        if (e.key === 'ArrowUp') commit(semis + by);
-        else if (e.key === 'ArrowDown') commit(semis - by);
-        else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') commit(0);
-        else return;
-        e.preventDefault();
-      }}
-      className={`flex h-5 w-6 shrink-0 cursor-ns-resize select-none items-center justify-center rounded-sm font-mono text-[10px] tabular-nums outline-none hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring ${
-        step % BAR > 0 && step % 4 === 0 ? 'ml-2' : ''
-      } ${tone}`}
-    >
-      {root !== null ? noteName(root + semis) : semis > 0 ? `+${semis}` : semis}
     </div>
   );
 }
@@ -402,38 +337,106 @@ const PIANO: Record<string, number> = {
   KeyL: 14,
 };
 
+/** What a row of numbers under the steps is, so one cell can draw any of them. */
+interface CellKind {
+  /** `data-row`, and the name of the row's fieldset. */
+  row: 'pitch' | 'hold' | 'velocity';
+  label: string;
+  min: number;
+  max: number;
+  /** The value that means "not set": drawn dim. */
+  rest: number;
+  /** How far a drag moves before the value moves by one, in pixels. */
+  pxPerUnit: number;
+  /** What Shift and the arrows move it by. */
+  bigStep: number;
+  /** What the cell shows, given the value and the material's root. */
+  show: (value: number, root: number | null) => string;
+  /** The tooltip. */
+  title: (step: number, value: number, root: number | null) => string;
+}
+
+/** Semitones a step can be pitched, either way. `PITCH_RANGE` in Rust. */
+const PITCH_RANGE = 24;
 /** The longest a step can be held, in sixteenths. `HOLD_MAX` in Rust. */
 const HOLD_MAX = 16;
-/** How far a drag moves before the hold moves a sixteenth. */
-const PX_PER_SIXTEENTH = 8;
+/** A step at full velocity. `VELOCITY_MAX` in Rust. */
+const VELOCITY_MAX = 127;
+
+const PITCH: CellKind = {
+  row: 'pitch',
+  label: 'pitch',
+  min: -PITCH_RANGE,
+  max: PITCH_RANGE,
+  rest: 0,
+  pxPerUnit: 6,
+  bigStep: 12,
+  show: (v, root) => (root !== null ? noteName(root + v) : v > 0 ? `+${v}` : String(v)),
+  title: (step, v, root) =>
+    `Step ${step + 1}: ${root === null ? '' : `${noteName(root + v)}, `}${v > 0 ? '+' : ''}${v} semitones from the sample. Drag or use the arrows, Shift for an octave. Double-click to clear.`,
+};
+
+const HOLD: CellKind = {
+  row: 'hold',
+  label: 'hold',
+  min: 0,
+  max: HOLD_MAX,
+  rest: 0,
+  pxPerUnit: 8,
+  bigStep: 4,
+  show: (v) => (v === 0 ? '·' : String(v)),
+  title: (step, v) =>
+    v === 0
+      ? `Step ${step + 1}: held for the patch's own Hold time. Drag or use the arrows to hold it for a number of sixteenths. Heard when the patch's Length is Hold.`
+      : `Step ${step + 1}: held for ${v} sixteenth${v === 1 ? '' : 's'}. Double-click to go back to the patch's Hold.`,
+};
+
+const VELOCITY: CellKind = {
+  row: 'velocity',
+  label: 'velocity',
+  min: 0,
+  max: VELOCITY_MAX,
+  rest: VELOCITY_MAX,
+  pxPerUnit: 2,
+  bigStep: 16,
+  show: (v) => (v === VELOCITY_MAX ? '·' : String(v)),
+  title: (step, v) =>
+    v === VELOCITY_MAX
+      ? `Step ${step + 1}: full velocity. Drag or use the arrows to play it softer.`
+      : `Step ${step + 1}: velocity ${v} of ${VELOCITY_MAX}. Double-click to go back to full.`,
+};
 
 /**
- * One step's hold, in sixteenths: how long its note is held before it
- * releases. A dot is the patch's own Hold time. It is heard only while the
- * patch's Length is Hold; under Loop and Sample nothing is gated.
+ * One step's number in a row under the triggers: its pitch, hold or velocity.
  *
- * Edited like the pitch above it: drag, or focus and use the arrows;
- * Backspace, 0 or a double-click clears it. Focusable but not a button, so
- * Space still starts and stops playback.
+ * Drag up or down, or focus it and use the arrows, Shift for a bigger move.
+ * Double-click, Backspace or 0 puts it back at rest. A focusable element
+ * rather than a button or a number field, so Space still starts and stops
+ * playback while a cell has focus.
  */
-function HoldCell({
+function NumberCell({
+  kind,
   step,
-  sixteenths,
+  value,
+  root,
   set,
   onChange,
 }: {
+  kind: CellKind;
   step: number;
-  sixteenths: number;
+  value: number;
+  root: number | null;
+  /** Whether the step above it is on; an off step's number is drawn quieter. */
   set: boolean;
-  onChange: (sixteenths: number) => void;
+  onChange: (value: number) => void;
 }) {
   const drag = useRef<{ y: number; from: number } | null>(null);
   const commit = (next: number) => {
-    const clamped = Math.max(0, Math.min(HOLD_MAX, Math.round(next)));
-    if (clamped !== sixteenths) onChange(clamped);
+    const clamped = Math.max(kind.min, Math.min(kind.max, Math.round(next)));
+    if (clamped !== value) onChange(clamped);
   };
   const tone =
-    sixteenths === 0
+    value === kind.rest
       ? 'text-muted-foreground/40'
       : set
         ? 'text-foreground'
@@ -443,24 +446,20 @@ function HoldCell({
     <div
       role="spinbutton"
       tabIndex={0}
-      data-row="hold"
+      data-row={kind.row}
       data-step={step}
-      aria-label={`Step ${step + 1} hold`}
-      aria-valuemin={0}
-      aria-valuemax={HOLD_MAX}
-      aria-valuenow={sixteenths}
-      title={
-        sixteenths === 0
-          ? `Step ${step + 1}: held for the patch's own Hold time. Drag or use the arrows to hold it for a number of sixteenths. Heard when the patch's Length is Hold.`
-          : `Step ${step + 1}: held for ${sixteenths} sixteenth${sixteenths === 1 ? '' : 's'}. Double-click to go back to the patch's Hold.`
-      }
+      aria-label={`Step ${step + 1} ${kind.label}`}
+      aria-valuemin={kind.min}
+      aria-valuemax={kind.max}
+      aria-valuenow={value}
+      title={kind.title(step, value, root)}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
-        drag.current = { y: e.clientY, from: sixteenths };
+        drag.current = { y: e.clientY, from: value };
       }}
       onPointerMove={(e) => {
         const d = drag.current;
-        if (d) commit(d.from + (d.y - e.clientY) / PX_PER_SIXTEENTH);
+        if (d) commit(d.from + (d.y - e.clientY) / kind.pxPerUnit);
       }}
       onPointerUp={() => {
         drag.current = null;
@@ -468,13 +467,14 @@ function HoldCell({
       onPointerCancel={() => {
         drag.current = null;
       }}
-      onDoubleClick={() => commit(0)}
+      onDoubleClick={() => commit(kind.rest)}
       onKeyDown={(e) => {
+        // ⌘, Ctrl and Alt are the strip's bar and effect shortcuts.
         if (e.metaKey || e.ctrlKey || e.altKey) return;
-        const by = e.shiftKey ? 4 : 1;
-        if (e.key === 'ArrowUp') commit(sixteenths + by);
-        else if (e.key === 'ArrowDown') commit(sixteenths - by);
-        else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') commit(0);
+        const by = e.shiftKey ? kind.bigStep : 1;
+        if (e.key === 'ArrowUp') commit(value + by);
+        else if (e.key === 'ArrowDown') commit(value - by);
+        else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') commit(kind.rest);
         else return;
         e.preventDefault();
       }}
@@ -482,7 +482,7 @@ function HoldCell({
         step % BAR > 0 && step % 4 === 0 ? 'ml-2' : ''
       } ${tone}`}
     >
-      {sixteenths === 0 ? '·' : sixteenths}
+      {kind.show(value, root)}
     </div>
   );
 }

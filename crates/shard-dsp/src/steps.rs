@@ -51,6 +51,10 @@ pub struct StepParams {
     /// for that step, up to `HOLD_MAX`. Read only while the patch's Length is
     /// Hold, since Loop and Sample are not gated.
     pub holds: [u8; STEPS],
+    /// How hard each step plays, 0 to `VELOCITY_MAX`, step one first. The
+    /// whole note is scaled by it; full is unity, so a track that never sets
+    /// one sounds as it always did.
+    pub velocities: [u8; STEPS],
 }
 
 /// The steps a pattern holds: four bars of sixteen.
@@ -59,6 +63,8 @@ pub const STEPS: usize = 64;
 pub const PITCH_RANGE: i8 = 24;
 /// The longest a step can be held, in sixteenths: one bar.
 pub const HOLD_MAX: u8 = 16;
+/// A step at full velocity, as MIDI counts it.
+pub const VELOCITY_MAX: u8 = 127;
 
 impl Default for StepParams {
     /// Off, and four on the floor, so switching on does something.
@@ -71,6 +77,7 @@ impl Default for StepParams {
             pattern: 0b0001_0001_0001_0001,
             pitches: [0; STEPS],
             holds: [0; STEPS],
+            velocities: [VELOCITY_MAX; STEPS],
         }
     }
 }
@@ -80,6 +87,12 @@ impl StepParams {
     #[inline]
     pub fn hold_of(&self, k: u32) -> u32 {
         u32::from(self.holds[k as usize % STEPS].min(HOLD_MAX))
+    }
+
+    /// Step `k`'s velocity as a gain, 0 to 1.
+    #[inline]
+    pub fn velocity_of(&self, k: u32) -> f32 {
+        f32::from(self.velocities[k as usize % STEPS].min(VELOCITY_MAX)) / f32::from(VELOCITY_MAX)
     }
 
     /// Step `k`'s pitch as a read ratio and in semitones, in range.
@@ -106,6 +119,8 @@ pub struct StepBank {
     pitches: [AtomicU64; WORDS],
     /// The holds, a byte a step, packed the same way.
     holds: [AtomicU64; WORDS],
+    /// The velocities, a byte a step, packed the same way.
+    velocities: [AtomicU64; WORDS],
 }
 
 /// Words of eight steps a byte each.
@@ -137,6 +152,9 @@ impl StepBank {
             pattern: AtomicU64::new(p.pattern),
             pitches: std::array::from_fn(|w| AtomicU64::new(pack(&p.pitches[w * 8..w * 8 + 8]))),
             holds: std::array::from_fn(|w| AtomicU64::new(pack_u8(&p.holds[w * 8..w * 8 + 8]))),
+            velocities: std::array::from_fn(|w| {
+                AtomicU64::new(pack_u8(&p.velocities[w * 8..w * 8 + 8]))
+            }),
         }
     }
 
@@ -150,6 +168,7 @@ impl StepBank {
         for w in 0..WORDS {
             self.pitches[w].store(pack(&p.pitches[w * 8..w * 8 + 8]), Ordering::Relaxed);
             self.holds[w].store(pack_u8(&p.holds[w * 8..w * 8 + 8]), Ordering::Relaxed);
+            self.velocities[w].store(pack_u8(&p.velocities[w * 8..w * 8 + 8]), Ordering::Relaxed);
         }
     }
 
@@ -157,9 +176,11 @@ impl StepBank {
     pub fn load(&self) -> StepParams {
         let mut pitches = [0i8; STEPS];
         let mut holds = [0u8; STEPS];
+        let mut velocities = [0u8; STEPS];
         for i in 0..STEPS {
             pitches[i] = (self.pitches[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8 as i8;
             holds[i] = (self.holds[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
+            velocities[i] = (self.velocities[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
         }
         StepParams {
             on: self.on.load(Ordering::Relaxed),
@@ -169,6 +190,7 @@ impl StepBank {
             pattern: self.pattern.load(Ordering::Relaxed),
             pitches,
             holds,
+            velocities,
         }
     }
 }
@@ -278,6 +300,7 @@ mod tests {
             pattern: 0b0001_0001_0001_0001,
             pitches: [0; STEPS],
             holds: [0; STEPS],
+            velocities: [VELOCITY_MAX; STEPS],
         };
         let t = triggers(&p, SR as usize * 4);
         // Steps 0, 4, 8, 12 of a 16-step bar at 120: every 0.5 s, 8 in 4 s.
@@ -297,6 +320,7 @@ mod tests {
             pattern: 0b0001,
             pitches: [0; STEPS],
             holds: [0; STEPS],
+            velocities: [VELOCITY_MAX; STEPS],
         };
         let t = triggers(&p, SR as usize);
         // Four sixteenths at 120 is half a second; step one fires twice.
@@ -313,6 +337,7 @@ mod tests {
             pattern: 0b1111,
             pitches: [0; STEPS],
             holds: [0; STEPS],
+            velocities: [VELOCITY_MAX; STEPS],
         };
         let swung = StepParams {
             swing: 0.5,
@@ -391,6 +416,13 @@ mod tests {
                 }
                 h
             },
+            velocities: {
+                let mut v = [0u8; STEPS];
+                for (i, x) in v.iter_mut().enumerate() {
+                    *x = (i as u8).wrapping_mul(3) % 128;
+                }
+                v
+            },
         };
         let bank = StepBank::default();
         assert_eq!(bank.load(), StepParams::default());
@@ -439,5 +471,17 @@ mod tests {
             ..Default::default()
         };
         assert!(triggers(&p, SR as usize * 6).is_empty());
+    }
+
+    #[test]
+    fn velocity_is_a_gain_from_silence_to_unity_and_defaults_to_full() {
+        let mut p = StepParams::default();
+        assert_eq!(p.velocity_of(0), 1.0, "a step never given one is at full");
+        p.velocities[1] = 0;
+        p.velocities[2] = 64;
+        p.velocities[3] = 255;
+        assert_eq!(p.velocity_of(1), 0.0);
+        assert!((p.velocity_of(2) - 64.0 / 127.0).abs() < 1e-6);
+        assert_eq!(p.velocity_of(3), 1.0, "out of range is full, not louder");
     }
 }
