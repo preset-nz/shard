@@ -960,11 +960,7 @@ fn set_tracker(state: tauri::State<'_, Audio>, tracker: tracker::Tracker) -> tra
     // Not an edit if it comes out as it already is. The track's own switch
     // does not count: the mode flips it, and a mode is not an edit.
     let current = state.tracker.lock().expect("tracker poisoned").clone();
-    let mut probe = tracker.clone().sanitised();
-    for (p, c) in probe.tracks.iter_mut().zip(&current.tracks) {
-        p.on = c.on;
-    }
-    if probe != current {
+    if current.is_edited_by(&tracker) {
         state.record_edit(Some("tracker"), "Edit the steps");
     }
     apply_tracker(&state, tracker)
@@ -2758,14 +2754,9 @@ mod tests {
         // What the mode switch does: turn the track on through `set_tracker`.
         let mut on = a.tracker.lock().unwrap().clone();
         on.tracks[0].on = true;
-        // The command's probe, as in `set_tracker`.
         let current = a.tracker.lock().unwrap().clone();
-        let mut probe = on.clone().sanitised();
-        for (p, c) in probe.tracks.iter_mut().zip(&current.tracks) {
-            p.on = c.on;
-        }
-        assert_eq!(
-            probe, current,
+        assert!(
+            !current.is_edited_by(&on),
             "only the switch differs, so no step is recorded"
         );
         apply_tracker(&a, on);

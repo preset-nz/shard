@@ -1087,6 +1087,11 @@ impl Engine {
                 );
                 crush_env.gain_of(self.note.crush_shape)
             };
+            // A step's velocity scales its note where it is made, before the
+            // effects, so a soft step does not turn down the tails the loud
+            // one before it left in a delay or a reverb.
+            let vel = self.vel.process(self.vel_target);
+            let (l, r) = (l * vel, r * vel);
             let (l, r) = self.fx.front(l, r, &fx, crush_env_gain);
 
             // A stopping reel loses level as well as pitch, because the head
@@ -1116,8 +1121,6 @@ impl Engine {
                 );
                 faded_env.gain_of(self.note.amp_shape)
             };
-            // A step's velocity scales its whole note, with the envelope.
-            let e = e * self.vel.process(self.vel_target);
             let (l, r) = (l * e, r * e);
 
             // The filter, on the master: after every generator, effect and
@@ -3140,6 +3143,93 @@ mod tests {
             420,
         );
         assert_eq!(full, default);
+    }
+
+    #[test]
+    fn a_soft_step_does_not_turn_down_the_tails_of_the_loud_one_before_it() {
+        // A delay with feedback holds the loud note's repeats for a while. The
+        // soft step that follows must scale its own note, not those repeats.
+        // Loud at step one (0 ms), a very soft one at step five (500 ms). The
+        // loud note's third repeat rings from 450 to 550 ms, so 510 to 540 ms
+        // is that repeat with the soft note's quiet start on top. The same
+        // window with no second step is the repeat alone.
+        let run = |pattern: u64, soft: u8| {
+            let mut v = [crate::steps::VELOCITY_MAX; crate::steps::STEPS];
+            v[4] = soft;
+            fm_blocks(
+                &[
+                    ("patch.length", HOLD),
+                    ("patch.hold", 100.0),
+                    ("env.on", 0.0),
+                    ("fx.7.delay.on", 1.0),
+                    ("fx.7.delay.mix", 0.5),
+                    ("fx.7.delay.time", 150.0),
+                    ("fx.7.delay.feedback", 0.6),
+                ],
+                0.0,
+                StepParams {
+                    on: true,
+                    length: 16,
+                    pattern,
+                    velocities: v,
+                    ..Default::default()
+                },
+                160,
+            )
+        };
+        let window = |v: &[f32]| v[102..108].iter().fold(0.0f32, |m, p| m.max(*p));
+        let alone = window(&run(0b1, 127));
+        let with_soft = window(&run(0b1_0001, 8));
+        assert!(alone > 0.05, "no repeat to measure: {alone}");
+        assert!(
+            // Turned down by the soft step's velocity it would be about 6 % of
+            // this (8 of 127); the soft note's own quiet start adds a little.
+            with_soft > 0.7 * alone && with_soft < 1.3 * alone,
+            "the soft step changed the loud note's repeat: {with_soft} against {alone}"
+        );
+    }
+
+    /// Peak per 5 ms block of one 100 ms note through a delay with
+    /// feedback, the patch held, the amplitude envelope on or off (no
+    /// release when on).
+    fn note_through_a_delay(envelope: f32) -> Vec<f32> {
+        fm_blocks(
+            &[
+                ("patch.length", HOLD),
+                ("patch.hold", 100.0),
+                ("env.on", envelope),
+                ("env.release", 0.0),
+                ("fx.7.delay.on", 1.0),
+                ("fx.7.delay.mix", 0.5),
+                ("fx.7.delay.time", 150.0),
+                ("fx.7.delay.feedback", 0.6),
+            ],
+            0.0,
+            StepParams {
+                on: true,
+                length: 16,
+                pattern: 0b1,
+                ..Default::default()
+            },
+            160,
+        )
+    }
+
+    #[test]
+    fn under_hold_the_amplitude_envelope_decides_whether_the_tails_of_effects_are_heard() {
+        // KNOWN, AND OPEN FOR GEORG (handover-effects.md): the envelope sits
+        // after the effect chain, as it did before the time-based effects, so
+        // under Hold it closes on the whole signal when the note ends, tails
+        // included. With the envelope off, the delay's repeats ring on.
+        let tail = |v: &[f32]| v[40..80].iter().fold(0.0f32, |m, p| m.max(*p));
+        let without = tail(&note_through_a_delay(0.0));
+        let with = tail(&note_through_a_delay(1.0));
+        assert!(without > 0.05, "no repeats to measure: {without}");
+        assert!(
+            with < 0.1 * without,
+            "the envelope no longer cuts the tails ({with} against {without}): \
+             if that is on purpose, update this test and the handover"
+        );
     }
 
     #[test]

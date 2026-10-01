@@ -867,6 +867,10 @@ export default function App() {
   // carrying its id and runs the same function the keyboard fallback above
   // calls. Read through a ref, so the listener is registered once. The
   // tracker's Pattern items are the strip's own.
+  const inTextField = () => {
+    const at = document.activeElement;
+    return at instanceof HTMLInputElement || at instanceof HTMLTextAreaElement;
+  };
   const menuRef = useRef<(id: string) => void>(() => {});
   menuRef.current = (id) => {
     if (id.startsWith('fx-add:')) {
@@ -888,11 +892,15 @@ export default function App() {
       case 'file-add-material':
         void pickFiles();
         break;
+      // The menu owns Cmd+Z, so a text field never sees it. In one, undo the
+      // text (a preset's name, the tempo), not the document.
       case 'edit-undo':
-        void stepHistory('undo');
+        if (inTextField()) document.execCommand('undo');
+        else void stepHistory('undo');
         break;
       case 'edit-redo':
-        void stepHistory('redo');
+        if (inTextField()) document.execCommand('redo');
+        else void stepHistory('redo');
         break;
       case 'fx-remove':
         if (node?.fx) removeEffect(node);
