@@ -16,6 +16,7 @@ use crate::drive::{Drive, DriveParams, DriveType};
 use crate::echo::{Echo, EchoParams};
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
+use crate::overtone::{Overtone, OvertoneParams};
 use crate::params::ParamDef;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::rise::{Rise, RiseParams};
@@ -42,6 +43,12 @@ pub(crate) struct ChainSlots {
     pub ring_on: usize,
     pub ring_mix: usize,
     pub ring_freq: usize,
+    pub overtone_on: usize,
+    pub overtone_mix: usize,
+    pub overtone_sub: usize,
+    pub overtone_octave: usize,
+    pub overtone_fifth: usize,
+    pub overtone_tone: usize,
     pub chorus_on: usize,
     pub chorus_mix: usize,
     pub chorus_type: usize,
@@ -109,6 +116,12 @@ impl ChainSlots {
             ring_on: at("ring.on"),
             ring_mix: at("ring.mix"),
             ring_freq: at("ring.freq"),
+            overtone_on: at("overtone.on"),
+            overtone_mix: at("overtone.mix"),
+            overtone_sub: at("overtone.sub"),
+            overtone_octave: at("overtone.octave"),
+            overtone_fifth: at("overtone.fifth"),
+            overtone_tone: at("overtone.tone"),
             chorus_on: at("chorus.on"),
             chorus_mix: at("chorus.mix"),
             chorus_type: at("chorus.type"),
@@ -173,6 +186,8 @@ pub(crate) struct ChainParams {
     pub crush_on: f32,
     pub ring: RingModParams,
     pub ring_on: f32,
+    pub overtone: OvertoneParams,
+    pub overtone_on: f32,
     pub chorus: ChorusParams,
     pub chorus_on: f32,
     pub flanger: FlangerParams,
@@ -213,6 +228,14 @@ impl ChainParams {
                 mix: value(s.ring_mix),
             },
             ring_on: gate(s.ring_on),
+            overtone: OvertoneParams {
+                sub: value(s.overtone_sub),
+                octave: value(s.overtone_octave),
+                fifth: value(s.overtone_fifth),
+                tone_hz: value(s.overtone_tone),
+                mix: value(s.overtone_mix),
+            },
+            overtone_on: gate(s.overtone_on),
             chorus: ChorusParams {
                 kind: ChorusType::from_value(raw(s.chorus_type)),
                 rate: value(s.chorus_rate),
@@ -283,6 +306,7 @@ struct ChainFades {
     drive: Ramp,
     crush: Ramp,
     ring: Ramp,
+    overtone: Ramp,
     chorus: Ramp,
     flanger: Ramp,
     wear: Ramp,
@@ -296,6 +320,7 @@ pub(crate) struct Chain {
     drive: Drive,
     crush: Crush,
     ringmod: RingMod,
+    overtone: Overtone,
     chorus: Chorus,
     flanger: Flanger,
     wear: Wear,
@@ -327,6 +352,7 @@ impl Chain {
             drive: Drive::new(sample_rate),
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
+            overtone: Overtone::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             flanger: Flanger::new(sample_rate),
             wear: Wear::new(sample_rate),
@@ -338,6 +364,7 @@ impl Chain {
                 drive: ramp(s.drive_on),
                 crush: ramp(s.crush_on),
                 ring: ramp(s.ring_on),
+                overtone: ramp(s.overtone_on),
                 chorus: ramp(s.chorus_on),
                 flanger: ramp(s.flanger_on),
                 wear: ramp(s.wear_on),
@@ -384,6 +411,14 @@ impl Chain {
             ..p.ring
         };
         let (l, r) = self.ringmod.process(l, r, &ring);
+
+        // First of the modulators, so the chorus and everything after thicken the layers too.
+        let overtone_on = self.fades.overtone.process(p.overtone_on);
+        let overtone = OvertoneParams {
+            mix: p.overtone.mix * overtone_on,
+            ..p.overtone
+        };
+        let (l, r) = self.overtone.process(l, r, &overtone);
 
         // Last in the lane (Georg, 2026-09-29), so it thickens whatever the
         // effects before it made.

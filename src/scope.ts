@@ -166,6 +166,14 @@ export const NODES: NodeInfo[] = [
     table: 'ring',
     owns: under('ring'),
   },
+  {
+    layer: 'patch',
+    id: 'overtone',
+    label: 'Overtone',
+    lane: 'process',
+    table: 'overtone',
+    owns: under('overtone'),
+  },
   // Last of the effects (Georg, 2026-09-29), so it thickens what they made.
   {
     layer: 'patch',
@@ -261,6 +269,7 @@ export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('drive', 'Drive', 'process'),
   arrangementNode('crush', 'Crush', 'process'),
   arrangementNode('ring', 'Ring modulation', 'process'),
+  arrangementNode('overtone', 'Overtone', 'process'),
   arrangementNode('chorus', 'Chorus', 'process'),
   arrangementNode('flanger', 'Flanger', 'process'),
   arrangementNode('wear', 'Wear', 'process'),
