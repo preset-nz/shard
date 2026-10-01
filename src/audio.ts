@@ -403,20 +403,26 @@ export const patchPreview = () => invoke<PatchPreview>('patch_preview');
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
 
+/** One sixteenth of a track. */
+export interface Step {
+  /** Whether it triggers the patch. */
+  on: boolean;
+  /** Semitones from the sample, −24 to 24. Kept for a step that is off. */
+  pitch: number;
+  /**
+   * How long its note is held, in sixteenths, 0 to 16. Zero is the patch's own
+   * Hold time. Only heard while the patch's Length is Hold.
+   */
+  hold: number;
+}
+
 /** A track of steps. Monophonic: a new step cuts the last. */
 export interface Track {
   on: boolean;
-  /** 4, 8 or 16 sixteenths. */
+  /** 4, 8, 16, 32 or 64 sixteenths: up to four bars. */
   length: number;
-  /** One bit per step, step one first. */
-  pattern: number;
-  /** Sixteen pitches in semitones, −24 to 24, step one first. */
-  pitches: number[];
-  /**
-   * Sixteen holds in sixteenths, 0 to 16, step one first. Zero is the patch's
-   * own Hold time. Only heard while the patch's Length is Hold.
-   */
-  holds: number[];
+  /** Sixty-four steps, step one first. Those past `length` are kept, not played. */
+  steps: Step[];
 }
 
 /**

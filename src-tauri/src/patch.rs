@@ -375,12 +375,20 @@ mod tests {
         let bank = ParamBank::new();
         let tracker = Tracker {
             tempo: 87.0,
-            tracks: vec![crate::tracker::Track {
-                on: true,
-                length: 16,
-                pattern: 43_690,
-                pitches: [0, 0, 0, -5, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0, 0, -24],
-                holds: [0, 0, 4, 0, 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 0, 1],
+            tracks: vec![{
+                let mut t = crate::tracker::Track {
+                    length: 16,
+                    ..Default::default()
+                };
+                for (i, step) in t.steps.iter_mut().enumerate() {
+                    step.on = (43_690u64 >> i) & 1 == 1;
+                }
+                t.steps[3].pitch = -5;
+                t.steps[8].pitch = 12;
+                t.steps[15].pitch = -24;
+                t.steps[2].hold = 4;
+                t.steps[8].hold = 16;
+                t
             }],
             ..Tracker::default()
         };
@@ -404,8 +412,12 @@ mod tests {
                 .any(|k| k.starts_with("seq.")),
             "no step lives in the patch: {text}"
         );
-        // A bit field, written as a whole number and read back exactly.
-        assert_eq!(json["tracker"]["tracks"][0]["pattern"], 43_690);
+        // Each step is written as itself, readable by hand, and read back exactly.
+        let steps = &json["tracker"]["tracks"][0]["steps"];
+        assert_eq!(steps[0]["on"], false);
+        assert_eq!(steps[1]["on"], true);
+        assert_eq!(steps[3]["pitch"], -5);
+        assert_eq!(steps[8]["hold"], 16);
         assert_eq!(Document::from_json(&text).unwrap().tracker, tracker);
     }
 

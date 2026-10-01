@@ -3010,7 +3010,7 @@ mod tests {
 
     /// Peaks per 5 ms block for one step a bar at 120 bpm (a sixteenth is
     /// 125 ms, so a bar is 400 blocks), the patch held 100 ms.
-    fn held_steps(length: f32, pattern: u32, holds: &[(usize, u8)]) -> Vec<f32> {
+    fn held_steps(length: f32, pattern: u64, holds: &[(usize, u8)]) -> Vec<f32> {
         let mut h = [0u8; crate::steps::STEPS];
         for (i, v) in holds {
             h[*i] = *v;

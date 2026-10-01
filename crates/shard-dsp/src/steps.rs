@@ -33,14 +33,15 @@ pub struct StepParams {
     /// Whether the steps run at all.
     pub on: bool,
     pub tempo_bpm: f32,
-    /// 4, 8 or 16.
+    /// How many steps the track runs, 1 to `STEPS`; the tracker offers 4, 8,
+    /// 16, 32 and 64.
     pub length: u32,
     /// 0 to 0.5 of a step, applied to the even-numbered steps (the second,
     /// fourth and so on). Drum machines count the same thing from 50 % to
     /// 75 %; the UI converts.
     pub swing: f32,
     /// One bit per step, bit 0 first.
-    pub pattern: u32,
+    pub pattern: u64,
     /// Each step's pitch in semitones, step one first. Varispeed, as the
     /// octave is (Georg, 2026-09-14): up is faster and shorter, and grains
     /// are transposed with it. Read up to `PITCH_RANGE` either way.
@@ -52,8 +53,8 @@ pub struct StepParams {
     pub holds: [u8; STEPS],
 }
 
-/// The steps a pattern holds.
-pub const STEPS: usize = 16;
+/// The steps a pattern holds: four bars of sixteen.
+pub const STEPS: usize = 64;
 /// Semitones a step can be pitched, either way.
 pub const PITCH_RANGE: i8 = 24;
 /// The longest a step can be held, in sixteenths: one bar.
@@ -100,12 +101,15 @@ pub struct StepBank {
     tempo_bpm: AtomicU32,
     length: AtomicU32,
     swing: AtomicU32,
-    pattern: AtomicU32,
+    pattern: AtomicU64,
     /// The pitches, a byte a step: steps one to eight, then nine to sixteen.
-    pitches: [AtomicU64; 2],
+    pitches: [AtomicU64; WORDS],
     /// The holds, a byte a step, packed the same way.
-    holds: [AtomicU64; 2],
+    holds: [AtomicU64; WORDS],
 }
+
+/// Words of eight steps a byte each.
+const WORDS: usize = STEPS / 8;
 
 /// Eight pitches into a word, step one in the low byte.
 fn pack(pitches: &[i8]) -> u64 {
@@ -130,15 +134,9 @@ impl StepBank {
             tempo_bpm: AtomicU32::new(p.tempo_bpm.to_bits()),
             length: AtomicU32::new(p.length),
             swing: AtomicU32::new(p.swing.to_bits()),
-            pattern: AtomicU32::new(p.pattern),
-            pitches: [
-                AtomicU64::new(pack(&p.pitches[..8])),
-                AtomicU64::new(pack(&p.pitches[8..])),
-            ],
-            holds: [
-                AtomicU64::new(pack_u8(&p.holds[..8])),
-                AtomicU64::new(pack_u8(&p.holds[8..])),
-            ],
+            pattern: AtomicU64::new(p.pattern),
+            pitches: std::array::from_fn(|w| AtomicU64::new(pack(&p.pitches[w * 8..w * 8 + 8]))),
+            holds: std::array::from_fn(|w| AtomicU64::new(pack_u8(&p.holds[w * 8..w * 8 + 8]))),
         }
     }
 
@@ -149,23 +147,19 @@ impl StepBank {
         self.length.store(p.length, Ordering::Relaxed);
         self.swing.store(p.swing.to_bits(), Ordering::Relaxed);
         self.pattern.store(p.pattern, Ordering::Relaxed);
-        self.pitches[0].store(pack(&p.pitches[..8]), Ordering::Relaxed);
-        self.pitches[1].store(pack(&p.pitches[8..]), Ordering::Relaxed);
-        self.holds[0].store(pack_u8(&p.holds[..8]), Ordering::Relaxed);
-        self.holds[1].store(pack_u8(&p.holds[8..]), Ordering::Relaxed);
+        for w in 0..WORDS {
+            self.pitches[w].store(pack(&p.pitches[w * 8..w * 8 + 8]), Ordering::Relaxed);
+            self.holds[w].store(pack_u8(&p.holds[w * 8..w * 8 + 8]), Ordering::Relaxed);
+        }
     }
 
     #[inline]
     pub fn load(&self) -> StepParams {
         let mut pitches = [0i8; STEPS];
-        for (i, p) in pitches.iter_mut().enumerate() {
-            let word = self.pitches[i / 8].load(Ordering::Relaxed);
-            *p = (word >> ((i % 8) * 8)) as u8 as i8;
-        }
         let mut holds = [0u8; STEPS];
-        for (i, h) in holds.iter_mut().enumerate() {
-            let word = self.holds[i / 8].load(Ordering::Relaxed);
-            *h = (word >> ((i % 8) * 8)) as u8;
+        for i in 0..STEPS {
+            pitches[i] = (self.pitches[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8 as i8;
+            holds[i] = (self.holds[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
         }
         StepParams {
             on: self.on.load(Ordering::Relaxed),
@@ -244,7 +238,7 @@ impl StepClock {
             return None;
         }
         let step_len = self.step_len(p);
-        let length = p.length.clamp(1, 32);
+        let length = p.length.clamp(1, STEPS as u32);
         let total = length as f32 * step_len;
         let swing = p.swing.clamp(0.0, 0.5);
         // Which step contains `pos`: the last whose onset is at or before it.
@@ -379,20 +373,21 @@ mod tests {
     fn the_bank_hands_back_exactly_what_it_was_given() {
         let mut pitches = [0i8; STEPS];
         for (i, p) in pitches.iter_mut().enumerate() {
-            *p = (i as i8 - 8) * 3;
+            // Across the whole range, signed bytes and all, all sixty-four.
+            *p = ((i as i32 * 5) % 97 - 48) as i8;
         }
-        pitches[15] = -24;
+        pitches[63] = -24;
         let p = StepParams {
             on: true,
             tempo_bpm: 87.5,
             length: 8,
             swing: 0.12,
-            pattern: 0b1010_1010_1010_1010,
+            pattern: 0xA5A5_5A5A_F0F0_0F0F,
             pitches,
             holds: {
                 let mut h = [0u8; STEPS];
                 for (i, v) in h.iter_mut().enumerate() {
-                    *v = (i as u8 * 5) % 20;
+                    *v = (i as u8).wrapping_mul(5) % 20;
                 }
                 h
             },
@@ -412,5 +407,37 @@ mod tests {
         assert_eq!(p.hold_of(0), 0);
         assert_eq!(p.hold_of(1), 4);
         assert_eq!(p.hold_of(2), u32::from(HOLD_MAX));
+    }
+
+    #[test]
+    fn a_sixty_four_step_track_reaches_its_last_step_and_wraps() {
+        // Steps one and sixty-four of a four-bar track at 120 bpm: a sixteenth
+        // is 125 ms, so the last begins at 7.875 s and the bar comes round at 8.
+        let p = StepParams {
+            on: true,
+            length: 64,
+            pattern: 1 | (1 << 63),
+            ..Default::default()
+        };
+        let t = triggers(&p, SR as usize * 17);
+        let at = |n: f32| (n * SR) as usize;
+        assert_eq!(t.len(), 5, "{t:?}");
+        for (got, want) in t.iter().zip([0.0, 7.875, 8.0, 15.875, 16.0]) {
+            assert!(
+                (*got as i64 - at(want) as i64).abs() <= 1,
+                "{got} vs {want}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_step_past_the_tracks_length_never_plays() {
+        let p = StepParams {
+            on: true,
+            length: 16,
+            pattern: 1 << 20,
+            ..Default::default()
+        };
+        assert!(triggers(&p, SR as usize * 6).is_empty());
     }
 }

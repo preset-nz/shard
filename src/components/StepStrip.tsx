@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import type { Track, Tracker } from '@/audio';
+import type { Step, Track, Tracker } from '@/audio';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
 
-const LENGTHS = [4, 8, 16];
+const LENGTHS = [4, 8, 16, 32, 64];
+/** Steps in a bar: the strip is drawn a bar to a row. */
+const BAR = 16;
+/** Every step a track holds. `STEPS` in Rust. */
+const STEPS = 64;
 const TEMPO_MIN = 40;
 const TEMPO_MAX = 240;
 /**
@@ -21,7 +25,7 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
  * it to the patch, so none of it is a parameter row. One button per
  * sixteenth, the step playing ringed. Buttons keep a sixteenth's width
  * whatever the length, so four steps read as one beat rather than a bar
- * stretched out.
+ * stretched out, and a longer track is drawn a bar of sixteen to a row.
  *
  * Shortening a track keeps the steps past its new end, so lengthening it
  * again gives them back. They cannot be seen or reached while hidden, so the
@@ -46,6 +50,13 @@ export function StepStrip({
   const track = tracker.tracks[0];
   const setTrack = (change: Partial<Track>) =>
     onChange({ ...tracker, tracks: [{ ...track, ...change }, ...tracker.tracks.slice(1)] });
+  const stepAt = (i: number): Step => track.steps[i] ?? { on: false, pitch: 0, hold: 0 };
+  const setStep = (i: number, change: Partial<Step>) => {
+    const steps = Array.from({ length: STEPS }, (_, j) => stepAt(j));
+    steps[i] = { ...steps[i], ...change };
+    setTrack({ steps });
+  };
+  const bars = Array.from({ length: Math.ceil(track.length / BAR) }, (_, b) => b);
 
   // Typed as text and committed on Enter or leaving the field, so typing 95
   // does not clamp to 40 on the way through the 9.
@@ -128,65 +139,68 @@ export function StepStrip({
         ))}
       </fieldset>
 
-      {/* Steps over their pitches, a column a sixteenth, like a tracker's
-          note column under its triggers. */}
-      <div className="flex min-w-0 flex-col gap-1">
-        <fieldset className="flex min-w-0 items-center gap-1" aria-label="Steps">
-          {Array.from({ length: track.length }, (_, i) => {
-            const set = ((track.pattern >> i) & 1) === 1;
-            const playing = track.on && step === i;
-            return (
-              <button
-                // biome-ignore lint/suspicious/noArrayIndexKey: a step is its index
-                key={i}
-                type="button"
-                aria-pressed={set}
-                aria-label={`Step ${i + 1}`}
-                title={`Step ${i + 1}`}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setTrack({ pattern: track.pattern ^ (1 << i) })}
-                className={`h-6 w-6 shrink-0 rounded-sm border transition-colors ${
-                  i > 0 && i % 4 === 0 ? 'ml-2' : ''
-                } ${set ? 'border-primary bg-primary' : 'border-border hover:bg-muted'} ${
-                  playing ? 'ring-2 ring-foreground ring-offset-1 ring-offset-background' : ''
-                }`}
-              />
-            );
-          })}
-        </fieldset>
-        <fieldset className="flex min-w-0 items-center gap-1" aria-label="Pitch">
-          {Array.from({ length: track.length }, (_, i) => (
-            <PitchCell
-              // biome-ignore lint/suspicious/noArrayIndexKey: a step is its index
-              key={i}
-              step={i}
-              semis={track.pitches[i] ?? 0}
-              root={root}
-              set={((track.pattern >> i) & 1) === 1}
-              onChange={(semis) => {
-                const pitches = Array.from({ length: 16 }, (_, j) => track.pitches[j] ?? 0);
-                pitches[i] = semis;
-                setTrack({ pitches });
-              }}
-            />
-          ))}
-        </fieldset>
-        <fieldset className="flex min-w-0 items-center gap-1" aria-label="Hold">
-          {Array.from({ length: track.length }, (_, i) => (
-            <HoldCell
-              // biome-ignore lint/suspicious/noArrayIndexKey: a step is its index
-              key={i}
-              step={i}
-              sixteenths={track.holds?.[i] ?? 0}
-              set={((track.pattern >> i) & 1) === 1}
-              onChange={(sixteenths) => {
-                const holds = Array.from({ length: 16 }, (_, j) => track.holds?.[j] ?? 0);
-                holds[i] = sixteenths;
-                setTrack({ holds });
-              }}
-            />
-          ))}
-        </fieldset>
+      {/* Steps over their pitches and holds, a column a sixteenth, like a
+          tracker's columns under its triggers. A bar to a row. */}
+      <div className="flex min-w-0 flex-col gap-2">
+        {bars.map((bar) => {
+          const first = bar * BAR;
+          const cells = Array.from(
+            { length: Math.min(BAR, track.length - first) },
+            (_, k) => first + k,
+          );
+          return (
+            <div key={bar} className="flex min-w-0 flex-col gap-1">
+              <fieldset
+                className="flex min-w-0 items-center gap-1"
+                aria-label={`Steps, bar ${bar + 1}`}
+              >
+                {cells.map((i) => {
+                  const set = stepAt(i).on;
+                  const playing = track.on && step === i;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      aria-pressed={set}
+                      aria-label={`Step ${i + 1}`}
+                      title={`Step ${i + 1}`}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setStep(i, { on: !set })}
+                      className={`h-6 w-6 shrink-0 rounded-sm border transition-colors ${
+                        i % BAR > 0 && i % 4 === 0 ? 'ml-2' : ''
+                      } ${set ? 'border-primary bg-primary' : 'border-border hover:bg-muted'} ${
+                        playing ? 'ring-2 ring-foreground ring-offset-1 ring-offset-background' : ''
+                      }`}
+                    />
+                  );
+                })}
+              </fieldset>
+              <fieldset className="flex min-w-0 items-center gap-1" aria-label="Pitch">
+                {cells.map((i) => (
+                  <PitchCell
+                    key={i}
+                    step={i}
+                    semis={stepAt(i).pitch}
+                    root={root}
+                    set={stepAt(i).on}
+                    onChange={(pitch) => setStep(i, { pitch })}
+                  />
+                ))}
+              </fieldset>
+              <fieldset className="flex min-w-0 items-center gap-1" aria-label="Hold">
+                {cells.map((i) => (
+                  <HoldCell
+                    key={i}
+                    step={i}
+                    sixteenths={stepAt(i).hold}
+                    set={stepAt(i).on}
+                    onChange={(hold) => setStep(i, { hold })}
+                  />
+                ))}
+              </fieldset>
+            </div>
+          );
+        })}
       </div>
 
       {hiddenSteps(track) > 0 && (
@@ -268,7 +282,7 @@ function PitchCell({
         e.preventDefault();
       }}
       className={`flex h-5 w-6 shrink-0 cursor-ns-resize select-none items-center justify-center rounded-sm font-mono text-[10px] tabular-nums outline-none hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring ${
-        step > 0 && step % 4 === 0 ? 'ml-2' : ''
+        step % BAR > 0 && step % 4 === 0 ? 'ml-2' : ''
       } ${tone}`}
     >
       {root !== null ? noteName(root + semis) : semis > 0 ? `+${semis}` : semis}
@@ -350,7 +364,7 @@ function HoldCell({
         e.preventDefault();
       }}
       className={`flex h-5 w-6 shrink-0 cursor-ns-resize select-none items-center justify-center rounded-sm font-mono text-[10px] tabular-nums outline-none hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring ${
-        step > 0 && step % 4 === 0 ? 'ml-2' : ''
+        step % BAR > 0 && step % 4 === 0 ? 'ml-2' : ''
       } ${tone}`}
     >
       {sixteenths === 0 ? '·' : sixteenths}
@@ -360,11 +374,5 @@ function HoldCell({
 
 /** Steps that are on past the track's end. */
 function hiddenSteps(track: Track): number {
-  let rest = track.pattern >>> track.length;
-  let count = 0;
-  while (rest > 0) {
-    count += rest & 1;
-    rest >>>= 1;
-  }
-  return count;
+  return track.steps.slice(track.length).filter((s) => s.on).length;
 }
