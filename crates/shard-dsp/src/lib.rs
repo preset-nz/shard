@@ -19,6 +19,7 @@ pub mod arrangement;
 pub mod chain;
 pub mod chorus;
 pub mod crush;
+pub mod delay;
 pub mod drive;
 pub mod engine;
 pub mod envelope;
@@ -42,6 +43,7 @@ pub mod steps;
 
 pub use chorus::{Chorus, ChorusParams, ChorusType};
 pub use crush::{Crush, CrushParams};
+pub use delay::{Delay, DelayParams};
 pub use drive::{Drive, DriveParams, DriveType};
 pub use engine::Engine;
 pub use envelope::EnvParams;

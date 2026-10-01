@@ -1,4 +1,4 @@
-//! The effect chain: drive, crusher, ring modulator, chorus, then filter and gain.
+//! The effect chain: drive, crusher, ring modulator, chorus, delay, then filter and gain.
 //!
 //! One type, so the patch and the level above it can run the same effects
 //! (`design/arrangement-layer.md`). It comes in two halves because the patch
@@ -11,6 +11,7 @@
 
 use crate::chorus::{Chorus, ChorusParams, ChorusType};
 use crate::crush::{Crush, CrushParams};
+use crate::delay::{Delay, DelayParams};
 use crate::drive::{Drive, DriveParams, DriveType};
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::params::ParamDef;
@@ -46,6 +47,12 @@ pub(crate) struct ChainSlots {
     pub chorus_spread: usize,
     pub chorus_lowcut: usize,
     pub chorus_eq: usize,
+    pub delay_on: usize,
+    pub delay_mix: usize,
+    pub delay_time: usize,
+    pub delay_feedback: usize,
+    pub delay_tone: usize,
+    pub delay_pingpong: usize,
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -80,6 +87,12 @@ impl ChainSlots {
             chorus_spread: at("chorus.spread"),
             chorus_lowcut: at("chorus.lowcut"),
             chorus_eq: at("chorus.eq"),
+            delay_on: at("delay.on"),
+            delay_mix: at("delay.mix"),
+            delay_time: at("delay.time"),
+            delay_feedback: at("delay.feedback"),
+            delay_tone: at("delay.tone"),
+            delay_pingpong: at("delay.pingpong"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -104,6 +117,8 @@ pub(crate) struct ChainParams {
     pub ring_on: f32,
     pub chorus: ChorusParams,
     pub chorus_on: f32,
+    pub delay: DelayParams,
+    pub delay_on: f32,
     pub filter: FilterParams,
     pub filter_on: f32,
     pub gain: f32,
@@ -143,6 +158,14 @@ impl ChainParams {
                 mix: value(s.chorus_mix),
             },
             chorus_on: gate(s.chorus_on),
+            delay: DelayParams {
+                time_ms: value(s.delay_time),
+                feedback: value(s.delay_feedback),
+                tone_hz: value(s.delay_tone),
+                cross: value(s.delay_pingpong),
+                mix: value(s.delay_mix),
+            },
+            delay_on: gate(s.delay_on),
             filter: FilterParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
@@ -160,6 +183,7 @@ struct ChainFades {
     crush: Ramp,
     ring: Ramp,
     chorus: Ramp,
+    delay: Ramp,
     filter: Ramp,
 }
 
@@ -168,6 +192,7 @@ pub(crate) struct Chain {
     crush: Crush,
     ringmod: RingMod,
     chorus: Chorus,
+    delay: Delay,
     filter: Filter,
     fades: ChainFades,
     crush_mix: OnePole,
@@ -194,12 +219,14 @@ impl Chain {
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             chorus: Chorus::new(sample_rate),
+            delay: Delay::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
                 drive: ramp(s.drive_on),
                 crush: ramp(s.crush_on),
                 ring: ramp(s.ring_on),
                 chorus: ramp(s.chorus_on),
+                delay: ramp(s.delay_on),
                 filter: ramp(s.filter_on),
             },
             crush_mix: smoother(s.crush_mix),
@@ -207,7 +234,7 @@ impl Chain {
         }
     }
 
-    /// Drive, crush, ring, chorus, for one frame. `crush_env` scales the crusher's
+    /// Drive, crush, ring, chorus, delay, for one frame. `crush_env` scales the crusher's
     /// mix: the patch's crush envelope, or exactly one where there is none.
     #[inline]
     pub fn front(&mut self, l: f32, r: f32, p: &ChainParams, crush_env: f32) -> (f32, f32) {
@@ -248,7 +275,16 @@ impl Chain {
             mix: p.chorus.mix * chorus_on,
             ..p.chorus
         };
-        self.chorus.process(l, r, &chorus)
+        let (l, r) = self.chorus.process(l, r, &chorus);
+
+        // After the chorus, so the repeats carry its width. Its line keeps
+        // running while it is off, so switching it on never plays stale audio.
+        let delay_on = self.fades.delay.process(p.delay_on);
+        let delay = DelayParams {
+            mix: p.delay.mix * delay_on,
+            ..p.delay
+        };
+        self.delay.process(l, r, &delay)
     }
 
     /// The filter, then the output gain, for one frame. Switched off, the
