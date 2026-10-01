@@ -177,6 +177,12 @@ impl Flanger {
         ((c3 * t + c2) * t + c1) * t + x0
     }
 
+    /// Forgets all audio held in the delay line, feedback included. The LFO
+    /// carries on where it was.
+    pub fn reset(&mut self) {
+        self.line.fill(0.0);
+    }
+
     #[inline]
     pub fn process(&mut self, l: f32, r: f32, p: &FlangerParams) -> (f32, f32) {
         let manual = self
@@ -249,6 +255,35 @@ mod tests {
 
     fn tone(i: usize) -> f32 {
         (core::f32::consts::TAU * 220.0 * i as f32 / SR).sin() * 0.5
+    }
+
+    #[test]
+    fn reset_forgets_the_audio() {
+        let p = wet(5.0, 0.7, 0.9);
+        let mut f = Flanger::new(SR);
+        let mut seed = 0x1234_5678u32;
+        for _ in 0..48_000 {
+            f.process(noise(&mut seed), noise(&mut seed), &p);
+        }
+        f.reset();
+        // The line is the longest tail; run well past it.
+        for _ in 0..(f.frames * 2) {
+            assert_eq!(f.process(0.0, 0.0, &p), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_flanger_changes_nothing() {
+        let p = wet(3.0, 0.7, 0.6);
+        let mut a = Flanger::new(SR);
+        let mut b = Flanger::new(SR);
+        b.reset();
+        for i in 0..10_000 {
+            assert_eq!(
+                a.process(tone(i), tone(i), &p),
+                b.process(tone(i), tone(i), &p)
+            );
+        }
     }
 
     /// White noise from a fixed seed, so a test hears every frequency.

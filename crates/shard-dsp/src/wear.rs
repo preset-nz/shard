@@ -242,6 +242,18 @@ impl Side {
         }
     }
 
+    /// Forgets the audio the side holds: the envelope, the gate's filter and
+    /// any dropout under way. The chaotic system and flutter carry on.
+    fn reset(&mut self) {
+        self.env = 0.0;
+        self.lp = [0.0; 2];
+        self.drop_left = 0;
+        self.drop_gain_target = 1.0;
+        self.drop_dull_target = 0.0;
+        self.drop_gain.reset(1.0);
+        self.drop_dull.reset(0.0);
+    }
+
     /// This sample's flutter and chaos, each in plus or minus one.
     #[inline]
     fn modulate(&mut self, sample_rate: f32, chaos_period: u32) -> (f32, f32) {
@@ -382,6 +394,15 @@ impl Wear {
         let c2 = xm1 - 2.5 * x0 + 2.0 * x1 - 0.5 * x2;
         let c3 = 0.5 * (x2 - xm1) + 1.5 * (x0 - x1);
         ((c3 * t + c2) * t + c1) * t + x0
+    }
+
+    /// Forgets all audio held in the delay line, the gate and the envelope,
+    /// and ends any dropout under way. The drift and the seed carry on.
+    pub fn reset(&mut self) {
+        self.line.fill(0.0);
+        for side in self.sides.iter_mut() {
+            side.reset();
+        }
     }
 
     #[inline]
@@ -723,6 +744,47 @@ mod tests {
             energy += a * a;
         }
         assert!(energy > 1.0, "the line was not kept filled");
+    }
+
+    #[test]
+    fn reset_forgets_the_audio() {
+        let p = WearParams {
+            wow: 1.0,
+            flutter: 1.0,
+            unstable: 1.0,
+            dropouts: 1.0,
+            dull: 1.0,
+            mix: 1.0,
+        };
+        let mut w = Wear::new(SR);
+        let mut seed = 0x1234_5678u32;
+        for _ in 0..48_000 {
+            w.process(noise(&mut seed), noise(&mut seed), &p);
+        }
+        w.reset();
+        // The line is the longest tail; run well past it.
+        for _ in 0..(w.frames * 2) {
+            assert_eq!(w.process(0.0, 0.0, &p), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_wear_changes_nothing() {
+        let p = WearParams {
+            wow: 0.6,
+            flutter: 0.5,
+            unstable: 0.5,
+            dropouts: 0.5,
+            dull: 0.5,
+            mix: 1.0,
+        };
+        let mut a = Wear::new(SR);
+        let mut b = Wear::new(SR);
+        b.reset();
+        for i in 0..20_000 {
+            let x = music(i, SR);
+            assert_eq!(a.process(x, x, &p), b.process(x, x, &p));
+        }
     }
 
     #[test]
