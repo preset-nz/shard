@@ -34,10 +34,10 @@
 //! and no further, so loud material at high feedback piles up to a ceiling
 //! instead of running away.
 //!
-//! `mix` is how much of the repeats is added. The dry signal always stays at
-//! full level: `out = dry + wet * mix`, unlike the modulation effects'
-//! crossfade, because a delay that turned the original down as the repeats
-//! came up would sound like it was ducking the source. At zero mix the node
+//! `mix` crossfades, like every effect's: `out = dry * (1 - mix) + wet * mix`.
+//! At full mix only the repeats are heard, with nothing of the original (it
+//! was `dry + wet * mix` until 2026-10-02, which left the original playing at
+//! 100%). At zero mix the node
 //! is a bit-exact bypass, and the line keeps running, so switching on never
 //! plays stale audio.
 
@@ -78,7 +78,7 @@ pub struct DelayParams {
     /// Ping-pong, 0 to 1. Zero keeps each side to itself; one swaps the sides
     /// on every repeat.
     pub cross: f32,
-    /// How much of the repeats is added to the dry, 0 to 1.
+    /// Crossfade from dry to the repeats, 0 to 1: at 1 only the repeats are heard.
     pub mix: f32,
 }
 
@@ -253,7 +253,10 @@ impl Delay {
         if mix == 0.0 {
             return (l, r);
         }
-        (l + wet[0] * mix, r + wet[1] * mix)
+        (
+            l * (1.0 - mix) + wet[0] * mix,
+            r * (1.0 - mix) + wet[1] * mix,
+        )
     }
 }
 

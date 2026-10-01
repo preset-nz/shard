@@ -101,11 +101,14 @@ fn an_empty_chain_is_bit_exact_with_no_effects_at_all() {
 
 #[test]
 fn adding_an_effect_does_not_click() {
+    // A wet-only effect can be near silent for a while, so its own steady
+    // movement is no yardstick; the dry signal's is, since both are crossed.
+    let dry = worst_step(120, 20, |_, _| {});
     for kind in STEADY {
-        let steady = worst_step(120, 20, |_, bank| {
+        let steady = dry.max(worst_step(120, 20, |_, bank| {
             loud(bank, &[kind]);
             chain(bank, &[kind]);
-        });
+        }));
         let added = worst_step(120, 20, |block, bank| {
             loud(bank, &[kind]);
             if block == 40 {
@@ -122,11 +125,14 @@ fn adding_an_effect_does_not_click() {
 
 #[test]
 fn removing_an_effect_does_not_click() {
+    // A wet-only effect can be near silent for a while, so its own steady
+    // movement is no yardstick; the dry signal's is, since both are crossed.
+    let dry = worst_step(120, 20, |_, _| {});
     for kind in STEADY {
-        let steady = worst_step(120, 20, |_, bank| {
+        let steady = dry.max(worst_step(120, 20, |_, bank| {
             loud(bank, &[kind]);
             chain(bank, &[kind]);
-        });
+        }));
         let removed = worst_step(120, 20, |block, bank| {
             loud(bank, &[kind]);
             if block < 40 {

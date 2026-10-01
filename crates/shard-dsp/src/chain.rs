@@ -904,4 +904,31 @@ mod tests {
         let p = ChainParams::read(&rig.slots, |s| rig.bank.get(s), |s| rig.bank.get(s));
         assert_eq!(p.order.as_slice(), &[4]);
     }
+
+    #[test]
+    fn mix_is_a_crossfade_so_full_mix_never_passes_the_original() {
+        // Mix at 100% is the effect alone. For the effects that start from
+        // silence (repeats, a tail, layers a little late), the frame the
+        // impulse arrives in must come out empty.
+        for kind in [
+            Kind::Delay,
+            Kind::Echo,
+            Kind::Rise,
+            Kind::Reverb,
+            Kind::Overtone,
+        ] {
+            let mut rig = Rig::new();
+            let n = POOL.iter().position(|&(k, c)| k == kind && c == 0).unwrap();
+            rig.set(&format!("fx.{n}.{}.mix", kind.name()), 1.0);
+            rig.order(&[kind]);
+            rig.run_for(400, |_| 0.0); // the fades in land and the smoothers settle
+            let out = rig.run(64, |i| if i == 0 { 1.0 } else { 0.0 });
+            assert!(
+                out[0].abs() < 1e-4,
+                "{} at full mix still plays the original: {}",
+                kind.name(),
+                out[0]
+            );
+        }
+    }
 }

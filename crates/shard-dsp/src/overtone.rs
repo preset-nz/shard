@@ -2,7 +2,7 @@
 //!
 //! Extra voices grown from the sound that comes in: an octave below, an
 //! octave above and a fifth above the dry note (seven semitones up), each
-//! with a level of its own, laid over the dry. It is an effect, not a synth.
+//! with a level of its own, crossfaded in over the dry. It is an effect, not a synth.
 //! It plays whatever it hears, chords included, because each layer is a
 //! pitch shifter and a pitch shifter does not care what is in it. A bass
 //! gets a sub under it; a guitar gets a shimmer over it; a pad gets a stack.
@@ -16,9 +16,10 @@
 //! the layers read as part of the note rather than as artefacts around it.
 //! A soft limit follows, linear up to 0.8 and rounding to 1.0 above it, so
 //! all three layers at full with a loud input cannot run away. `mix` then
-//! sets how much of the stack is heard, added to the dry: `dry + layers *
-//! mix`. Nothing is taken from the dry as the layers come in, because they
-//! are additions, and the sound should only get bigger.
+//! crossfades from the dry to the stack: `dry * (1 - mix) + layers * mix`. At
+//! full mix only the layers are heard, which makes a pure sub or octave of the
+//! note; the dry is not kept underneath. (It was `dry + layers * mix` until
+//! 2026-10-02.)
 //!
 //! The shifters read through a 40 ms window and so delay their layers by
 //! about 20 ms. The dry is not delayed to match. That lag is part of the
@@ -207,7 +208,10 @@ impl Overtone {
         if mix == 0.0 {
             return (l, r);
         }
-        (l + layers[0] * mix, r + layers[1] * mix)
+        (
+            l * (1.0 - mix) + layers[0] * mix,
+            r * (1.0 - mix) + layers[1] * mix,
+        )
     }
 }
 
@@ -403,8 +407,8 @@ mod tests {
             let (u, _) = o.process(x, x, &bright);
             let (v, _) = o2.process(x, x, &dull);
             if i > 4_800 {
-                a += (u - x) * (u - x);
-                b += (v - x) * (v - x);
+                a += u * u;
+                b += v * v;
             }
         }
         assert!(db(b, a) < -12.0, "tone should cut the top: {}", db(b, a));
@@ -506,7 +510,7 @@ mod tests {
                 assert!(l.is_finite() && r.is_finite());
                 peak = peak.max(l.abs());
             }
-            assert!(peak > 0.5 && peak < 2.0, "{sr}: peak {peak}");
+            assert!(peak > 0.25 && peak < 2.0, "{sr}: peak {peak}");
         }
     }
 

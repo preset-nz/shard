@@ -40,7 +40,9 @@
 //! a mono source comes out wide, and the two sides' repeats drift apart as
 //! they climb.
 //!
-//! At zero mix the node is a bit-exact bypass. The lines keep running, so
+//! `mix` crossfades, like every effect's: `dry * (1 - mix) + wet * mix`. At
+//! full mix only the climbing repeats are heard, so nothing sounds until the
+//! first one arrives. At zero mix the node is a bit-exact bypass. The lines keep running, so
 //! switching on never plays stale audio.
 
 use crate::rng::Rng;
@@ -83,7 +85,8 @@ pub struct RiseParams {
     pub wobble: f32,
     /// The loop's low-pass, `TONE_MIN_HZ` to `TONE_MAX_HZ`. Default 6000.
     pub tone_hz: f32,
-    /// Dry plus wet times this, 0 to 1. Default 0.4.
+    /// Crossfade from dry to the repeats, 0 to 1: at 1 only the repeats are
+    /// heard. Default 0.4.
     pub mix: f32,
 }
 
@@ -288,7 +291,10 @@ impl Rise {
         if mix == 0.0 {
             return (l, r);
         }
-        (l + wet[0] * mix, r + wet[1] * mix)
+        (
+            l * (1.0 - mix) + wet[0] * mix,
+            r * (1.0 - mix) + wet[1] * mix,
+        )
     }
 }
 

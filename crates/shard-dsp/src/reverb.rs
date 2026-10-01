@@ -142,7 +142,7 @@ pub struct ReverbParams {
     pub tone_hz: f32,
     /// Silence before the reverb starts, 0 to `MAX_PREDELAY_MS`.
     pub predelay_ms: f32,
-    /// Dry plus this much wet, 0 to 1. The dry stays full.
+    /// Crossfade from dry to wet, 0 to 1: at 1 only the reverb is heard.
     pub mix: f32,
 }
 
@@ -618,7 +618,7 @@ impl Reverb {
         if m == 0.0 {
             (l, r)
         } else {
-            (l + wet[0] * m, r + wet[1] * m)
+            (l * (1.0 - m) + wet[0] * m, r * (1.0 - m) + wet[1] * m)
         }
     }
 }
@@ -668,12 +668,17 @@ mod tests {
     /// The wet part only, left and right, of an impulse in the left.
     fn impulse_response(sr: f32, p: &ReverbParams, seconds: f32) -> (Vec<f32>, Vec<f32>) {
         let mut rv = Reverb::new(sr);
+        // The mix fades in over its first 20 ms; let it arrive, so the dry that
+        // is taken away below is the dry that was left.
+        for _ in 0..(0.05 * sr) as usize {
+            rv.process(0.0, 0.0, p);
+        }
         let n = (seconds * sr) as usize;
         let (mut wl, mut wr) = (Vec::with_capacity(n), Vec::with_capacity(n));
         for i in 0..n {
             let x = if i == 0 { 1.0 } else { 0.0 };
             let (l, r) = rv.process(x, 0.0, p);
-            wl.push(l - x);
+            wl.push(l - (1.0 - p.mix) * x);
             wr.push(r);
         }
         (wl, wr)
@@ -1074,7 +1079,8 @@ mod tests {
             let (l, r) = rv.process(x, x, &p);
             assert!(l.is_finite() && r.is_finite() && l.abs() < 4.0 && r.abs() < 4.0);
             if i > SR as usize {
-                let (wl, wr) = ((l - x) as f64, (r - x) as f64);
+                let dry = (1.0 - p.mix) * x;
+                let (wl, wr) = ((l - dry) as f64, (r - dry) as f64);
                 ll += wl * wl;
                 rr += wr * wr;
                 lr += wl * wr;

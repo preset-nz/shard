@@ -37,8 +37,8 @@
 //! Changing `time_ms` glides the read point, which bends the pitch while it
 //! moves, the way turning the delay knob on a tape machine does.
 //!
-//! The output is `dry + wet * mix`, so the dry signal never changes level. At
-//! zero mix the node is a bit-exact bypass. The line keeps filling, so
+//! The output crossfades, `dry * (1 - mix) + wet * mix`, so at full mix only
+//! the repeats are heard. At zero mix the node is a bit-exact bypass. The line keeps filling, so
 //! switching on never plays stale audio.
 
 use crate::rng::Rng;
@@ -101,7 +101,7 @@ pub struct EchoParams {
     pub wobble: f32,
     /// Soft saturation in the loop, 0 to 1.
     pub grit: f32,
-    /// Dry plus this much wet, 0 to 1.
+    /// Crossfade from dry to the repeats, 0 to 1: at 1 only the repeats are heard.
     pub mix: f32,
 }
 
@@ -239,7 +239,7 @@ impl Echo {
             tone: smoother(20.0, d.tone_hz),
             wobble: smoother(50.0, d.wobble),
             grit: smoother(20.0, d.grit),
-            mix: smoother(20.0, d.mix),
+            mix: smoother(20.0, 0.0),
         }
     }
 
@@ -307,7 +307,7 @@ impl Echo {
             self.lp1[ch] = flush(self.lp1[ch] + lp_coef * (x - self.lp1[ch]));
             self.lp2[ch] = flush(self.lp2[ch] + lp_coef * (self.lp1[ch] - self.lp2[ch]));
             self.line[self.write * 2 + ch] = flush(self.lp2[ch]);
-            out[ch] = ins[ch] + wet[ch] * mix;
+            out[ch] = ins[ch] * (1.0 - mix) + wet[ch] * mix;
         }
         (out[0], out[1])
     }
@@ -562,7 +562,7 @@ mod tests {
         let input: Vec<f32> = (0..24_000).map(tone).collect();
         let out = run(SR, &p, &input);
         let echo: Vec<f64> = (18_000..22_000)
-            .map(|i| (out[i] - input[i]) as f64)
+            .map(|i| (out[i] - (1.0 - p.mix) * input[i]) as f64)
             .collect();
         let w = core::f64::consts::TAU * 220.0 / SR as f64;
         let n = echo.len() as f64;
@@ -624,7 +624,7 @@ mod tests {
             let out = run(SR, &p, &input);
             let mut peak = 0.0f32;
             for i in 7_000..9_600 {
-                peak = peak.max((out[i] - input[i]).abs());
+                peak = peak.max((out[i] - (1.0 - p.mix) * input[i]).abs());
             }
             peak / amp
         };
@@ -647,7 +647,9 @@ mod tests {
             };
             let input: Vec<f32> = (0..9_600).map(|i| tone(i) * 1.8).collect();
             let out = run(SR, &p, &input);
-            let echo: Vec<f32> = (0..9_600).map(|i| out[i] - input[i]).collect();
+            let echo: Vec<f32> = (0..9_600)
+                .map(|i| out[i] - (1.0 - p.mix) * input[i])
+                .collect();
             brightness(&echo[6_000..9_600])
         };
         assert!(sharp(1.0) > sharp(0.0) * 1.5);
