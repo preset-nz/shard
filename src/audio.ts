@@ -440,6 +440,19 @@ export const getTracker = () => invoke<Tracker>('tracker');
 /** Replaces the tracker whole; answers with it clamped and snapped, as the engine plays it. */
 export const setTracker = (tracker: Tracker) => invoke<Tracker>('set_tracker', { tracker });
 
+/**
+ * A whole-pattern edit on the first track (`tracker::Edit` in Rust): clear,
+ * paste or repeat a bar, rotate the steps, transpose. One step of Undo.
+ * Answers with the tracker as it now is.
+ */
+export type TrackerEdit =
+  | { op: 'clear_bar'; bar: number }
+  | { op: 'paste_bar'; bar: number; steps: Step[] }
+  | { op: 'repeat_bar'; from: number }
+  | { op: 'rotate'; by: number }
+  | { op: 'transpose'; semis: number; bar: number | null };
+export const editTracker = (edit: TrackerEdit) => invoke<Tracker>('edit_tracker', { edit });
+
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
 /** `FilterType::NAMES`, in stepped order. */

@@ -148,6 +148,90 @@ impl Tracker {
     }
 }
 
+/// A whole-pattern edit, for entering music faster than one step at a time
+/// (roadmap row 23 d). They act on the first track, the one that plays. Each
+/// is brought into range afterwards by `sanitised`, so a bad number cannot
+/// put the tracker out of range.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum Edit {
+    /// Empty bar `bar` (sixteen steps): no triggers, no pitch, no hold.
+    ClearBar { bar: usize },
+    /// Put these steps into bar `bar`, as copied from another.
+    PasteBar { bar: usize, steps: Vec<Step> },
+    /// Copy bar `from` over every other bar within the track's length.
+    RepeatBar { from: usize },
+    /// Slide the steps within the track's length by `by` places, wrapping
+    /// round: positive is later.
+    Rotate { by: i32 },
+    /// Move every pitch by `semis`, in the whole track or just one bar.
+    Transpose { semis: i32, bar: Option<usize> },
+}
+
+/// Steps in a bar.
+pub const BAR: usize = 16;
+
+impl Tracker {
+    /// What the edit is called in Undo.
+    pub fn label_of(edit: &Edit) -> &'static str {
+        match edit {
+            Edit::ClearBar { .. } => "Clear a bar",
+            Edit::PasteBar { .. } => "Paste a bar",
+            Edit::RepeatBar { .. } => "Repeat a bar",
+            Edit::Rotate { .. } => "Rotate the steps",
+            Edit::Transpose { .. } => "Transpose the steps",
+        }
+    }
+
+    /// Apply a whole-pattern edit to the first track. Out-of-range bars are
+    /// ignored rather than guessed at.
+    pub fn apply(mut self, edit: &Edit) -> Self {
+        self = self.sanitised();
+        let Some(t) = self.tracks.first_mut() else {
+            return self;
+        };
+        let bars = (t.length as usize / BAR).max(1);
+        let span = |bar: usize| bar * BAR..(bar + 1) * BAR;
+        match edit {
+            Edit::ClearBar { bar } if *bar < STEPS / BAR => {
+                for step in &mut t.steps[span(*bar)] {
+                    *step = Step::default();
+                }
+            }
+            Edit::PasteBar { bar, steps } if *bar < STEPS / BAR => {
+                for (dst, src) in t.steps[span(*bar)].iter_mut().zip(steps) {
+                    *dst = *src;
+                }
+            }
+            Edit::RepeatBar { from } if *from < STEPS / BAR => {
+                let source: Vec<Step> = t.steps[span(*from)].to_vec();
+                for bar in (0..bars).filter(|bar| bar != from) {
+                    t.steps[span(bar)].copy_from_slice(&source);
+                }
+            }
+            Edit::Rotate { by } => {
+                let n = (t.length as usize).min(STEPS);
+                let by = by.rem_euclid(n as i32) as usize;
+                t.steps[..n].rotate_right(by);
+            }
+            Edit::Transpose { semis, bar } => {
+                let range = match bar {
+                    Some(b) if *b < STEPS / BAR => span(*b),
+                    Some(_) => 0..0,
+                    None => 0..STEPS,
+                };
+                for step in &mut t.steps[range] {
+                    step.pitch = (i32::from(step.pitch) + semis)
+                        .clamp(-i32::from(PITCH_RANGE), i32::from(PITCH_RANGE))
+                        as i8;
+                }
+            }
+            _ => {}
+        }
+        self.sanitised()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,5 +422,113 @@ mod tests {
         assert!(t.tracks[0].steps[0].on);
         assert_eq!(t.tracks[0].steps[1].pitch, 5);
         assert_eq!(t.tracks[0].steps.len(), STEPS);
+    }
+
+    /// A track of `length` steps whose step `i` has pitch `i` and is on when
+    /// `i` is even, so every position is told apart.
+    fn counted(length: u32) -> Tracker {
+        let mut t = track(length, 0);
+        for (i, step) in t.steps.iter_mut().enumerate() {
+            step.on = i % 2 == 0;
+            step.pitch = (i as i8) % 20;
+        }
+        Tracker {
+            tracks: vec![t],
+            ..Tracker::default()
+        }
+    }
+
+    #[test]
+    fn clearing_a_bar_empties_only_that_bar() {
+        let t = counted(32).apply(&Edit::ClearBar { bar: 1 });
+        let steps = &t.tracks[0].steps;
+        assert!(steps[16..32].iter().all(|s| *s == Step::default()));
+        assert_eq!(steps[3].pitch, 3, "the first bar is untouched");
+        assert!(steps[2].on);
+    }
+
+    #[test]
+    fn pasting_a_bar_puts_the_copied_steps_there() {
+        let source = counted(16).tracks[0].steps[..BAR].to_vec();
+        let t = counted(32)
+            .apply(&Edit::ClearBar { bar: 1 })
+            .apply(&Edit::PasteBar {
+                bar: 1,
+                steps: source.clone(),
+            });
+        assert_eq!(&t.tracks[0].steps[16..32], &source[..]);
+    }
+
+    #[test]
+    fn repeating_a_bar_fills_the_rest_of_the_track_and_no_further() {
+        let t = counted(32).apply(&Edit::RepeatBar { from: 0 });
+        let steps = &t.tracks[0].steps;
+        assert_eq!(&steps[16..32], &steps[..16]);
+        // Bars past the track's length are not touched.
+        assert_eq!(steps[32].pitch, 12);
+        let four = counted(64).apply(&Edit::RepeatBar { from: 1 });
+        assert_eq!(&four.tracks[0].steps[..16], &four.tracks[0].steps[16..32]);
+        assert_eq!(&four.tracks[0].steps[48..], &four.tracks[0].steps[16..32]);
+    }
+
+    #[test]
+    fn rotating_slides_within_the_length_and_wraps() {
+        let t = counted(8).apply(&Edit::Rotate { by: 1 });
+        let steps = &t.tracks[0].steps;
+        assert_eq!(steps[0].pitch, 7, "the last step came round to the front");
+        assert_eq!(steps[1].pitch, 0);
+        assert_eq!(steps[8].pitch, 8, "past the length is not moved");
+        let back = counted(8).apply(&Edit::Rotate { by: -1 });
+        assert_eq!(back.tracks[0].steps[7].pitch, 0);
+        let full = counted(8).apply(&Edit::Rotate { by: 8 });
+        assert_eq!(full, counted(8).sanitised());
+    }
+
+    #[test]
+    fn transposing_moves_every_pitch_and_stops_at_the_range() {
+        let t = counted(16).apply(&Edit::Transpose {
+            semis: 5,
+            bar: None,
+        });
+        assert_eq!(t.tracks[0].steps[3].pitch, 8);
+        let high = counted(16).apply(&Edit::Transpose {
+            semis: 100,
+            bar: None,
+        });
+        assert_eq!(high.tracks[0].steps[3].pitch, PITCH_RANGE);
+        let one = counted(32).apply(&Edit::Transpose {
+            semis: 1,
+            bar: Some(1),
+        });
+        assert_eq!(one.tracks[0].steps[3].pitch, 3);
+        assert_eq!(one.tracks[0].steps[17].pitch, 18);
+    }
+
+    #[test]
+    fn a_bar_that_does_not_exist_changes_nothing() {
+        let before = counted(16).sanitised();
+        assert_eq!(counted(16).apply(&Edit::ClearBar { bar: 9 }), before);
+        assert_eq!(counted(16).apply(&Edit::RepeatBar { from: 9 }), before);
+        assert_eq!(
+            counted(16).apply(&Edit::Transpose {
+                semis: 3,
+                bar: Some(7)
+            }),
+            before
+        );
+    }
+
+    #[test]
+    fn an_edit_arrives_as_json_tagged_by_its_op() {
+        let e: Edit = serde_json::from_str(r#"{"op":"transpose","semis":-12,"bar":null}"#).unwrap();
+        assert_eq!(
+            e,
+            Edit::Transpose {
+                semis: -12,
+                bar: None
+            }
+        );
+        let e: Edit = serde_json::from_str(r#"{"op":"clear_bar","bar":2}"#).unwrap();
+        assert_eq!(e, Edit::ClearBar { bar: 2 });
     }
 }

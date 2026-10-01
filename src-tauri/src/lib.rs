@@ -946,12 +946,24 @@ fn tracker(state: tauri::State<'_, Audio>) -> tracker::Tracker {
 /// differs from what was sent only where a value was out of range.
 #[tauri::command]
 fn set_tracker(state: tauri::State<'_, Audio>, tracker: tracker::Tracker) -> tracker::Tracker {
-    // Not an edit if it comes out as it already is.
-    let same = tracker.clone().sanitised() == *state.tracker.lock().expect("tracker poisoned");
-    if !same {
+    // Not an edit if it comes out as it already is. The track's own switch
+    // does not count: the mode flips it, and a mode is not an edit.
+    let current = state.tracker.lock().expect("tracker poisoned").clone();
+    let mut probe = tracker.clone().sanitised();
+    for (p, c) in probe.tracks.iter_mut().zip(&current.tracks) {
+        p.on = c.on;
+    }
+    if probe != current {
         state.record_edit(Some("tracker"), "Edit the steps");
     }
     apply_tracker(&state, tracker)
+}
+
+/// A whole-pattern edit: clear, paste or repeat a bar, rotate, transpose
+/// (`tracker::Edit`). One step of Undo, and none when it changes nothing.
+#[tauri::command]
+fn edit_tracker(state: tauri::State<'_, Audio>, edit: tracker::Edit) -> tracker::Tracker {
+    state.edit_tracker(&edit)
 }
 
 /// The one way the tracker changes: brought into range, handed to the audio
@@ -1632,7 +1644,14 @@ impl Audio {
         for (i, v) in snap.arrangement.iter().enumerate() {
             self.arrangement.set(i, *v);
         }
-        apply_tracker(self, snap.tracker.clone());
+        // Whether the track plays follows the mode, which is not in a
+        // snapshot: keep it as it is.
+        let mut tracker = snap.tracker.clone();
+        let now = self.tracker.lock().expect("tracker poisoned").clone();
+        for (t, n) in tracker.tracks.iter_mut().zip(&now.tracks) {
+            t.on = n.on;
+        }
+        apply_tracker(self, tracker);
         self.send_modulation(&snap.modulation);
         *self.modulation.lock().expect("modulation poisoned") = snap.modulation.clone();
         *self.presets.lock().expect("presets poisoned") = snap.presets.clone();
@@ -1661,6 +1680,18 @@ impl Audio {
         let name = bank.defs()[i].name;
         let key = format!("param:{id}");
         self.record_edit(Some(&key), &format!("Change {name}"));
+    }
+
+    /// Apply a whole-pattern edit as one step of Undo; none if it changes
+    /// nothing.
+    fn edit_tracker(&self, edit: &tracker::Edit) -> tracker::Tracker {
+        let current = self.tracker.lock().expect("tracker poisoned").clone();
+        let next = current.clone().apply(edit);
+        if next == current {
+            return current;
+        }
+        self.record_edit(None, tracker::Tracker::label_of(edit));
+        apply_tracker(self, next)
     }
 
     /// Step back one edit; the name of what was undone.
@@ -2165,6 +2196,7 @@ pub fn run() {
             set_playing,
             tracker,
             set_tracker,
+            edit_tracker,
             envelope_curve,
             patch_preview,
             save_patch,
@@ -2679,5 +2711,54 @@ mod tests {
         a.undo_one();
         a.record_edit(None, "Something else");
         assert!(a.redo_one().is_none());
+    }
+
+    #[test]
+    fn a_pattern_edit_is_one_undo_and_one_that_changes_nothing_is_none() {
+        let a = headless();
+        // The default track has steps on every fourth; clearing bar one is a change.
+        let before = a.tracker.lock().unwrap().clone();
+        a.edit_tracker(&tracker::Edit::ClearBar { bar: 0 });
+        assert!(!a.tracker.lock().unwrap().tracks[0].steps[0].on);
+        assert_eq!(a.steps.load().pattern & 0xFFFF, 0, "the engine hears it");
+        assert_eq!(a.undo_one().as_deref(), Some("Clear a bar"));
+        assert_eq!(*a.tracker.lock().unwrap(), before);
+        assert_eq!(a.steps.load().pattern & 0xFFFF, 0x1111);
+
+        // A bar that is already empty, or does not exist, leaves no step.
+        a.edit_tracker(&tracker::Edit::ClearBar { bar: 3 });
+        a.edit_tracker(&tracker::Edit::ClearBar { bar: 9 });
+        assert!(a.undo_one().is_none());
+    }
+
+    #[test]
+    fn switching_the_mode_is_not_an_edit_and_undo_does_not_flip_it() {
+        let a = headless();
+        // What the mode switch does: turn the track on through `set_tracker`.
+        let mut on = a.tracker.lock().unwrap().clone();
+        on.tracks[0].on = true;
+        // The command's probe, as in `set_tracker`.
+        let current = a.tracker.lock().unwrap().clone();
+        let mut probe = on.clone().sanitised();
+        for (p, c) in probe.tracks.iter_mut().zip(&current.tracks) {
+            p.on = c.on;
+        }
+        assert_eq!(
+            probe, current,
+            "only the switch differs, so no step is recorded"
+        );
+        apply_tracker(&a, on);
+
+        // A real edit, then undo: the steps go back and the track stays on.
+        a.edit_tracker(&tracker::Edit::ClearBar { bar: 0 });
+        a.undo_one();
+        assert!(
+            a.tracker.lock().unwrap().tracks[0].on,
+            "undo left the mode alone"
+        );
+        assert!(
+            a.tracker.lock().unwrap().tracks[0].steps[0].on,
+            "and restored the steps"
+        );
     }
 }

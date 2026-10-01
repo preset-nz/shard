@@ -12,6 +12,7 @@ import {
   type ChainLevel,
   cancelLearn,
   EMPTY_MAPPINGS,
+  editTracker,
   envelopeCurve,
   forgetMidi,
   format,
@@ -58,6 +59,7 @@ import {
   setPlaying,
   setTracker,
   type Tracker,
+  type TrackerEdit,
   takeOpenedFile,
   undoEdit,
   unlinkParam,
@@ -199,6 +201,13 @@ export default function App() {
   /** The tracker, the level above the patch. Shown at once, then as Rust answers. */
   const [tracker, setTrackerView] = useState<Tracker | null>(null);
   const trackerSeq = useRef(0);
+  const editTrackerView = useCallback(async (edit: TrackerEdit) => {
+    try {
+      setTrackerView(await editTracker(edit));
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
   const changeTracker = useCallback(async (next: Tracker) => {
     setTrackerView(next);
     const seq = ++trackerSeq.current;
@@ -1161,6 +1170,7 @@ export default function App() {
               tracker={tracker}
               step={meter.step}
               root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
+              onEdit={(edit) => void editTrackerView(edit)}
               onChange={(next) => void changeTracker(next)}
             />
           )}

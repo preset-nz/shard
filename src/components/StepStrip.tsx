@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react';
-import type { Step, Track, Tracker } from '@/audio';
+import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
+import type { Step, Track, Tracker, TrackerEdit } from '@/audio';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
 
@@ -39,6 +39,7 @@ export function StepStrip({
   step,
   root,
   onChange,
+  onEdit,
 }: {
   tracker: Tracker;
   /** The step playing, from zero, or -1. */
@@ -46,6 +47,8 @@ export function StepStrip({
   /** The Sample material's root note, a MIDI number, so pitches show as names. */
   root: number | null;
   onChange: (next: Tracker) => void;
+  /** A whole-pattern edit: clear, paste or repeat a bar, rotate, transpose. */
+  onEdit: (edit: TrackerEdit) => void;
 }) {
   const track = tracker.tracks[0];
   const setTrack = (change: Partial<Track>) =>
@@ -57,6 +60,79 @@ export function StepStrip({
     setTrack({ steps });
   };
   const bars = Array.from({ length: Math.ceil(track.length / BAR) }, (_, b) => b);
+
+  // Entering music from the keyboard, tracker-style. The octave the piano
+  // keys sound in, a bar copied to paste, and the grid to move focus in.
+  const [keyOctave, setKeyOctave] = useState(4);
+  const clip = useRef<Step[] | null>(null);
+  const grid = useRef<HTMLDivElement>(null);
+  const focusStep = (row: string, i: number) =>
+    grid.current?.querySelector<HTMLElement>(`[data-row="${row}"][data-step="${i}"]`)?.focus();
+
+  const onGridKey = (e: KeyboardEvent<HTMLDivElement>) => {
+    // A cell that handled the key itself (a pitch drag key, say) is done.
+    if (e.defaultPrevented) return;
+    const cell = (e.target as HTMLElement).closest<HTMLElement>('[data-step]');
+    if (!cell) return;
+    const i = Number(cell.dataset.step);
+    const row = cell.dataset.row ?? 'steps';
+    const bar = Math.floor(i / BAR);
+    const handled = () => e.preventDefault();
+
+    if (e.metaKey || e.ctrlKey) {
+      switch (e.key.toLowerCase()) {
+        case 'c':
+          clip.current = Array.from({ length: BAR }, (_, k) => stepAt(bar * BAR + k));
+          break;
+        case 'v':
+          if (!clip.current) return;
+          onEdit({ op: 'paste_bar', bar, steps: clip.current });
+          break;
+        case 'd':
+          onEdit({ op: 'repeat_bar', from: bar });
+          break;
+        case 'backspace':
+          onEdit({ op: 'clear_bar', bar });
+          break;
+        case 'arrowup':
+          onEdit({ op: 'transpose', semis: e.shiftKey ? 12 : 1, bar });
+          break;
+        case 'arrowdown':
+          onEdit({ op: 'transpose', semis: e.shiftKey ? -12 : -1, bar });
+          break;
+        default:
+          return;
+      }
+      handled();
+      return;
+    }
+    // Alt+arrows move the selected effect, not a step.
+    if (e.altKey) return;
+
+    if (e.key === 'ArrowLeft') {
+      focusStep(row, Math.max(0, i - 1));
+    } else if (e.key === 'ArrowRight') {
+      focusStep(row, Math.min(track.length - 1, i + 1));
+    } else if (e.key === '[' || e.key === ']') {
+      onEdit({ op: 'rotate', by: e.key === ']' ? 1 : -1 });
+    } else if (e.code === 'KeyZ') {
+      setKeyOctave((o) => Math.max(0, o - 1));
+    } else if (e.code === 'KeyX') {
+      setKeyOctave((o) => Math.min(8, o + 1));
+    } else if (e.code in PIANO) {
+      // The key names a real note. Pitches are semitones from the sample, so
+      // with a root note that is the note minus the root, and without one the
+      // note is taken against middle C.
+      const midi = 12 * (keyOctave + 1) + PIANO[e.code];
+      setStep(i, { on: true, pitch: midi - (root ?? 60) });
+      focusStep(row, Math.min(track.length - 1, i + 1));
+    } else if (row === 'steps' && (e.key === 'Backspace' || e.key === 'Delete')) {
+      setStep(i, { on: false, pitch: 0, hold: 0 });
+    } else {
+      return;
+    }
+    handled();
+  };
 
   // Typed as text and committed on Enter or leaving the field, so typing 95
   // does not clamp to 40 on the way through the 9.
@@ -139,9 +215,17 @@ export function StepStrip({
         ))}
       </fieldset>
 
+      <span
+        className="font-mono text-[10px] tabular-nums"
+        title="Keys: A W S E D F T G Y H U J K play C to C in this octave and enter the note on the focused step, then move on. Z and X change octave. Arrows move between steps. [ and ] rotate the steps. ⌘C and ⌘V copy and paste a bar, ⌘D repeats it over the track, ⌘⌫ clears it, ⌘↑ and ⌘↓ transpose it (Shift for an octave). Delete clears a step."
+      >
+        keys C{keyOctave}
+      </span>
+
       {/* Steps over their pitches and holds, a column a sixteenth, like a
           tracker's columns under its triggers. A bar to a row. */}
-      <div className="flex min-w-0 flex-col gap-2">
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: keys bubble up from the focusable cells */}
+      <div ref={grid} onKeyDown={onGridKey} className="flex min-w-0 flex-col gap-2">
         {bars.map((bar) => {
           const first = bar * BAR;
           const cells = Array.from(
@@ -161,6 +245,8 @@ export function StepStrip({
                     <button
                       key={i}
                       type="button"
+                      data-row="steps"
+                      data-step={i}
                       aria-pressed={set}
                       aria-label={`Step ${i + 1}`}
                       title={`Step ${i + 1}`}
@@ -253,6 +339,8 @@ function PitchCell({
     <div
       role="spinbutton"
       tabIndex={0}
+      data-row="pitch"
+      data-step={step}
       aria-label={`Step ${step + 1} pitch`}
       aria-valuemin={-PITCH_RANGE}
       aria-valuemax={PITCH_RANGE}
@@ -274,6 +362,8 @@ function PitchCell({
       }}
       onDoubleClick={() => commit(0)}
       onKeyDown={(e) => {
+        // ⌘, Ctrl and Alt are the strip's bar and effect shortcuts.
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
         const by = e.shiftKey ? 12 : 1;
         if (e.key === 'ArrowUp') commit(semis + by);
         else if (e.key === 'ArrowDown') commit(semis - by);
@@ -289,6 +379,28 @@ function PitchCell({
     </div>
   );
 }
+
+/**
+ * The computer keyboard as a piano, in the tracker's layout: the home row is
+ * the white keys and the row above the black ones. Semitones above C.
+ */
+const PIANO: Record<string, number> = {
+  KeyA: 0,
+  KeyW: 1,
+  KeyS: 2,
+  KeyE: 3,
+  KeyD: 4,
+  KeyF: 5,
+  KeyT: 6,
+  KeyG: 7,
+  KeyY: 8,
+  KeyH: 9,
+  KeyU: 10,
+  KeyJ: 11,
+  KeyK: 12,
+  KeyO: 13,
+  KeyL: 14,
+};
 
 /** The longest a step can be held, in sixteenths. `HOLD_MAX` in Rust. */
 const HOLD_MAX = 16;
@@ -331,6 +443,8 @@ function HoldCell({
     <div
       role="spinbutton"
       tabIndex={0}
+      data-row="hold"
+      data-step={step}
       aria-label={`Step ${step + 1} hold`}
       aria-valuemin={0}
       aria-valuemax={HOLD_MAX}
@@ -356,6 +470,7 @@ function HoldCell({
       }}
       onDoubleClick={() => commit(0)}
       onKeyDown={(e) => {
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
         const by = e.shiftKey ? 4 : 1;
         if (e.key === 'ArrowUp') commit(sixteenths + by);
         else if (e.key === 'ArrowDown') commit(sixteenths - by);
