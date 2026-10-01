@@ -508,6 +508,14 @@ export default function App() {
     }
   }, []);
 
+  // The document open when the app last closed, as a path. UI memory, not
+  // the document: reopened at launch if the file is still there
+  // (`native-apps.md` rule 4).
+  const [lastDocument, setLastDocument] = usePersistedState<string | null>(
+    'shard.lastDocument',
+    null,
+  );
+
   const doSave = useCallback(async () => {
     try {
       const path = await save({
@@ -516,22 +524,24 @@ export default function App() {
       });
       if (!path) return;
       await savePatch(path);
+      setLastDocument(path);
       setPatchName(path.split('/').pop() ?? path);
       setNote(null);
       setError(null);
     } catch (e) {
       setError(String(e));
     }
-  }, [patchName]);
+  }, [patchName, setLastDocument]);
 
   /**
    * Replace the document with the one at `path`. File > Open and a file
    * opened from Finder both come through here.
    */
   const openPath = useCallback(
-    async (path: string) => {
+    async (path: string): Promise<boolean> => {
       try {
         const report = await loadPatch(path);
+        setLastDocument(path);
         setPatchName(path.split('/').pop() ?? path);
         setWaves({});
         setPool(await readMaterials());
@@ -566,11 +576,13 @@ export default function App() {
           parts.push(`controller map "${report.map_missing}" not on this Mac`);
         }
         setNote(parts.length > 0 ? parts.join(' · ') : null);
+        return true;
       } catch (e) {
         setError(String(e));
+        return false;
       }
     },
-    [setMode],
+    [setMode, setLastDocument],
   );
 
   const doLoad = useCallback(async () => {
@@ -592,6 +604,8 @@ export default function App() {
   // restore belongs after the answer, and only when it is empty.
   const openPathRef = useRef(openPath);
   openPathRef.current = openPath;
+  const lastDocumentRef = useRef(lastDocument);
+  lastDocumentRef.current = lastDocument;
   useEffect(() => {
     const unlisten = listen<string>('open-document', (e) => {
       void openPathRef.current(e.payload);
@@ -599,14 +613,25 @@ export default function App() {
     // Not gated on unmount: `take` hands a held path over exactly once, so
     // dropping it here would lose it for good.
     void unlisten.then(() =>
-      takeOpenedFile().then((path) => {
-        if (path) void openPathRef.current(path);
+      takeOpenedFile().then(async (path) => {
+        if (path) {
+          void openPathRef.current(path);
+          return;
+        }
+        // Nothing was opened from Finder: reopen the last document, and say
+        // so if it has gone rather than opening on an empty patch in silence.
+        const last = lastDocumentRef.current;
+        if (last && !(await openPathRef.current(last))) {
+          setLastDocument(null);
+          setNote(`${last.split('/').pop() ?? last} was open last time and could not be reopened.`);
+        }
       }),
     );
     return () => {
       void unlisten.then((off) => off());
     };
-  }, []);
+    // The setter is stable (its key never changes), so this runs once.
+  }, [setLastDocument]);
 
   /** Run one material command, and draw the pool Rust answers with. */
   const editMaterials = useCallback(async (run: () => Promise<MaterialsView>) => {

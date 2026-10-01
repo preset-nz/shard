@@ -2164,6 +2164,9 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
+        // The window comes back where it was, at the size it was (`native-apps.md`
+        // rule 4). Saved when it closes, kept in the app's config directory.
+        .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(audio)
         .manage(opened::Opened::default())
         .on_menu_event(|app, event| menu::forward(app, event.id().as_ref()))

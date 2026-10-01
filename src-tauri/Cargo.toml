@@ -25,3 +25,4 @@ shard-dsp.workspace = true
 cpal.workspace = true
 hound.workspace = true
 midir.workspace = true
+tauri-plugin-window-state = "2"
