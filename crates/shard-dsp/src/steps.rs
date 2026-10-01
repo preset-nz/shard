@@ -55,6 +55,14 @@ pub struct StepParams {
     /// whole note is scaled by it; full is unity, so a track that never sets
     /// one sounds as it always did.
     pub velocities: [u8; STEPS],
+    /// Each step's microtiming in milliseconds, step one first: negative is
+    /// early, positive late (`design/drum-programming.md` section 5). The clock
+    /// turns it into samples as it goes, and holds it to a quarter of a step
+    /// either way: a fifth of a step, which with the heaviest swing (half a
+    /// step) still leaves every step strictly after the one before, so a
+    /// nudge can never swap two steps or land them together. Step one cannot
+    /// go early, since nothing comes before the loop's start.
+    pub nudges: [i8; STEPS],
 }
 
 /// The steps a pattern holds: four bars of sixteen.
@@ -63,6 +71,12 @@ pub const STEPS: usize = 64;
 pub const PITCH_RANGE: i8 = 24;
 /// The longest a step can be held, in sixteenths: one bar.
 pub const HOLD_MAX: u8 = 16;
+/// How far a nudge can reach, as a share of a step. A fifth, because swing can
+/// already delay every second step by up to half: half plus a fifth is still
+/// before the next step's earliest, a step minus a fifth.
+pub const NUDGE_REACH: f32 = 0.2;
+/// The most a step can be nudged, in milliseconds, either way.
+pub const NUDGE_MAX_MS: i8 = 50;
 /// A step at full velocity, as MIDI counts it.
 pub const VELOCITY_MAX: u8 = 127;
 
@@ -78,6 +92,7 @@ impl Default for StepParams {
             pitches: [0; STEPS],
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
+            nudges: [0; STEPS],
         }
     }
 }
@@ -87,6 +102,20 @@ impl StepParams {
     #[inline]
     pub fn hold_of(&self, k: u32) -> u32 {
         u32::from(self.holds[k as usize % STEPS].min(HOLD_MAX))
+    }
+
+    /// Step `k`'s nudge in samples at `sample_rate`, held to a fifth of a step
+    /// (`step_len` samples) either way, and to zero if early on step one.
+    #[inline]
+    pub fn nudge_samples(&self, k: u32, sample_rate: f32, step_len: f32) -> f32 {
+        let ms = f32::from(self.nudges[k as usize % STEPS].clamp(-NUDGE_MAX_MS, NUDGE_MAX_MS));
+        let reach = NUDGE_REACH * step_len;
+        let samples = (ms * 0.001 * sample_rate).clamp(-reach, reach);
+        if k == 0 {
+            samples.max(0.0)
+        } else {
+            samples
+        }
     }
 
     /// Step `k`'s velocity as a gain, 0 to 1.
@@ -121,6 +150,8 @@ pub struct StepBank {
     holds: [AtomicU64; WORDS],
     /// The velocities, a byte a step, packed the same way.
     velocities: [AtomicU64; WORDS],
+    /// The nudges, a byte a step, packed like the pitches.
+    nudges: [AtomicU64; WORDS],
 }
 
 /// Words of eight steps a byte each.
@@ -155,6 +186,7 @@ impl StepBank {
             velocities: std::array::from_fn(|w| {
                 AtomicU64::new(pack_u8(&p.velocities[w * 8..w * 8 + 8]))
             }),
+            nudges: std::array::from_fn(|w| AtomicU64::new(pack(&p.nudges[w * 8..w * 8 + 8]))),
         }
     }
 
@@ -168,6 +200,7 @@ impl StepBank {
         for w in 0..WORDS {
             self.pitches[w].store(pack(&p.pitches[w * 8..w * 8 + 8]), Ordering::Relaxed);
             self.holds[w].store(pack_u8(&p.holds[w * 8..w * 8 + 8]), Ordering::Relaxed);
+            self.nudges[w].store(pack(&p.nudges[w * 8..w * 8 + 8]), Ordering::Relaxed);
             self.velocities[w].store(pack_u8(&p.velocities[w * 8..w * 8 + 8]), Ordering::Relaxed);
         }
     }
@@ -177,9 +210,11 @@ impl StepBank {
         let mut pitches = [0i8; STEPS];
         let mut holds = [0u8; STEPS];
         let mut velocities = [0u8; STEPS];
+        let mut nudges = [0i8; STEPS];
         for i in 0..STEPS {
             pitches[i] = (self.pitches[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8 as i8;
             holds[i] = (self.holds[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
+            nudges[i] = (self.nudges[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8 as i8;
             velocities[i] = (self.velocities[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
         }
         StepParams {
@@ -191,6 +226,7 @@ impl StepBank {
             pitches,
             holds,
             velocities,
+            nudges,
         }
     }
 }
@@ -247,10 +283,11 @@ impl StepClock {
         self.sample_rate * 60.0 / p.tempo_bpm.clamp(20.0, 300.0) / 4.0
     }
 
-    /// Where step `k` begins, with swing.
-    fn onset(&self, k: u32, step_len: f32, swing: f32) -> f32 {
+    /// Where step `k` begins, with swing and its own nudge.
+    fn onset(&self, k: u32, step_len: f32, p: &StepParams) -> f32 {
+        let swing = p.swing.clamp(0.0, 0.5);
         let late = if k % 2 == 1 { swing * step_len } else { 0.0 };
-        k as f32 * step_len + late
+        k as f32 * step_len + late + p.nudge_samples(k, self.sample_rate, step_len)
     }
 
     /// One frame on. The step, when a step that is on begins on this frame.
@@ -262,13 +299,22 @@ impl StepClock {
         let step_len = self.step_len(p);
         let length = p.length.clamp(1, STEPS as u32);
         let total = length as f32 * step_len;
-        let swing = p.swing.clamp(0.0, 0.5);
         // Which step contains `pos`: the last whose onset is at or before it.
+        // A step nudged early has begun before the grid says, and one nudged
+        // late has not, so look a step either way.
         let mut k = ((self.pos / step_len) as u32).min(length - 1);
-        while k > 0 && self.onset(k, step_len, swing) > self.pos {
+        while k > 0 && self.onset(k, step_len, p) > self.pos {
             k -= 1;
         }
-        let entered = self.step != Some(k);
+        while k + 1 < length && self.onset(k + 1, step_len, p) <= self.pos {
+            k += 1;
+        }
+        // Before step one's own onset (a late nudge on it) the clock is still
+        // in the last step of the loop before; on the very first pass that
+        // means no step at all yet, and nothing triggers.
+        let before_first = k == 0 && self.onset(0, step_len, p) > self.pos;
+        let k = if before_first { length - 1 } else { k };
+        let entered = self.step != Some(k) && !(before_first && self.step.is_none());
         self.step = Some(k);
         self.pos += 1.0;
         if self.pos >= total {
@@ -301,6 +347,7 @@ mod tests {
             pitches: [0; STEPS],
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
+            nudges: [0; STEPS],
         };
         let t = triggers(&p, SR as usize * 4);
         // Steps 0, 4, 8, 12 of a 16-step bar at 120: every 0.5 s, 8 in 4 s.
@@ -321,6 +368,7 @@ mod tests {
             pitches: [0; STEPS],
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
+            nudges: [0; STEPS],
         };
         let t = triggers(&p, SR as usize);
         // Four sixteenths at 120 is half a second; step one fires twice.
@@ -338,6 +386,7 @@ mod tests {
             pitches: [0; STEPS],
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
+            nudges: [0; STEPS],
         };
         let swung = StepParams {
             swing: 0.5,
@@ -423,6 +472,13 @@ mod tests {
                 }
                 v
             },
+            nudges: {
+                let mut n = [0i8; STEPS];
+                for (i, x) in n.iter_mut().enumerate() {
+                    *x = ((i as i32 * 7) % 101 - 50) as i8;
+                }
+                n
+            },
         };
         let bank = StepBank::default();
         assert_eq!(bank.load(), StepParams::default());
@@ -483,5 +539,102 @@ mod tests {
         assert_eq!(p.velocity_of(1), 0.0);
         assert!((p.velocity_of(2) - 64.0 / 127.0).abs() < 1e-6);
         assert_eq!(p.velocity_of(3), 1.0, "out of range is full, not louder");
+    }
+
+    /// The frame step `k` first triggers on, over a few bars at 120 bpm
+    /// (a sixteenth is 6 000 samples at 48 kHz).
+    fn first_trigger(p: &StepParams, k: usize) -> usize {
+        let mut c = StepClock::new(SR);
+        c.set_running(true);
+        for frame in 0..SR as usize * 2 {
+            if c.tick(p) == Some(k as u32) {
+                return frame;
+            }
+        }
+        panic!("step {k} never triggered");
+    }
+
+    fn only(k: usize, nudge: i8) -> StepParams {
+        let mut p = StepParams {
+            on: true,
+            length: 16,
+            pattern: 1 << k,
+            ..Default::default()
+        };
+        p.nudges[k] = nudge;
+        p
+    }
+
+    #[test]
+    fn a_nudge_moves_a_step_by_that_many_milliseconds() {
+        let on_the_grid = first_trigger(&only(4, 0), 4);
+        assert_eq!(on_the_grid, 24_000, "step five at 120 bpm is 0.5 s in");
+        // 15 ms late is 720 samples; 10 ms early is 480.
+        let late = first_trigger(&only(4, 15), 4);
+        let early = first_trigger(&only(4, -10), 4);
+        assert!((late as i64 - 24_720).abs() <= 1, "{late}");
+        assert!((early as i64 - 23_520).abs() <= 1, "{early}");
+    }
+
+    #[test]
+    fn a_nudge_is_held_to_a_fifth_of_a_step_so_steps_never_swap() {
+        // 50 ms is more than a fifth of a 125 ms step: held to 25 ms, which
+        // is 1 200 samples.
+        let late = first_trigger(&only(4, 50), 4);
+        assert!((late as i64 - (24_000 + 1_200)).abs() <= 1, "{late}");
+        let early = first_trigger(&only(4, -50), 4);
+        assert!((early as i64 - (24_000 - 1_200)).abs() <= 1, "{early}");
+    }
+
+    #[test]
+    fn the_first_step_can_be_late_but_not_early() {
+        assert_eq!(
+            first_trigger(&only(0, -20), 0),
+            0,
+            "nothing comes before the start"
+        );
+        assert!((first_trigger(&only(0, 10), 0) as i64 - 480).abs() <= 1);
+    }
+
+    #[test]
+    fn nudged_steps_keep_their_order_and_each_fires_once_a_bar() {
+        // Every step on, alternately pushed and pulled as far as allowed, with
+        // swing on: the triggers must still come in step order, once each.
+        let mut p = StepParams {
+            on: true,
+            length: 16,
+            pattern: 0xFFFF,
+            swing: 0.5,
+            ..Default::default()
+        };
+        for (i, n) in p.nudges.iter_mut().enumerate() {
+            *n = if i % 2 == 0 { -50 } else { 50 };
+        }
+        let mut c = StepClock::new(SR);
+        c.set_running(true);
+        let mut seen = Vec::new();
+        for _ in 0..SR as usize * 4 {
+            if let Some(k) = c.tick(&p) {
+                seen.push(k);
+            }
+        }
+        // Two bars of sixteen in four seconds at 120 bpm.
+        assert_eq!(seen.len(), 32, "{seen:?}");
+        for bar in seen.chunks(16) {
+            assert_eq!(bar, (0..16).collect::<Vec<u32>>().as_slice());
+        }
+    }
+
+    #[test]
+    fn no_nudge_leaves_the_grid_exactly_as_it_was() {
+        let p = StepParams {
+            on: true,
+            pattern: 0xFFFF,
+            ..Default::default()
+        };
+        let t = triggers(&p, SR as usize * 2);
+        for (k, at) in t.iter().enumerate() {
+            assert_eq!(*at, k * 6_000, "step {k}");
+        }
     }
 }

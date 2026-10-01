@@ -495,11 +495,17 @@ fn held_steps_never_touch_the_allocator() {
             for (i, h) in holds.iter_mut().enumerate() {
                 *h = ((block / 40 + i) % 18) as u8;
             }
+            // Early and late, every step a different amount, moving each block.
+            let mut nudges = [0i8; shard_dsp::steps::STEPS];
+            for (i, n) in nudges.iter_mut().enumerate() {
+                *n = ((block + i * 7) % 101) as i8 - 50;
+            }
             e.set_steps(StepParams {
                 on: true,
                 tempo_bpm: 120.0 + (block % 120) as f32,
                 pattern: 0xFFFF,
                 holds,
+                nudges,
                 ..Default::default()
             });
             e.process_block(&mut out, &bank);

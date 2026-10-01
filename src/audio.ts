@@ -428,6 +428,8 @@ export interface Step {
   hold: number;
   /** How hard it plays, 0 to 127; 127 is full. */
   velocity: number;
+  /** Its timing in ms, −50 to 50: negative is early, positive late. */
+  nudge: number;
 }
 
 /** A track of steps. Monophonic: a new step cuts the last. */

@@ -16,7 +16,7 @@
 //! Saved in the same `.shard` file as the patch, above it. See `patch.rs`.
 
 use serde::{Deserialize, Serialize};
-use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
+use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::StepParams;
 
 pub const TEMPO_MIN: f32 = 40.0;
@@ -64,6 +64,9 @@ pub struct Step {
     /// How hard it plays, 0 to `VELOCITY_MAX`; full is the default, so a step
     /// never given one sounds as it always did.
     pub velocity: u8,
+    /// Its timing in milliseconds, negative early and positive late, up to
+    /// `NUDGE_MAX_MS`. The clock holds it to a fifth of a step.
+    pub nudge: i8,
 }
 
 impl Default for Step {
@@ -73,6 +76,7 @@ impl Default for Step {
             pitch: 0,
             hold: 0,
             velocity: VELOCITY_MAX,
+            nudge: 0,
         }
     }
 }
@@ -100,6 +104,7 @@ impl Default for Track {
                     pitch: p.pitches[i],
                     hold: p.holds[i],
                     velocity: p.velocities[i],
+                    nudge: p.nudges[i],
                 })
                 .collect(),
         }
@@ -138,6 +143,7 @@ impl Tracker {
                 step.pitch = step.pitch.clamp(-PITCH_RANGE, PITCH_RANGE);
                 step.hold = step.hold.min(HOLD_MAX);
                 step.velocity = step.velocity.min(VELOCITY_MAX);
+                step.nudge = step.nudge.clamp(-NUDGE_MAX_MS, NUDGE_MAX_MS);
             }
         }
         self
@@ -155,12 +161,14 @@ impl Tracker {
             pitches: [0; STEPS],
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
+            nudges: [0; STEPS],
         };
         for (i, step) in t.steps.iter().take(STEPS).enumerate() {
             p.pattern |= u64::from(step.on) << i;
             p.pitches[i] = step.pitch;
             p.holds[i] = step.hold;
             p.velocities[i] = step.velocity;
+            p.nudges[i] = step.nudge;
         }
         p
     }
@@ -291,6 +299,7 @@ mod tests {
                 pitch: 99,
                 hold: 99,
                 velocity: 200,
+                nudge: -99,
             };
             3
         ];
@@ -305,6 +314,10 @@ mod tests {
         );
         assert_eq!(t.tracks[0].steps[0].hold, HOLD_MAX, "a bar at most");
         assert_eq!(t.tracks[0].steps[0].velocity, VELOCITY_MAX, "full at most");
+        assert_eq!(
+            t.tracks[0].steps[0].nudge, -NUDGE_MAX_MS,
+            "fifty ms at most"
+        );
         assert!(!t.tracks[0].steps[3].on, "the padding is empty steps");
         let fast = Tracker {
             tempo: 500.0,
@@ -366,6 +379,7 @@ mod tests {
                 pitch: -100,
                 hold: 3,
                 velocity: 5,
+                nudge: 7,
             };
             100
         ];
@@ -388,6 +402,7 @@ mod tests {
                 pitches: [-PITCH_RANGE; STEPS],
                 holds: [3; STEPS],
                 velocities: [5; STEPS],
+                nudges: [7; STEPS],
             }
         );
     }
@@ -399,6 +414,7 @@ mod tests {
             step.pitch = 7;
             step.hold = 2;
             step.velocity = 64;
+            step.nudge = -3;
         }
         let t = Tracker {
             tempo: 82.0,
@@ -416,6 +432,7 @@ mod tests {
                 pitches: [7; STEPS],
                 holds: [2; STEPS],
                 velocities: [64; STEPS],
+                nudges: [-3; STEPS],
             }
         );
     }
@@ -428,6 +445,7 @@ mod tests {
             pitch: -5,
             hold: 8,
             velocity: 40,
+            nudge: -12,
         };
         let p = Tracker {
             tracks: vec![t],
@@ -437,7 +455,10 @@ mod tests {
         .params();
         assert_eq!(p.length, 64);
         assert_eq!(p.pattern, 1 << 63);
-        assert_eq!((p.pitches[63], p.holds[63], p.velocities[63]), (-5, 8, 40));
+        assert_eq!(
+            (p.pitches[63], p.holds[63], p.velocities[63], p.nudges[63]),
+            (-5, 8, 40, -12)
+        );
     }
 
     #[test]
@@ -448,6 +469,7 @@ mod tests {
             pitch: 7,
             hold: 3,
             velocity: 90,
+            nudge: 15,
         };
         let text = serde_json::to_string(&t).unwrap();
         let back: Tracker = serde_json::from_str(&text).unwrap();

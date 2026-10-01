@@ -55,7 +55,7 @@ export function StepStrip({
   const setTrack = (change: Partial<Track>) =>
     onChange({ ...tracker, tracks: [{ ...track, ...change }, ...tracker.tracks.slice(1)] });
   const stepAt = (i: number): Step =>
-    track.steps[i] ?? { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX };
+    track.steps[i] ?? { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX, nudge: 0 };
   const setStep = (i: number, change: Partial<Step>) => {
     const steps = Array.from({ length: STEPS }, (_, j) => stepAt(j));
     steps[i] = { ...steps[i], ...change };
@@ -175,7 +175,7 @@ export function StepStrip({
       setStep(i, { on: true, pitch: midi - (root ?? 60) });
       focusStep(row, Math.min(track.length - 1, i + 1));
     } else if (row === 'steps' && (e.key === 'Backspace' || e.key === 'Delete')) {
-      setStep(i, { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX });
+      setStep(i, { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX, nudge: 0 });
     } else {
       return;
     }
@@ -343,6 +343,19 @@ export function StepStrip({
                   />
                 ))}
               </fieldset>
+              <fieldset className="flex min-w-0 items-center gap-1" aria-label="Nudge">
+                {cells.map((i) => (
+                  <NumberCell
+                    key={i}
+                    kind={NUDGE}
+                    step={i}
+                    value={stepAt(i).nudge}
+                    root={root}
+                    set={stepAt(i).on}
+                    onChange={(nudge) => setStep(i, { nudge })}
+                  />
+                ))}
+              </fieldset>
               <fieldset className="flex min-w-0 items-center gap-1" aria-label="Hold">
                 {cells.map((i) => (
                   <NumberCell
@@ -395,7 +408,7 @@ const PIANO: Record<string, number> = {
 /** What a row of numbers under the steps is, so one cell can draw any of them. */
 interface CellKind {
   /** `data-row`, and the name of the row's fieldset. */
-  row: 'pitch' | 'hold' | 'velocity';
+  row: 'pitch' | 'hold' | 'velocity' | 'nudge';
   label: string;
   min: number;
   max: number;
@@ -415,6 +428,8 @@ interface CellKind {
 const PITCH_RANGE = 24;
 /** The longest a step can be held, in sixteenths. `HOLD_MAX` in Rust. */
 const HOLD_MAX = 16;
+/** The most a step can be nudged, in ms. `NUDGE_MAX_MS` in Rust. */
+const NUDGE_MAX = 50;
 /** A step at full velocity. `VELOCITY_MAX` in Rust. */
 const VELOCITY_MAX = 127;
 
@@ -459,6 +474,21 @@ const VELOCITY: CellKind = {
     v === VELOCITY_MAX
       ? `Step ${step + 1}: full velocity. Drag or use the arrows to play it softer.`
       : `Step ${step + 1}: velocity ${v} of ${VELOCITY_MAX}. Double-click to go back to full.`,
+};
+
+const NUDGE: CellKind = {
+  row: 'nudge',
+  label: 'nudge',
+  min: -NUDGE_MAX,
+  max: NUDGE_MAX,
+  rest: 0,
+  pxPerUnit: 3,
+  bigStep: 10,
+  show: (v) => (v === 0 ? '·' : v > 0 ? `+${v}` : String(v)),
+  title: (step, v) =>
+    v === 0
+      ? `Step ${step + 1}: on the grid. Drag or use the arrows to play it early (down) or late (up), in milliseconds.`
+      : `Step ${step + 1}: ${Math.abs(v)} ms ${v < 0 ? 'early' : 'late'}. Double-click to put it back on the grid. Held to a fifth of a step.`,
 };
 
 /**
