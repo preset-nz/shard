@@ -6,9 +6,9 @@
 use crate::params::{ParamDef, Taper, Unit};
 
 pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
-    // Drive, first of the processes (Georg, 2026-09-14): shape the material
-    // before the crusher and the ring modulator have it. Type names come
-    // from `DriveType::NAMES`.
+    // Drive: shape the material with a curve, then a tone filter. Put it before
+    // a crusher or a ring modulator and they get the harmonics it added. Type
+    // names come from `DriveType::NAMES`.
     ParamDef {
         id: "drive.on",
         name: "Drive",
@@ -197,10 +197,10 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
 ];
 
 pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
-    // The chorus, last in the process lane (Georg, 2026-09-29): three swept
-    // copies a channel, the right's LFOs between the left's, so it widens as
-    // well as thickens. Rate and depth stop where it would turn to warble
-    // (`chorus::MAX_RATE_HZ`). EQ is the Boss CH-1's: a shelf on the copies.
+    // The chorus: swept copies of the sound, the right's LFOs between the
+    // left's, so it widens as well as thickens. Rate and depth stop where it
+    // would turn to warble (`chorus::MAX_RATE_HZ`). EQ is a shelf on the copies
+    // only.
     // Type picks the voicing: the plain chorus; a string-ensemble one, wider
     // and lusher; or Choir, copies held sharp and flat for voices, where
     // depth is the detune and rate how fast the copies wander. Names from
@@ -369,7 +369,6 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
 
 pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     // The flanger: a very short swept delay summed with the dry, so comb notches sweep the spectrum. Feedback is bipolar: negative is the hollow comb, positive the ringing one.
-    // Right after the chorus, which it is the close cousin of.
     ParamDef {
         id: "flanger.on",
         name: "Flanger",
@@ -434,7 +433,6 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
 
 pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     // Wear: a cassette that has been looked after badly. Wow and flutter bend the pitch, Unstable lurches it on a chaotic path that never repeats, Dropouts dip the level, and Dull closes a low-pass that follows the level, so quiet parts go muffled.
-    // Before the delay, so what the delay repeats is already worn.
     ParamDef {
         id: "wear.on",
         name: "Wear",
@@ -575,7 +573,6 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
 
 pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     // The echo: the degraded counterpart of the delay. Each repeat comes back darker and more saturated, with the pitch wandering a little, like a loop of tape.
-    // After the delay, so the two can be stacked.
     ParamDef {
         id: "echo.on",
         name: "Echo",
@@ -650,7 +647,6 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
 
 pub(crate) const RISE_ROWS: &[ParamDef] = &[
     // Rise: cascading pitch-shifted repeats. Each repeat arrives Shift semitones above the last, so the trail climbs. Wobble wanders the shift; Tone keeps the climbing repeats from turning to glass.
-    // After the echo.
     ParamDef {
         id: "rise.on",
         name: "Rise",
@@ -724,8 +720,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
 ];
 
 pub(crate) const REVERB_ROWS: &[ParamDef] = &[
-    // The reverb, last of the effects: an eight-line feedback network. Type picks the room, Decay is how long the tail lasts, Size scales the space, Tone is how fast the highs die, Pre-delay gaps it from the dry.
-    // Last of the effects, before the filter.
+    // The reverb: an eight-line feedback network. Type picks the room, Decay is how long the tail lasts, Size scales the space, Tone is how fast the highs die, Pre-delay gaps it from the dry.
     ParamDef {
         id: "reverb.on",
         name: "Reverb",

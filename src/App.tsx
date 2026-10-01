@@ -728,7 +728,9 @@ export default function App() {
       // The selected effect: Alt+Up and Alt+Down move it in its chain, Delete
       // takes it out. Anything else selected ignores these.
       const moving = e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
-      if (moving || e.key === 'Backspace' || e.key === 'Delete') {
+      // Not while a slider has focus: arrows and keys there belong to the slider.
+      const inSlider = t?.closest('[role="slider"], [contenteditable="true"]');
+      if (!inSlider && (moving || e.key === 'Backspace' || e.key === 'Delete')) {
         const sel = useSelection.getState().selection;
         const node = sel?.kind === 'node' ? nodeById(sel.id) : null;
         if (node?.fx) {
