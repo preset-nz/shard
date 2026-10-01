@@ -25,6 +25,7 @@ import {
   getParams,
   getTracker,
   grainLog,
+  historyState,
   type LfoLimits,
   learnMidi,
   lfoLimits,
@@ -52,6 +53,7 @@ import {
   removeMaterial,
   type SourceInfo,
   savePatch,
+  setHistoryMenu,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -281,6 +283,8 @@ export default function App() {
     };
   }, []);
 
+  const historyMenuRef = useRef('|');
+
   // Poll. Thirty hertz is enough for a meter and for the controls to follow a
   // patch load or a preset, and it keeps the boundary quiet. Nothing here is on the
   // audio path, so a late frame costs nothing but a slightly stale number.
@@ -290,15 +294,22 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v, fresh, h, mm, a] = await Promise.all([
+        const [m, v, fresh, h, mm, a, hist] = await Promise.all([
           readMeters(),
           getParams(),
           grainLog(),
           getHeard(),
           readMappings(),
           getArrangement(),
+          historyState(),
         ]);
         if (!alive) return;
+        // The Edit menu names what Undo and Redo would do; say so when it changes.
+        const historyKey = `${hist.undo ?? ''}|${hist.redo ?? ''}`;
+        if (historyKey !== historyMenuRef.current) {
+          historyMenuRef.current = historyKey;
+          void setHistoryMenu(hist.undo, hist.redo);
+        }
         setMeter(m);
         setMidi(mm);
         // Learning answers once, through the poll. Say it once.
@@ -826,6 +837,66 @@ export default function App() {
     removeEffect,
     stepHistory,
   ]);
+
+  // The native menu bar (`menu.rs`). Each item arrives as one `menu` event
+  // carrying its id and runs the same function the keyboard fallback above
+  // calls. Read through a ref, so the listener is registered once. The
+  // tracker's Pattern items are the strip's own.
+  const menuRef = useRef<(id: string) => void>(() => {});
+  menuRef.current = (id) => {
+    if (id.startsWith('fx-add:')) {
+      addEffect(id.slice('fx-add:'.length));
+      return;
+    }
+    const sel = useSelection.getState().selection;
+    const node = sel?.kind === 'node' ? nodeById(sel.id) : null;
+    switch (id) {
+      case 'app-settings':
+        setSettingsOpen(true);
+        break;
+      case 'file-open':
+        void doLoad();
+        break;
+      case 'file-save':
+        void doSave();
+        break;
+      case 'file-add-material':
+        void pickFiles();
+        break;
+      case 'edit-undo':
+        void stepHistory('undo');
+        break;
+      case 'edit-redo':
+        void stepHistory('redo');
+        break;
+      case 'fx-remove':
+        if (node?.fx) removeEffect(node);
+        break;
+      case 'fx-earlier':
+        if (node?.fx) moveEffect(node, -1);
+        break;
+      case 'fx-later':
+        if (node?.fx) moveEffect(node, 1);
+        break;
+      case 'view-tracker':
+        setMode('tracker');
+        break;
+      case 'view-soundscape':
+        setMode('soundscape');
+        break;
+      case 'view-inspector':
+        setShowDebugger((v) => !v);
+        break;
+      default:
+        break;
+    }
+  };
+  useEffect(() => {
+    const unlisten = listen<string>('menu', (e) => menuRef.current(e.payload));
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
 
   // How many parameters follow each modulator, for the tree and the editors.
   const linkedCounts = new Map<number, number>();

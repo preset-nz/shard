@@ -29,6 +29,7 @@ mod controllers;
 mod history;
 mod mapping;
 mod materials;
+mod menu;
 mod midi;
 mod modulation;
 mod opened;
@@ -915,6 +916,16 @@ fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<Modulation
 #[tauri::command]
 fn history_state(state: tauri::State<'_, Audio>) -> history::HistoryView {
     state.history.lock().expect("history poisoned").view()
+}
+
+/// Put the names of what Undo and Redo would do in the Edit menu, greyed out
+/// where there is nothing. The UI sends them when they change.
+#[tauri::command]
+fn set_history_menu(app: tauri::AppHandle, undo: Option<String>, redo: Option<String>) {
+    // Absent when the menu could not be built; then there is nothing to name.
+    if let Some(items) = app.try_state::<menu::HistoryItems>() {
+        items.set(undo.as_deref(), redo.as_deref());
+    }
 }
 
 /// Step back one edit. Answers with the name of what was undone, or nothing
@@ -2155,6 +2166,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .manage(audio)
         .manage(opened::Opened::default())
+        .on_menu_event(|app, event| menu::forward(app, event.id().as_ref()))
         .setup(|app| {
             // Controllers belong to this machine, so they live in the app's
             // config directory rather than in any patch.
@@ -2177,6 +2189,11 @@ pub fn run() {
             ));
             midi::start(Arc::clone(&shared));
             app.manage(shared);
+            // The menu bar. If it cannot be built the default one stays and
+            // the webview's key handlers carry the shortcuts.
+            if let Err(e) = menu::install(app.handle()) {
+                eprintln!("shard: could not build the menu bar: {e}");
+            }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -2190,6 +2207,7 @@ pub fn run() {
             fx_remove,
             fx_move,
             history_state,
+            set_history_menu,
             undo,
             redo,
             meters,

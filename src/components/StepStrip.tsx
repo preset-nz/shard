@@ -1,3 +1,4 @@
+import { listen } from '@tauri-apps/api/event';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import type { Step, Track, Tracker, TrackerEdit } from '@/audio';
 import { Slider } from '@/components/ui/slider';
@@ -70,6 +71,61 @@ export function StepStrip({
   const focusStep = (row: string, i: number) =>
     grid.current?.querySelector<HTMLElement>(`[data-row="${row}"][data-step="${i}"]`)?.focus();
 
+  // The step last focused, which the Pattern menu's commands act on.
+  const cursor = useRef(0);
+
+  /** One of the Pattern commands, on bar `bar`. The menu and the keys share it. */
+  const pattern = (cmd: string, bar: number) => {
+    switch (cmd) {
+      case 'copy':
+        clip.current = Array.from({ length: BAR }, (_, k) => stepAt(bar * BAR + k));
+        break;
+      case 'paste':
+        if (clip.current) onEdit({ op: 'paste_bar', bar, steps: clip.current });
+        break;
+      case 'repeat':
+        onEdit({ op: 'repeat_bar', from: bar });
+        break;
+      case 'clear':
+        onEdit({ op: 'clear_bar', bar });
+        break;
+      case 'up':
+        onEdit({ op: 'transpose', semis: 1, bar });
+        break;
+      case 'down':
+        onEdit({ op: 'transpose', semis: -1, bar });
+        break;
+      case 'octave-up':
+        onEdit({ op: 'transpose', semis: 12, bar });
+        break;
+      case 'octave-down':
+        onEdit({ op: 'transpose', semis: -12, bar });
+        break;
+      case 'rotate-back':
+        onEdit({ op: 'rotate', by: -1 });
+        break;
+      case 'rotate-forward':
+        onEdit({ op: 'rotate', by: 1 });
+        break;
+      default:
+        break;
+    }
+  };
+  // Read through a ref, so the menu listener is registered once and still
+  // sees the track as it is now.
+  const patternRef = useRef(pattern);
+  patternRef.current = pattern;
+  useEffect(() => {
+    const unlisten = listen<string>('menu', (e) => {
+      if (e.payload.startsWith('pattern-')) {
+        patternRef.current(e.payload.slice('pattern-'.length), Math.floor(cursor.current / BAR));
+      }
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
+  }, []);
+
   const onGridKey = (e: KeyboardEvent<HTMLDivElement>) => {
     // A cell that handled the key itself (a pitch drag key, say) is done.
     if (e.defaultPrevented) return;
@@ -81,29 +137,20 @@ export function StepStrip({
     const handled = () => e.preventDefault();
 
     if (e.metaKey || e.ctrlKey) {
-      switch (e.key.toLowerCase()) {
-        case 'c':
-          clip.current = Array.from({ length: BAR }, (_, k) => stepAt(bar * BAR + k));
-          break;
-        case 'v':
-          if (!clip.current) return;
-          onEdit({ op: 'paste_bar', bar, steps: clip.current });
-          break;
-        case 'd':
-          onEdit({ op: 'repeat_bar', from: bar });
-          break;
-        case 'backspace':
-          onEdit({ op: 'clear_bar', bar });
-          break;
-        case 'arrowup':
-          onEdit({ op: 'transpose', semis: e.shiftKey ? 12 : 1, bar });
-          break;
-        case 'arrowdown':
-          onEdit({ op: 'transpose', semis: e.shiftKey ? -12 : -1, bar });
-          break;
-        default:
-          return;
-      }
+      // The menu's Pattern commands, by their keys. The menu owns these
+      // accelerators on macOS and the keys never get here; this is for when
+      // the menu could not be built.
+      const keys: Record<string, string> = {
+        c: 'copy',
+        v: 'paste',
+        d: 'repeat',
+        backspace: 'clear',
+        arrowup: e.shiftKey ? 'octave-up' : 'up',
+        arrowdown: e.shiftKey ? 'octave-down' : 'down',
+      };
+      const cmd = keys[e.key.toLowerCase()];
+      if (!cmd || (cmd === 'paste' && !clip.current)) return;
+      pattern(cmd, bar);
       handled();
       return;
     }
@@ -218,7 +265,7 @@ export function StepStrip({
 
       <span
         className="font-mono text-[10px] tabular-nums"
-        title="Keys: A W S E D F T G Y H U J K play C to C in this octave and enter the note on the focused step, then move on. Z and X change octave. Arrows move between steps. [ and ] rotate the steps. ⌘C and ⌘V copy and paste a bar, ⌘D repeats it over the track, ⌘⌫ clears it, ⌘↑ and ⌘↓ transpose it (Shift for an octave). Delete clears a step."
+        title="Keys: A W S E D F T G Y H U J K play C to C in this octave and enter the note on the focused step, then move on. Z and X change octave. Arrows move between steps. [ and ] rotate the steps. The Pattern menu copies, pastes, repeats, clears and transposes the bar of the step last focused (⌥⌘C, ⌥⌘V, ⌘D, ⌥⌘⌫, ⌃⌘↑ and ⌃⌘↓), and rotates the track (⌘[ and ⌘]). Delete clears a step."
       >
         keys C{keyOctave}
       </span>
@@ -226,7 +273,15 @@ export function StepStrip({
       {/* Steps over their pitches and holds, a column a sixteenth, like a
           tracker's columns under its triggers. A bar to a row. */}
       {/* biome-ignore lint/a11y/noStaticElementInteractions: keys bubble up from the focusable cells */}
-      <div ref={grid} onKeyDown={onGridKey} className="flex min-w-0 flex-col gap-2">
+      <div
+        ref={grid}
+        onKeyDown={onGridKey}
+        onFocus={(e) => {
+          const at = (e.target as HTMLElement).closest<HTMLElement>('[data-step]');
+          if (at) cursor.current = Number(at.dataset.step);
+        }}
+        className="flex min-w-0 flex-col gap-2"
+      >
         {bars.map((bar) => {
           const first = bar * BAR;
           const cells = Array.from(

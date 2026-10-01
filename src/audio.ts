@@ -125,6 +125,16 @@ export const fxMove = (layer: ChainLevel, n: number, by: number) =>
  * fetched again by the caller.
  */
 export const undoEdit = () => invoke<string | null>('undo');
+
+/** What Undo and Redo would do, by name; null when there is nothing. */
+export interface HistoryView {
+  undo: string | null;
+  redo: string | null;
+}
+export const historyState = () => invoke<HistoryView>('history_state');
+/** Name them in the Edit menu, greyed out where there is nothing. */
+export const setHistoryMenu = (undo: string | null, redo: string | null) =>
+  invoke<void>('set_history_menu', { undo, redo });
 export const redoEdit = () => invoke<string | null>('redo');
 
 export const meters = () => invoke<Meters>('meters');
