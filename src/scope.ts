@@ -185,6 +185,14 @@ export const NODES: NodeInfo[] = [
   },
   {
     layer: 'patch',
+    id: 'wear',
+    label: 'Wear',
+    lane: 'process',
+    table: 'wear',
+    owns: under('wear'),
+  },
+  {
+    layer: 'patch',
     id: 'delay',
     label: 'Delay',
     lane: 'process',
@@ -239,6 +247,7 @@ export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('ring', 'Ring modulation', 'process'),
   arrangementNode('chorus', 'Chorus', 'process'),
   arrangementNode('flanger', 'Flanger', 'process'),
+  arrangementNode('wear', 'Wear', 'process'),
   arrangementNode('delay', 'Delay', 'process'),
   arrangementNode('filter', 'Filter', 'master'),
   arrangementNode('amp', 'Output', 'master'),

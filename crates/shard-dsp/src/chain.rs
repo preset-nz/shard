@@ -18,6 +18,7 @@ use crate::flanger::{Flanger, FlangerParams};
 use crate::params::ParamDef;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::{OnePole, Ramp};
+use crate::wear::{Wear, WearParams};
 
 /// How long a section switch takes. Short enough to feel instant, long enough
 /// that cutting a loud section in or out never clicks.
@@ -54,6 +55,13 @@ pub(crate) struct ChainSlots {
     pub flanger_rate: usize,
     pub flanger_depth: usize,
     pub flanger_feedback: usize,
+    pub wear_on: usize,
+    pub wear_mix: usize,
+    pub wear_wow: usize,
+    pub wear_flutter: usize,
+    pub wear_unstable: usize,
+    pub wear_dropouts: usize,
+    pub wear_dull: usize,
     pub delay_on: usize,
     pub delay_mix: usize,
     pub delay_time: usize,
@@ -100,6 +108,13 @@ impl ChainSlots {
             flanger_rate: at("flanger.rate"),
             flanger_depth: at("flanger.depth"),
             flanger_feedback: at("flanger.feedback"),
+            wear_on: at("wear.on"),
+            wear_mix: at("wear.mix"),
+            wear_wow: at("wear.wow"),
+            wear_flutter: at("wear.flutter"),
+            wear_unstable: at("wear.unstable"),
+            wear_dropouts: at("wear.dropouts"),
+            wear_dull: at("wear.dull"),
             delay_on: at("delay.on"),
             delay_mix: at("delay.mix"),
             delay_time: at("delay.time"),
@@ -132,6 +147,8 @@ pub(crate) struct ChainParams {
     pub chorus_on: f32,
     pub flanger: FlangerParams,
     pub flanger_on: f32,
+    pub wear: WearParams,
+    pub wear_on: f32,
     pub delay: DelayParams,
     pub delay_on: f32,
     pub filter: FilterParams,
@@ -181,6 +198,15 @@ impl ChainParams {
                 mix: value(s.flanger_mix),
             },
             flanger_on: gate(s.flanger_on),
+            wear: WearParams {
+                wow: value(s.wear_wow),
+                flutter: value(s.wear_flutter),
+                unstable: value(s.wear_unstable),
+                dropouts: value(s.wear_dropouts),
+                dull: value(s.wear_dull),
+                mix: value(s.wear_mix),
+            },
+            wear_on: gate(s.wear_on),
             delay: DelayParams {
                 time_ms: value(s.delay_time),
                 feedback: value(s.delay_feedback),
@@ -207,6 +233,7 @@ struct ChainFades {
     ring: Ramp,
     chorus: Ramp,
     flanger: Ramp,
+    wear: Ramp,
     delay: Ramp,
     filter: Ramp,
 }
@@ -217,6 +244,7 @@ pub(crate) struct Chain {
     ringmod: RingMod,
     chorus: Chorus,
     flanger: Flanger,
+    wear: Wear,
     delay: Delay,
     filter: Filter,
     fades: ChainFades,
@@ -245,6 +273,7 @@ impl Chain {
             ringmod: RingMod::new(sample_rate),
             chorus: Chorus::new(sample_rate),
             flanger: Flanger::new(sample_rate),
+            wear: Wear::new(sample_rate),
             delay: Delay::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
@@ -253,6 +282,7 @@ impl Chain {
                 ring: ramp(s.ring_on),
                 chorus: ramp(s.chorus_on),
                 flanger: ramp(s.flanger_on),
+                wear: ramp(s.wear_on),
                 delay: ramp(s.delay_on),
                 filter: ramp(s.filter_on),
             },
@@ -311,6 +341,14 @@ impl Chain {
             ..p.flanger
         };
         let (l, r) = self.flanger.process(l, r, &flanger);
+
+        // Before the delay, so what the delay repeats is already worn.
+        let wear_on = self.fades.wear.process(p.wear_on);
+        let wear = WearParams {
+            mix: p.wear.mix * wear_on,
+            ..p.wear
+        };
+        let (l, r) = self.wear.process(l, r, &wear);
 
         // After the chorus, so the repeats carry its width. Its line keeps
         // running while it is off, so switching it on never plays stale audio.

@@ -41,6 +41,7 @@ pub mod shift;
 pub mod smooth;
 pub mod sources;
 pub mod steps;
+pub mod wear;
 
 pub use chorus::{Chorus, ChorusParams, ChorusType};
 pub use crush::{Crush, CrushParams};
@@ -61,3 +62,4 @@ pub use ringmod::{RingMod, RingModParams};
 pub use smooth::OnePole;
 pub use sources::{Generator, Reading, ReadingBank};
 pub use steps::{StepClock, StepParams};
+pub use wear::{Wear, WearParams};
