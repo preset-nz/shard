@@ -68,8 +68,8 @@ the `.shard` document, and reach the engine through `steps::StepBank` and
 `Engine::set_steps`, once a block. A value that should survive loading a
 different patch does not belong in `params.rs`.
 
-**The arrangement has its own table.** Its chain over the patch (drive,
-crush, ring, chorus, filter, output), the patch's fader and the limiter live in
+**The arrangement has its own table.** Its chain over the patch (its own
+palette, the filter and the output), the patch's fader and the limiter live in
 `shard_dsp::arrangement`, ids under `arrangement.`. Its effect rows are
 borrowed from `params.rs` so the two cannot drift. It reaches the engine
 through `Engine::set_arrangement`, once a block, and sound scaping hears the
@@ -81,9 +81,28 @@ patch without it.
   `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
   plain sample (`material`), the cloud (`grain`) and two-operator FM
   (`fm`). Generators are summed.
-- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".- `amp.gain` is the master gain, after everything.
+- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".
+- `amp.gain` is the master gain, after everything.
 - No row's name repeats its node's name, because the header already says it.
 - The panel draws rows in table order, so order in `params.rs` is layout.
+
+**The process lane is a palette** (`guidance/projects/shard/design/effect-palette.md`).
+Drive, crush, ring, chorus, overtone, flanger, wear, delay, echo, rise and
+reverb are *kinds* (`shard_dsp::fx::Kind`). A chain owns a fixed pool of two
+instances of each, and a chain starts empty: you add the effects you want and
+put them in any order. An instance's rows are `fx.<n>.<kind>.<param>`; the
+order is sixteen stepped rows, `fx.order.0` to `fx.order.15`. The same holds in
+the arrangement, under `arrangement.`.
+- **Instance numbers are a wire format.** `fx::POOL` is append-only, and a test
+  pins its start. The kind's rows are templates in `fx_rows.rs`, written with
+  the kind's own ids (`chorus.mix`); `fx.rs` turns them into instance rows.
+- The order is read raw, never through an LFO, and no controller or link may
+  target it. Reordering ducks the chain for 5 ms; adding resets the instance
+  and fades it in; removing fades it out and keeps its settings.
+- An empty chain is a bit-exact passthrough. An effect not in the chain costs
+  nothing.
+- Filter, envelope and output are fixed nodes, not palette items.
+- To add a kind: `guidance/projects/shard/docs/adding-an-effect.md`.
 
 The tests `every_switchable_node_leads_with_its_level` and
 `no_parameter_repeats_its_node_name` hold this, so a node that breaks the
