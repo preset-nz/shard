@@ -45,12 +45,19 @@ pub struct StepParams {
     /// octave is (Georg, 2026-09-14): up is faster and shorter, and grains
     /// are transposed with it. Read up to `PITCH_RANGE` either way.
     pub pitches: [i8; STEPS],
+    /// How long each step's note is held, in sixteenths, step one first. Zero
+    /// is the patch's own Hold time (`patch.hold`); anything else replaces it
+    /// for that step, up to `HOLD_MAX`. Read only while the patch's Length is
+    /// Hold, since Loop and Sample are not gated.
+    pub holds: [u8; STEPS],
 }
 
 /// The steps a pattern holds.
 pub const STEPS: usize = 16;
 /// Semitones a step can be pitched, either way.
 pub const PITCH_RANGE: i8 = 24;
+/// The longest a step can be held, in sixteenths: one bar.
+pub const HOLD_MAX: u8 = 16;
 
 impl Default for StepParams {
     /// Off, and four on the floor, so switching on does something.
@@ -62,11 +69,18 @@ impl Default for StepParams {
             swing: 0.0,
             pattern: 0b0001_0001_0001_0001,
             pitches: [0; STEPS],
+            holds: [0; STEPS],
         }
     }
 }
 
 impl StepParams {
+    /// Step `k`'s hold in sixteenths, in range. Zero means the patch's own.
+    #[inline]
+    pub fn hold_of(&self, k: u32) -> u32 {
+        u32::from(self.holds[k as usize % STEPS].min(HOLD_MAX))
+    }
+
     /// Step `k`'s pitch as a read ratio and in semitones, in range.
     #[inline]
     pub fn pitch_of(&self, k: u32) -> (f32, f32) {
@@ -89,6 +103,8 @@ pub struct StepBank {
     pattern: AtomicU32,
     /// The pitches, a byte a step: steps one to eight, then nine to sixteen.
     pitches: [AtomicU64; 2],
+    /// The holds, a byte a step, packed the same way.
+    holds: [AtomicU64; 2],
 }
 
 /// Eight pitches into a word, step one in the low byte.
@@ -97,6 +113,14 @@ fn pack(pitches: &[i8]) -> u64 {
         .iter()
         .enumerate()
         .fold(0, |w, (i, p)| w | (u64::from(*p as u8) << (i * 8)))
+}
+
+/// Eight bytes into a word, step one in the low byte.
+fn pack_u8(bytes: &[u8]) -> u64 {
+    bytes
+        .iter()
+        .enumerate()
+        .fold(0, |w, (i, b)| w | (u64::from(*b) << (i * 8)))
 }
 
 impl StepBank {
@@ -111,6 +135,10 @@ impl StepBank {
                 AtomicU64::new(pack(&p.pitches[..8])),
                 AtomicU64::new(pack(&p.pitches[8..])),
             ],
+            holds: [
+                AtomicU64::new(pack_u8(&p.holds[..8])),
+                AtomicU64::new(pack_u8(&p.holds[8..])),
+            ],
         }
     }
 
@@ -123,6 +151,8 @@ impl StepBank {
         self.pattern.store(p.pattern, Ordering::Relaxed);
         self.pitches[0].store(pack(&p.pitches[..8]), Ordering::Relaxed);
         self.pitches[1].store(pack(&p.pitches[8..]), Ordering::Relaxed);
+        self.holds[0].store(pack_u8(&p.holds[..8]), Ordering::Relaxed);
+        self.holds[1].store(pack_u8(&p.holds[8..]), Ordering::Relaxed);
     }
 
     #[inline]
@@ -132,6 +162,11 @@ impl StepBank {
             let word = self.pitches[i / 8].load(Ordering::Relaxed);
             *p = (word >> ((i % 8) * 8)) as u8 as i8;
         }
+        let mut holds = [0u8; STEPS];
+        for (i, h) in holds.iter_mut().enumerate() {
+            let word = self.holds[i / 8].load(Ordering::Relaxed);
+            *h = (word >> ((i % 8) * 8)) as u8;
+        }
         StepParams {
             on: self.on.load(Ordering::Relaxed),
             tempo_bpm: f32::from_bits(self.tempo_bpm.load(Ordering::Relaxed)),
@@ -139,6 +174,7 @@ impl StepBank {
             swing: f32::from_bits(self.swing.load(Ordering::Relaxed)),
             pattern: self.pattern.load(Ordering::Relaxed),
             pitches,
+            holds,
         }
     }
 }
@@ -191,7 +227,7 @@ impl StepClock {
     }
 
     /// A sixteenth note, in samples.
-    fn step_len(&self, p: &StepParams) -> f32 {
+    pub fn step_len(&self, p: &StepParams) -> f32 {
         self.sample_rate * 60.0 / p.tempo_bpm.clamp(20.0, 300.0) / 4.0
     }
 
@@ -247,6 +283,7 @@ mod tests {
             swing: 0.0,
             pattern: 0b0001_0001_0001_0001,
             pitches: [0; STEPS],
+            holds: [0; STEPS],
         };
         let t = triggers(&p, SR as usize * 4);
         // Steps 0, 4, 8, 12 of a 16-step bar at 120: every 0.5 s, 8 in 4 s.
@@ -265,6 +302,7 @@ mod tests {
             swing: 0.0,
             pattern: 0b0001,
             pitches: [0; STEPS],
+            holds: [0; STEPS],
         };
         let t = triggers(&p, SR as usize);
         // Four sixteenths at 120 is half a second; step one fires twice.
@@ -280,6 +318,7 @@ mod tests {
             swing: 0.0,
             pattern: 0b1111,
             pitches: [0; STEPS],
+            holds: [0; STEPS],
         };
         let swung = StepParams {
             swing: 0.5,
@@ -350,10 +389,28 @@ mod tests {
             swing: 0.12,
             pattern: 0b1010_1010_1010_1010,
             pitches,
+            holds: {
+                let mut h = [0u8; STEPS];
+                for (i, v) in h.iter_mut().enumerate() {
+                    *v = (i as u8 * 5) % 20;
+                }
+                h
+            },
         };
         let bank = StepBank::default();
         assert_eq!(bank.load(), StepParams::default());
         bank.store(&p);
         assert_eq!(bank.load(), p);
+    }
+
+    #[test]
+    fn a_hold_is_brought_into_range_and_zero_means_the_patchs() {
+        let mut p = StepParams::default();
+        p.holds[0] = 0;
+        p.holds[1] = 4;
+        p.holds[2] = 200;
+        assert_eq!(p.hold_of(0), 0);
+        assert_eq!(p.hold_of(1), 4);
+        assert_eq!(p.hold_of(2), u32::from(HOLD_MAX));
     }
 }

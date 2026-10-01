@@ -15,7 +15,7 @@
 //! Saved in the same `.shard` file as the patch, above it. See `patch.rs`.
 
 use serde::{Deserialize, Serialize};
-use shard_dsp::steps::{PITCH_RANGE, STEPS};
+use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS};
 use shard_dsp::StepParams;
 
 pub const TEMPO_MIN: f32 = 40.0;
@@ -51,6 +51,10 @@ pub struct Track {
     /// Each step's pitch in semitones, step one first, up to `PITCH_RANGE`
     /// either way. Kept for every step, set or not, like the pattern.
     pub pitches: [i8; STEPS],
+    /// How long each step's note is held, in sixteenths, step one first; zero
+    /// is the patch's own Hold time. Only heard while the patch's Length is
+    /// Hold. Kept for every step, like the pitches.
+    pub holds: [u8; STEPS],
 }
 
 impl Default for Tracker {
@@ -72,6 +76,7 @@ impl Default for Track {
             length: p.length,
             pattern: p.pattern,
             pitches: p.pitches,
+            holds: p.holds,
         }
     }
 }
@@ -106,6 +111,9 @@ impl Tracker {
             for p in &mut t.pitches {
                 *p = (*p).clamp(-PITCH_RANGE, PITCH_RANGE);
             }
+            for h in &mut t.holds {
+                *h = (*h).min(HOLD_MAX);
+            }
         }
         self
     }
@@ -120,6 +128,7 @@ impl Tracker {
             swing: self.swing,
             pattern: t.pattern,
             pitches: t.pitches,
+            holds: t.holds,
         }
     }
 }
@@ -138,6 +147,7 @@ mod tests {
                 length: 11,
                 pattern: 0x1_2345,
                 pitches: [99; STEPS],
+                holds: [99; STEPS],
             }],
         }
         .sanitised();
@@ -149,6 +159,7 @@ mod tests {
             t.tracks[0].pitches, [PITCH_RANGE; STEPS],
             "two octaves up at most"
         );
+        assert_eq!(t.tracks[0].holds, [HOLD_MAX; STEPS], "a bar at most");
         let fast = Tracker {
             tempo: 500.0,
             ..Tracker::default()
@@ -174,6 +185,7 @@ mod tests {
                 length: 4,
                 pattern: 0b1000_0000_0001,
                 pitches: [0; STEPS],
+                holds: [0; STEPS],
             }],
             ..Tracker::default()
         }
@@ -194,6 +206,7 @@ mod tests {
                 length: 3,
                 pattern: 0xF_FFFF,
                 pitches: [-100; STEPS],
+                holds: [3; STEPS],
             }],
         };
         let kept = sent.sanitised();
@@ -208,6 +221,7 @@ mod tests {
                 swing: 0.0,
                 pattern: 0xFFFF,
                 pitches: [-PITCH_RANGE; STEPS],
+                holds: [3; STEPS],
             }
         );
     }
@@ -223,12 +237,14 @@ mod tests {
                     length: 8,
                     pattern: 0b1001,
                     pitches: [7; STEPS],
+                    holds: [2; STEPS],
                 },
                 Track {
                     on: false,
                     length: 4,
                     pattern: 0b1,
                     pitches: [0; STEPS],
+                    holds: [0; STEPS],
                 },
             ],
         };
@@ -241,7 +257,22 @@ mod tests {
                 swing: 0.12,
                 pattern: 0b1001,
                 pitches: [7; STEPS],
+                holds: [2; STEPS],
             }
         );
+    }
+
+    #[test]
+    fn holds_survive_a_save_and_a_file_without_them_reads_as_none() {
+        let mut t = Tracker::default();
+        t.tracks[0].holds[3] = 6;
+        let text = serde_json::to_string(&t).unwrap();
+        let back: Tracker = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.tracks[0].holds[3], 6);
+        // A file from before holds existed has no such field.
+        let old = r#"{"tempo":100.0,"tracks":[{"on":true,"length":8,"pattern":5,"pitches":[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]}]}"#;
+        let t: Tracker = serde_json::from_str(old).unwrap();
+        assert_eq!(t.tracks[0].holds, [0; STEPS]);
+        assert_eq!(t.tracks[0].pattern, 5);
     }
 }

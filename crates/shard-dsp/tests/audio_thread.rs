@@ -473,3 +473,40 @@ fn adding_removing_and_reordering_effects_never_touches_the_allocator() {
         assert!(out.iter().all(|v| v.is_finite()), "block {block}");
     }
 }
+
+#[test]
+fn held_steps_never_touch_the_allocator() {
+    // Under Hold each step gates its own note: a trigger latches a different
+    // gate, release and end every time. The patch's Length is Hold, the
+    // steps run fast, and the holds, pitches and tempo change along the way.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    let bank = ParamBank::new();
+    bank.set_by_id("patch.length", 2.0);
+    bank.set_by_id("patch.hold", 80.0);
+    bank.set_by_id("grain.on", 1.0);
+    bank.set_by_id("fm.on", 1.0);
+    e.set_playing(true);
+    let mut out = vec![0.0f32; 512];
+
+    let ((), caught) = no_alloc(|| {
+        for block in 0..1_200 {
+            let mut holds = [0u8; shard_dsp::steps::STEPS];
+            for (i, h) in holds.iter_mut().enumerate() {
+                *h = ((block / 40 + i) % 18) as u8;
+            }
+            e.set_steps(StepParams {
+                on: true,
+                tempo_bpm: 120.0 + (block % 120) as f32,
+                pattern: 0xFFFF,
+                holds,
+                ..Default::default()
+            });
+            e.process_block(&mut out, &bank);
+        }
+    });
+    assert_eq!(
+        caught, 0,
+        "held steps touched the allocator {caught} time(s)"
+    );
+}

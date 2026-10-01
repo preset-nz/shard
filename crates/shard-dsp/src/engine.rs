@@ -937,7 +937,17 @@ impl Engine {
                     self.tail_ratio = self.pass_ratio;
                 }
                 (self.pass_ratio, self.pass_semis) = steps.pitch_of(k);
-                self.note.start(note_gate, note_released, note_end);
+                // A step with its own hold gates its note for that many
+                // sixteenths, instead of the patch's Hold time.
+                let hold = steps.hold_of(k);
+                if length == Length::Hold && hold > 0 {
+                    let gate = f64::from(hold) * f64::from(self.steps.step_len(&steps));
+                    let released = gate + note_release;
+                    let end = released + f64::from(BYPASS_MS) * 0.001 * sr;
+                    self.note.start(gate, released, end);
+                } else {
+                    self.note.start(note_gate, note_released, note_end);
+                }
                 // A reel running backwards starts its pass from the far end,
                 // or it would leave the window on its first sample.
                 if self.smooth.speed.value() < 0.0 {
@@ -2996,6 +3006,69 @@ mod tests {
             );
             assert!(v[401] > 0.5, "the bar came round in silence");
         }
+    }
+
+    /// Peaks per 5 ms block for one step a bar at 120 bpm (a sixteenth is
+    /// 125 ms, so a bar is 400 blocks), the patch held 100 ms.
+    fn held_steps(length: f32, pattern: u32, holds: &[(usize, u8)]) -> Vec<f32> {
+        let mut h = [0u8; crate::steps::STEPS];
+        for (i, v) in holds {
+            h[*i] = *v;
+        }
+        fm_blocks(
+            &[
+                ("patch.length", length),
+                ("patch.hold", 100.0),
+                ("env.on", 0.0),
+            ],
+            0.0,
+            StepParams {
+                on: true,
+                length: 16,
+                pattern,
+                holds: h,
+                ..Default::default()
+            },
+            420,
+        )
+    }
+
+    #[test]
+    fn a_steps_hold_replaces_the_patchs_hold_for_that_step() {
+        // Four sixteenths is half a second: 100 blocks of sound, not the
+        // patch's 20, then silence until the bar comes round.
+        let v = held_steps(HOLD, 1, &[(0, 4)]);
+        assert!(v[5..95].iter().all(|p| *p > 0.5), "the held note broke up");
+        assert!(
+            v[105..399].iter().all(|p| *p == 0.0),
+            "sound after the hold ended"
+        );
+        assert!(v[401] > 0.5, "the bar came round in silence");
+    }
+
+    #[test]
+    fn a_step_with_no_hold_keeps_the_patchs() {
+        let v = held_steps(HOLD, 1, &[]);
+        assert!(v[5] > 0.5);
+        assert!(v[30..399].iter().all(|p| *p == 0.0));
+    }
+
+    #[test]
+    fn each_step_holds_for_its_own_length() {
+        // Steps one and nine: a quarter second, then three quarters.
+        let v = held_steps(HOLD, 0b1_0000_0001, &[(0, 2), (8, 6)]);
+        assert!(v[5..45].iter().all(|p| *p > 0.5));
+        assert!(v[60..195].iter().all(|p| *p == 0.0), "the gap");
+        assert!(v[205..345].iter().all(|p| *p > 0.5), "the long note");
+        assert!(v[360..399].iter().all(|p| *p == 0.0));
+    }
+
+    #[test]
+    fn a_hold_is_ignored_unless_the_patch_is_gated() {
+        // Under Loop nothing is gated, so a step's hold changes nothing.
+        let with = held_steps(LOOP, 1, &[(0, 2)]);
+        let without = held_steps(LOOP, 1, &[]);
+        assert_eq!(with, without);
     }
 
     #[test]

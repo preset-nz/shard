@@ -756,7 +756,7 @@ export default function App() {
       // takes it out. Anything else selected ignores these.
       const moving = e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
       // Not while a slider has focus: arrows and keys there belong to the slider.
-      const inSlider = t?.closest('[role="slider"], [contenteditable="true"]');
+      const inSlider = t?.closest('[role="slider"], [role="spinbutton"], [contenteditable="true"]');
       if (!inSlider && (moving || e.key === 'Backspace' || e.key === 'Delete')) {
         const sel = useSelection.getState().selection;
         const node = sel?.kind === 'node' ? nodeById(sel.id) : null;

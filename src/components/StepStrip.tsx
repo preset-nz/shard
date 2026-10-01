@@ -166,6 +166,22 @@ export function StepStrip({
             />
           ))}
         </fieldset>
+        <fieldset className="flex min-w-0 items-center gap-1" aria-label="Hold">
+          {Array.from({ length: track.length }, (_, i) => (
+            <HoldCell
+              // biome-ignore lint/suspicious/noArrayIndexKey: a step is its index
+              key={i}
+              step={i}
+              sixteenths={track.holds?.[i] ?? 0}
+              set={((track.pattern >> i) & 1) === 1}
+              onChange={(sixteenths) => {
+                const holds = Array.from({ length: 16 }, (_, j) => track.holds?.[j] ?? 0);
+                holds[i] = sixteenths;
+                setTrack({ holds });
+              }}
+            />
+          ))}
+        </fieldset>
       </div>
 
       {hiddenSteps(track) > 0 && (
@@ -248,6 +264,88 @@ function PitchCell({
       } ${tone}`}
     >
       {semis > 0 ? `+${semis}` : semis}
+    </div>
+  );
+}
+
+/** The longest a step can be held, in sixteenths. `HOLD_MAX` in Rust. */
+const HOLD_MAX = 16;
+/** How far a drag moves before the hold moves a sixteenth. */
+const PX_PER_SIXTEENTH = 8;
+
+/**
+ * One step's hold, in sixteenths: how long its note is held before it
+ * releases. A dot is the patch's own Hold time. It is heard only while the
+ * patch's Length is Hold; under Loop and Sample nothing is gated.
+ *
+ * Edited like the pitch above it: drag, or focus and use the arrows;
+ * Backspace, 0 or a double-click clears it. Focusable but not a button, so
+ * Space still starts and stops playback.
+ */
+function HoldCell({
+  step,
+  sixteenths,
+  set,
+  onChange,
+}: {
+  step: number;
+  sixteenths: number;
+  set: boolean;
+  onChange: (sixteenths: number) => void;
+}) {
+  const drag = useRef<{ y: number; from: number } | null>(null);
+  const commit = (next: number) => {
+    const clamped = Math.max(0, Math.min(HOLD_MAX, Math.round(next)));
+    if (clamped !== sixteenths) onChange(clamped);
+  };
+  const tone =
+    sixteenths === 0
+      ? 'text-muted-foreground/40'
+      : set
+        ? 'text-foreground'
+        : 'text-muted-foreground';
+
+  return (
+    <div
+      role="spinbutton"
+      tabIndex={0}
+      aria-label={`Step ${step + 1} hold`}
+      aria-valuemin={0}
+      aria-valuemax={HOLD_MAX}
+      aria-valuenow={sixteenths}
+      title={
+        sixteenths === 0
+          ? `Step ${step + 1}: held for the patch's own Hold time. Drag or use the arrows to hold it for a number of sixteenths. Heard when the patch's Length is Hold.`
+          : `Step ${step + 1}: held for ${sixteenths} sixteenth${sixteenths === 1 ? '' : 's'}. Double-click to go back to the patch's Hold.`
+      }
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        drag.current = { y: e.clientY, from: sixteenths };
+      }}
+      onPointerMove={(e) => {
+        const d = drag.current;
+        if (d) commit(d.from + (d.y - e.clientY) / PX_PER_SIXTEENTH);
+      }}
+      onPointerUp={() => {
+        drag.current = null;
+      }}
+      onPointerCancel={() => {
+        drag.current = null;
+      }}
+      onDoubleClick={() => commit(0)}
+      onKeyDown={(e) => {
+        const by = e.shiftKey ? 4 : 1;
+        if (e.key === 'ArrowUp') commit(sixteenths + by);
+        else if (e.key === 'ArrowDown') commit(sixteenths - by);
+        else if (e.key === 'Backspace' || e.key === 'Delete' || e.key === '0') commit(0);
+        else return;
+        e.preventDefault();
+      }}
+      className={`flex h-5 w-6 shrink-0 cursor-ns-resize select-none items-center justify-center rounded-sm font-mono text-[10px] tabular-nums outline-none hover:bg-muted focus-visible:ring-1 focus-visible:ring-ring ${
+        step > 0 && step % 4 === 0 ? 'ml-2' : ''
+      } ${tone}`}
+    >
+      {sixteenths === 0 ? '·' : sixteenths}
     </div>
   );
 }

@@ -405,6 +405,11 @@ export interface Track {
   pattern: number;
   /** Sixteen pitches in semitones, −24 to 24, step one first. */
   pitches: number[];
+  /**
+   * Sixteen holds in sixteenths, 0 to 16, step one first. Zero is the patch's
+   * own Hold time. Only heard while the patch's Length is Hold.
+   */
+  holds: number[];
 }
 
 /**
