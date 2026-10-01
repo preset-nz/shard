@@ -18,6 +18,7 @@ use crate::filter::{Filter, FilterParams, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
 use crate::overtone::{Overtone, OvertoneParams};
 use crate::params::ParamDef;
+use crate::reverb::{Reverb, ReverbParams, ReverbType};
 use crate::ringmod::{RingMod, RingModParams};
 use crate::rise::{Rise, RiseParams};
 use crate::smooth::{OnePole, Ramp};
@@ -91,6 +92,13 @@ pub(crate) struct ChainSlots {
     pub rise_shift: usize,
     pub rise_wobble: usize,
     pub rise_tone: usize,
+    pub reverb_on: usize,
+    pub reverb_mix: usize,
+    pub reverb_type: usize,
+    pub reverb_decay: usize,
+    pub reverb_size: usize,
+    pub reverb_tone: usize,
+    pub reverb_predelay: usize,
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -164,6 +172,13 @@ impl ChainSlots {
             rise_shift: at("rise.shift"),
             rise_wobble: at("rise.wobble"),
             rise_tone: at("rise.tone"),
+            reverb_on: at("reverb.on"),
+            reverb_mix: at("reverb.mix"),
+            reverb_type: at("reverb.type"),
+            reverb_decay: at("reverb.decay"),
+            reverb_size: at("reverb.size"),
+            reverb_tone: at("reverb.tone"),
+            reverb_predelay: at("reverb.predelay"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -200,6 +215,8 @@ pub(crate) struct ChainParams {
     pub echo_on: f32,
     pub rise: RiseParams,
     pub rise_on: f32,
+    pub reverb: ReverbParams,
+    pub reverb_on: f32,
     pub filter: FilterParams,
     pub filter_on: f32,
     pub gain: f32,
@@ -290,6 +307,15 @@ impl ChainParams {
                 mix: value(s.rise_mix),
             },
             rise_on: gate(s.rise_on),
+            reverb: ReverbParams {
+                kind: ReverbType::from_value(raw(s.reverb_type)),
+                decay_s: value(s.reverb_decay),
+                size: value(s.reverb_size),
+                tone_hz: value(s.reverb_tone),
+                predelay_ms: value(s.reverb_predelay),
+                mix: value(s.reverb_mix),
+            },
+            reverb_on: gate(s.reverb_on),
             filter: FilterParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
@@ -313,6 +339,7 @@ struct ChainFades {
     delay: Ramp,
     echo: Ramp,
     rise: Ramp,
+    reverb: Ramp,
     filter: Ramp,
 }
 
@@ -327,6 +354,7 @@ pub(crate) struct Chain {
     delay: Delay,
     echo: Echo,
     rise: Rise,
+    reverb: Reverb,
     filter: Filter,
     fades: ChainFades,
     crush_mix: OnePole,
@@ -359,6 +387,7 @@ impl Chain {
             delay: Delay::new(sample_rate),
             echo: Echo::new(sample_rate),
             rise: Rise::new(sample_rate),
+            reverb: Reverb::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
                 drive: ramp(s.drive_on),
@@ -371,6 +400,7 @@ impl Chain {
                 delay: ramp(s.delay_on),
                 echo: ramp(s.echo_on),
                 rise: ramp(s.rise_on),
+                reverb: ramp(s.reverb_on),
                 filter: ramp(s.filter_on),
             },
             crush_mix: smoother(s.crush_mix),
@@ -469,6 +499,14 @@ impl Chain {
             ..p.rise
         };
         let (l, r) = self.rise.process(l, r, &rise);
+
+        // Last of the effects, before the filter.
+        let reverb_on = self.fades.reverb.process(p.reverb_on);
+        let reverb = ReverbParams {
+            mix: p.reverb.mix * reverb_on,
+            ..p.reverb
+        };
+        let (l, r) = self.reverb.process(l, r, &reverb);
 
         (l, r)
     }

@@ -36,6 +36,7 @@ import {
   LENGTH_NAMES,
   normalise,
   type ParamInfo,
+  REVERB_TYPES,
   setParam,
   WINDOW_NAMES,
 } from '@/audio';
@@ -225,6 +226,14 @@ export const NODES: NodeInfo[] = [
   },
   {
     layer: 'patch',
+    id: 'reverb',
+    label: 'Reverb',
+    lane: 'process',
+    table: 'reverb',
+    owns: under('reverb'),
+  },
+  {
+    layer: 'patch',
     id: 'env',
     label: 'Envelope',
     lane: 'process',
@@ -276,6 +285,7 @@ export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('delay', 'Delay', 'process'),
   arrangementNode('echo', 'Echo', 'process'),
   arrangementNode('rise', 'Rise', 'process'),
+  arrangementNode('reverb', 'Reverb', 'process'),
   arrangementNode('filter', 'Filter', 'master'),
   arrangementNode('amp', 'Output', 'master'),
 ];
@@ -343,6 +353,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'filter.type': FILTER_TYPES,
   'drive.type': DRIVE_TYPES,
   'chorus.type': CHORUS_TYPES,
+  'reverb.type': REVERB_TYPES,
   'patch.length': LENGTH_NAMES,
   'fm.type': FM_TYPES,
 };

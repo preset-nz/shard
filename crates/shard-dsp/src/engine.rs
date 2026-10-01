@@ -166,6 +166,7 @@ impl ArrangementBlock {
             fx.ring_on = 0.0;
             fx.chorus_on = 0.0;
             fx.delay_on = 0.0;
+            fx.reverb_on = 0.0;
             fx.overtone_on = 0.0;
             fx.rise_on = 0.0;
             fx.echo_on = 0.0;
@@ -1521,7 +1522,7 @@ mod tests {
         // the signal; a generator, the same generator never switched on, which
         // proves nothing of it lingers.
         type Settings<'a> = &'a [(&'a str, f32)];
-        let cases: [(&str, &str, Settings, Settings, bool); 13] = [
+        let cases: [(&str, &str, Settings, Settings, bool); 14] = [
             ("material", "material.on", &[], &[], false),
             ("granular", "grain.on", &[], &[], false),
             (
@@ -1592,6 +1593,13 @@ mod tests {
                 "overtone.on",
                 &[("overtone.mix", 1.0)],
                 &[("overtone.mix", 0.0)],
+                true,
+            ),
+            (
+                "reverb",
+                "reverb.on",
+                &[("reverb.mix", 1.0)],
+                &[("reverb.mix", 0.0)],
                 true,
             ),
             (

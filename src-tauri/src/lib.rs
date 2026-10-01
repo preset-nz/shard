@@ -277,6 +277,7 @@ fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
             unit: match p.unit {
                 Unit::None => "",
                 Unit::Ms => "ms",
+                Unit::Seconds => "s",
                 Unit::Hz => "Hz",
                 Unit::Semitones => "st",
                 Unit::Percent => "%",

@@ -208,6 +208,7 @@ export function format(p: ParamInfo, v: number): string {
   if (p.unit === '%') return `${Math.round(v * 100)}%`;
   if (p.unit === 'Hz') return v >= 100 ? `${Math.round(v)} Hz` : `${v.toFixed(1)} Hz`;
   if (p.unit === 'ms') return v >= 100 ? `${Math.round(v)} ms` : `${v.toFixed(1)} ms`;
+  if (p.unit === 's') return v >= 10 ? `${v.toFixed(0)} s` : `${v.toFixed(1)} s`;
   if (p.unit === 'st') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} st`;
   if (p.unit === 'dB') return `${v >= 0 ? '+' : ''}${v.toFixed(1)} dB`;
   return v.toFixed(2);
@@ -405,6 +406,8 @@ export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
 export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
 /** `ChorusType::NAMES`, in stepped order. */
 export const CHORUS_TYPES = ['Chorus', 'Ensemble', 'Choir'];
+/** `ReverbType::NAMES`, in stepped order. */
+export const REVERB_TYPES = ['Room', 'Hall', 'Plate'];
 /** `FmType::NAMES`, in stepped order. */
 export const FM_TYPES = ['Phase', 'Linear', 'Exponential'];
 /** `note::Length::NAMES`, in stepped order: what sets a note's length. */
