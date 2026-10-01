@@ -18,6 +18,7 @@ use crate::filter::{Filter, FilterParams, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
 use crate::params::ParamDef;
 use crate::ringmod::{RingMod, RingModParams};
+use crate::rise::{Rise, RiseParams};
 use crate::smooth::{OnePole, Ramp};
 use crate::wear::{Wear, WearParams};
 
@@ -76,6 +77,13 @@ pub(crate) struct ChainSlots {
     pub echo_tone: usize,
     pub echo_wobble: usize,
     pub echo_grit: usize,
+    pub rise_on: usize,
+    pub rise_mix: usize,
+    pub rise_time: usize,
+    pub rise_feedback: usize,
+    pub rise_shift: usize,
+    pub rise_wobble: usize,
+    pub rise_tone: usize,
     pub filter_on: usize,
     pub filter_mix: usize,
     pub filter_cutoff: usize,
@@ -136,6 +144,13 @@ impl ChainSlots {
             echo_tone: at("echo.tone"),
             echo_wobble: at("echo.wobble"),
             echo_grit: at("echo.grit"),
+            rise_on: at("rise.on"),
+            rise_mix: at("rise.mix"),
+            rise_time: at("rise.time"),
+            rise_feedback: at("rise.feedback"),
+            rise_shift: at("rise.shift"),
+            rise_wobble: at("rise.wobble"),
+            rise_tone: at("rise.tone"),
             filter_on: at("filter.on"),
             filter_mix: at("filter.mix"),
             filter_cutoff: at("filter.cutoff"),
@@ -168,6 +183,8 @@ pub(crate) struct ChainParams {
     pub delay_on: f32,
     pub echo: EchoParams,
     pub echo_on: f32,
+    pub rise: RiseParams,
+    pub rise_on: f32,
     pub filter: FilterParams,
     pub filter_on: f32,
     pub gain: f32,
@@ -241,6 +258,15 @@ impl ChainParams {
                 mix: value(s.echo_mix),
             },
             echo_on: gate(s.echo_on),
+            rise: RiseParams {
+                time_ms: value(s.rise_time),
+                feedback: value(s.rise_feedback),
+                shift_st: value(s.rise_shift),
+                wobble: value(s.rise_wobble),
+                tone_hz: value(s.rise_tone),
+                mix: value(s.rise_mix),
+            },
+            rise_on: gate(s.rise_on),
             filter: FilterParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
@@ -262,6 +288,7 @@ struct ChainFades {
     wear: Ramp,
     delay: Ramp,
     echo: Ramp,
+    rise: Ramp,
     filter: Ramp,
 }
 
@@ -274,6 +301,7 @@ pub(crate) struct Chain {
     wear: Wear,
     delay: Delay,
     echo: Echo,
+    rise: Rise,
     filter: Filter,
     fades: ChainFades,
     crush_mix: OnePole,
@@ -304,6 +332,7 @@ impl Chain {
             wear: Wear::new(sample_rate),
             delay: Delay::new(sample_rate),
             echo: Echo::new(sample_rate),
+            rise: Rise::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
                 drive: ramp(s.drive_on),
@@ -314,6 +343,7 @@ impl Chain {
                 wear: ramp(s.wear_on),
                 delay: ramp(s.delay_on),
                 echo: ramp(s.echo_on),
+                rise: ramp(s.rise_on),
                 filter: ramp(s.filter_on),
             },
             crush_mix: smoother(s.crush_mix),
@@ -396,6 +426,14 @@ impl Chain {
             ..p.echo
         };
         let (l, r) = self.echo.process(l, r, &echo);
+
+        // After the echo.
+        let rise_on = self.fades.rise.process(p.rise_on);
+        let rise = RiseParams {
+            mix: p.rise.mix * rise_on,
+            ..p.rise
+        };
+        let (l, r) = self.rise.process(l, r, &rise);
 
         (l, r)
     }
