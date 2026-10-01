@@ -93,6 +93,12 @@ export interface NodeInfo {
    * Drawn as a card, but never listed or added as a generator.
    */
   setting?: boolean;
+  /**
+   * Set for a palette effect: instance `n` of `kind`, whose rows are
+   * `fx.<n>.<kind>.<param>`. These nodes are drawn from the chain's order, not
+   * from the node list's order.
+   */
+  fx?: { n: number; kind: string };
 }
 
 const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
@@ -141,97 +147,8 @@ export const NODES: NodeInfo[] = [
     table: 'fm',
     owns: under('fm'),
   },
-  // `crush.env.*` lands here rather than in Envelope, which is the point: it
-  // belongs to the crusher, not to the amplitude shape.
-  {
-    layer: 'patch',
-    id: 'drive',
-    label: 'Drive',
-    lane: 'process',
-    table: 'drive',
-    owns: under('drive'),
-  },
-  {
-    layer: 'patch',
-    id: 'crush',
-    label: 'Crush',
-    lane: 'process',
-    table: 'crush',
-    owns: under('crush'),
-  },
-  {
-    layer: 'patch',
-    id: 'ring',
-    label: 'Ring modulation',
-    lane: 'process',
-    table: 'ring',
-    owns: under('ring'),
-  },
-  {
-    layer: 'patch',
-    id: 'overtone',
-    label: 'Overtone',
-    lane: 'process',
-    table: 'overtone',
-    owns: under('overtone'),
-  },
-  // Last of the effects (Georg, 2026-09-29), so it thickens what they made.
-  {
-    layer: 'patch',
-    id: 'chorus',
-    label: 'Chorus',
-    lane: 'process',
-    table: 'chorus',
-    owns: under('chorus'),
-  },
-  {
-    layer: 'patch',
-    id: 'flanger',
-    label: 'Flanger',
-    lane: 'process',
-    table: 'flanger',
-    owns: under('flanger'),
-  },
-  {
-    layer: 'patch',
-    id: 'wear',
-    label: 'Wear',
-    lane: 'process',
-    table: 'wear',
-    owns: under('wear'),
-  },
-  {
-    layer: 'patch',
-    id: 'delay',
-    label: 'Delay',
-    lane: 'process',
-    table: 'delay',
-    owns: under('delay'),
-  },
-  {
-    layer: 'patch',
-    id: 'echo',
-    label: 'Echo',
-    lane: 'process',
-    table: 'echo',
-    owns: under('echo'),
-  },
-  {
-    layer: 'patch',
-    id: 'rise',
-    label: 'Rise',
-    lane: 'process',
-    table: 'rise',
-    owns: under('rise'),
-  },
-  {
-    layer: 'patch',
-    id: 'reverb',
-    label: 'Reverb',
-    lane: 'process',
-    table: 'reverb',
-    owns: under('reverb'),
-  },
+  // The process lane's effects are the palette's: drawn from the chain's
+  // order, below (`fxNodes`, `fxChain`). The envelope stays fixed.
   {
     layer: 'patch',
     id: 'env',
@@ -275,17 +192,6 @@ const arrangementNode = (node: string, label: string, lane: Lane): NodeInfo => {
  */
 export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('track', 'Patch', 'generate'),
-  arrangementNode('drive', 'Drive', 'process'),
-  arrangementNode('crush', 'Crush', 'process'),
-  arrangementNode('ring', 'Ring modulation', 'process'),
-  arrangementNode('overtone', 'Overtone', 'process'),
-  arrangementNode('chorus', 'Chorus', 'process'),
-  arrangementNode('flanger', 'Flanger', 'process'),
-  arrangementNode('wear', 'Wear', 'process'),
-  arrangementNode('delay', 'Delay', 'process'),
-  arrangementNode('echo', 'Echo', 'process'),
-  arrangementNode('rise', 'Rise', 'process'),
-  arrangementNode('reverb', 'Reverb', 'process'),
   arrangementNode('filter', 'Filter', 'master'),
   arrangementNode('amp', 'Output', 'master'),
 ];
@@ -296,6 +202,80 @@ export interface ParamValues {
 
 export function nodeById(id: string): NodeInfo | null {
   return NODES.find((n) => n.id === id) ?? ARRANGEMENT_NODES.find((n) => n.id === id) ?? null;
+}
+
+/** How many effects a chain can hold. `ORDER_LEN` in Rust. */
+export const FX_ORDER_LEN = 16;
+
+/** `fx.3.chorus.on`, patch or arrangement: instance 3 of the chorus. */
+const FX_SWITCH = /^(arrangement\.)?fx\.(\d+)\.([a-z]+)\.on$/;
+
+/**
+ * A row's id as the table first names it, for looking up what it means: the
+ * `arrangement.` prefix and an effect's `fx.<n>.` both come off, so
+ * `arrangement.fx.3.chorus.type` is `chorus.type`.
+ */
+export function templateId(id: string): string {
+  return id.replace(ARRANGEMENT_PREFIX, '').replace(/^fx\.\d+\./, '');
+}
+
+/**
+ * Every effect instance the table holds, as nodes, from their switch rows.
+ * Whether one is in the chain is a different question (`fxChain`).
+ */
+export function fxNodes(defs: ParamInfo[], layer: Layer): NodeInfo[] {
+  const out: NodeInfo[] = [];
+  for (const d of defs) {
+    const m = FX_SWITCH.exec(d.id);
+    if (!m) continue;
+    if ((layer === 'arrangement') !== Boolean(m[1])) continue;
+    const table = d.id.slice(0, -'.on'.length);
+    out.push({
+      layer,
+      id: table,
+      label: d.name,
+      lane: 'process',
+      table,
+      owns: under(table),
+      fx: { n: Number(m[2]), kind: m[3] },
+    });
+  }
+  return out;
+}
+
+/**
+ * The effects in a level's chain, first to run first, read from the order
+ * rows as the engine reads them: an empty position is skipped, an effect
+ * named twice is drawn once, and a number with no effect is ignored.
+ */
+export function fxChain(values: ParamValues, layer: Layer): NodeInfo[] {
+  const prefix = layer === 'arrangement' ? ARRANGEMENT_PREFIX : '';
+  const all = layer === 'arrangement' ? ARRANGEMENT_NODES : NODES;
+  const seen = new Set<number>();
+  const out: NodeInfo[] = [];
+  for (let p = 0; p < FX_ORDER_LEN; p++) {
+    const v = Math.round(values[`${prefix}fx.order.${p}`] ?? 0);
+    if (!Number.isFinite(v) || v < 1) continue;
+    const n = v - 1;
+    if (seen.has(n)) continue;
+    const node = all.find((x) => x.fx?.n === n);
+    if (!node) continue;
+    seen.add(n);
+    out.push(node);
+  }
+  return out;
+}
+
+/** The kinds of effect that can be added, once each, in the pool's order. */
+export function fxKinds(defs: ParamInfo[]): Array<{ kind: string; label: string }> {
+  const seen = new Set<string>();
+  const out: Array<{ kind: string; label: string }> = [];
+  for (const node of fxNodes(defs, 'patch')) {
+    if (!node.fx || seen.has(node.fx.kind)) continue;
+    seen.add(node.fx.kind);
+    out.push({ kind: node.fx.kind, label: node.label });
+  }
+  return out;
 }
 
 /** Which of a node's two scopes: the inspector's, or the card's. */
@@ -339,7 +319,7 @@ export function isSwitch(p: ParamInfo): boolean {
     p.steps === 2 &&
     p.min === 0 &&
     p.max === 1 &&
-    !(p.id.replace(ARRANGEMENT_PREFIX, '') in STEP_NAMES)
+    !(templateId(p.id) in STEP_NAMES)
   );
 }
 
@@ -367,7 +347,7 @@ function fieldFor(p: ParamInfo) {
 
   if (p.taper === 'stepped') {
     const n = Math.max(1, p.steps ?? 1);
-    const names = STEP_NAMES[p.id.replace(ARRANGEMENT_PREFIX, '')] ?? null;
+    const names = STEP_NAMES[templateId(p.id)] ?? null;
     return {
       ...base,
       kind: 'select' as const,
@@ -419,6 +399,10 @@ export function registerParamScope(defs: ParamInfo[]) {
   const byId = new Map(defs.map((d) => [d.id, d]));
   registerFieldRenderer('param', ParamRow);
   registerFieldRenderer('material', MaterialField);
+
+  // The pool's instances join the node lists once the table is known.
+  if (!NODES.some((n) => n.fx)) NODES.push(...fxNodes(defs, 'patch'));
+  if (!ARRANGEMENT_NODES.some((n) => n.fx)) ARRANGEMENT_NODES.push(...fxNodes(defs, 'arrangement'));
 
   for (const node of [...NODES, ...ARRANGEMENT_NODES]) {
     for (const view of ['full', 'summary'] as const) {

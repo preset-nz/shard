@@ -1,4 +1,5 @@
 import { PropertyPanel } from '@preset.nz/facets';
+import { ChevronDown, ChevronUp, X } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { type ParamInfo, setParam } from '@/audio';
 import { NodePresets } from '@/components/NodePresets';
@@ -42,6 +43,54 @@ export function isNodeOn(defs: ParamInfo[], values: ParamValues, node: NodeInfo)
 }
 
 /**
+ * What a palette effect's card adds to its header: a place earlier, a place
+ * later, and out of the chain. Taking it out keeps its settings. Each is also
+ * a key (Alt+Up, Alt+Down, Delete), shown in the tooltip.
+ */
+export function ChainButtons({
+  label,
+  onMove,
+  onRemove,
+}: {
+  label: string;
+  onMove: (by: number) => void;
+  onRemove: () => void;
+}) {
+  const button = 'rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground';
+  return (
+    <span data-chain-buttons className="flex shrink-0 items-center">
+      <button
+        type="button"
+        title={`Move ${label} earlier in the chain (⌥↑)`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onMove(-1)}
+        className={button}
+      >
+        <ChevronUp size={12} />
+      </button>
+      <button
+        type="button"
+        title={`Move ${label} later in the chain (⌥↓)`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={() => onMove(1)}
+        className={button}
+      >
+        <ChevronDown size={12} />
+      </button>
+      <button
+        type="button"
+        title={`Take ${label} out of the chain. Its settings are kept. (⌫)`}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onRemove}
+        className={button}
+      >
+        <X size={12} />
+      </button>
+    </span>
+  );
+}
+
+/**
  * A node's name and switch, the same on its card and in the inspector. With
  * `onSelect` the name is a button that opens the node; without, a heading.
  */
@@ -50,12 +99,15 @@ export function NodeHeader({
   defs,
   values,
   onSelect,
+  actions,
   className = '',
 }: {
   node: NodeInfo;
   defs: ParamInfo[];
   values: ParamValues;
   onSelect?: () => void;
+  /** After the switch: a palette effect's move and remove buttons. */
+  actions?: ReactNode;
   className?: string;
 }) {
   const sw = switchIdOf(defs, node);
@@ -82,6 +134,7 @@ export function NodeHeader({
           onSwitch={(next) => void setParam(sw, next ? 1 : 0)}
         />
       )}
+      {actions}
     </div>
   );
 }
@@ -142,6 +195,8 @@ export function NodeCard({
   onError,
   onNote,
   onPresetApplied,
+  onMove,
+  onRemove,
 }: {
   node: NodeInfo;
   defs: ParamInfo[];
@@ -149,6 +204,9 @@ export function NodeCard({
   ctx: ParamRowContext;
   selected: boolean;
   onSelect: () => void;
+  /** For a palette effect: move it a place, or take it out of the chain. */
+  onMove?: (by: number) => void;
+  onRemove?: () => void;
   onError: (message: string | null) => void;
   onNote: (message: string | null) => void;
   onPresetApplied: () => void;
@@ -169,7 +227,7 @@ export function NodeCard({
       <div
         data-node-card
         onClick={(e) => {
-          if (!(e.target as Element).closest('[role="switch"]')) onSelect();
+          if (!(e.target as Element).closest('[role="switch"], [data-chain-buttons]')) onSelect();
         }}
         className={`rounded-md border transition-colors ${
           selected ? 'border-primary bg-primary/5' : 'border-border'
@@ -180,6 +238,11 @@ export function NodeCard({
           defs={defs}
           values={values}
           onSelect={onSelect}
+          actions={
+            onMove && onRemove ? (
+              <ChainButtons label={node.label} onMove={onMove} onRemove={onRemove} />
+            ) : undefined
+          }
           className="px-3 pt-2"
         />
         {/* Dimmed when off, but still editable, as in the inspector. */}

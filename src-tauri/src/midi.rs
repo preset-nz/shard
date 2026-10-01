@@ -172,6 +172,11 @@ impl Controllers {
     /// The bank that holds `id`, and where in it: the arrangement's for an
     /// `arrangement.` id, the patch's otherwise.
     pub fn locate(&self, id: &str) -> Option<(&ParamBank, usize)> {
+        // Which effects run, and in what order, is not a knob's to turn: a
+        // controller on `fx.order.2` would reorder the chain every block.
+        if shard_dsp::fx::is_order_row(id) {
+            return None;
+        }
         let bank = if id.starts_with(arrangement::PREFIX) {
             &self.arrangement
         } else {
@@ -741,5 +746,10 @@ mod tests {
         let (bank, i) = c.locate("fx.1.crush.mix").expect("patch row");
         assert_eq!(bank.defs()[i].id, "fx.1.crush.mix");
         assert!(c.locate("arrangement.fx.1.crush.env.amount").is_none());
+        assert!(
+            c.locate("fx.order.0").is_none(),
+            "no knob reorders the chain"
+        );
+        assert!(c.locate("arrangement.fx.order.3").is_none());
     }
 }

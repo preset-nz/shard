@@ -2,17 +2,22 @@ import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  ARRANGEMENT_PREFIX,
   addDrone,
   addEnvelope,
   addLfo,
   addMaterial,
   arrangementDefs,
   auditionGrain,
+  type ChainLevel,
   cancelLearn,
   EMPTY_MAPPINGS,
   envelopeCurve,
   forgetMidi,
   format,
+  fxAdd,
+  fxMove,
+  fxRemove,
   type GrainInfo,
   getArrangement,
   getHeard,
@@ -56,6 +61,7 @@ import {
   unlinkParam,
   wireMaterial,
 } from '@/audio';
+import { AddMenu } from '@/components/AddMenu';
 import { GeneratorTree } from '@/components/GeneratorTree';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Inspector } from '@/components/Inspector';
@@ -72,6 +78,9 @@ import { usePersistedState } from '@/lib/persisted';
 import {
   ARRANGEMENT_LANES,
   ARRANGEMENT_NODES,
+  FX_ORDER_LEN,
+  fxChain,
+  fxKinds,
   LANES,
   NODES,
   type NodeInfo,
@@ -647,6 +656,39 @@ export default function App() {
     }
   }, []);
 
+  // The palette (`design/effect-palette.md`): the process lane's effects are
+  // added, taken out and moved on whichever level's chain is showing. Rust
+  // holds the order; the next poll draws it.
+  const level: ChainLevel = mode === 'tracker' ? 'arrangement' : 'patch';
+  const addEffect = useCallback(
+    (kind: string) => {
+      fxAdd(level, kind)
+        .then((n) => {
+          const prefix = level === 'arrangement' ? ARRANGEMENT_PREFIX : '';
+          // Select it, so it can be set up at once.
+          select({ kind: 'node', id: `${prefix}fx.${n}.${kind}` });
+        })
+        .catch((e) => setError(String(e)));
+    },
+    [level, select],
+  );
+  const removeEffect = useCallback(
+    (node: NodeInfo) => {
+      if (!node.fx) return;
+      fxRemove(level, node.fx.n).catch((e) => setError(String(e)));
+      const now = useSelection.getState().selection;
+      if (now?.kind === 'node' && now.id === node.id) clear();
+    },
+    [level, clear],
+  );
+  const moveEffect = useCallback(
+    (node: NodeInfo, by: number) => {
+      if (!node.fx) return;
+      fxMove(level, node.fx.n, by).catch((e) => setError(String(e)));
+    },
+    [level],
+  );
+
   const togglePlay = useCallback(async () => {
     await setPlaying(!meter.playing);
   }, [meter.playing]);
@@ -682,6 +724,20 @@ export default function App() {
       }
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
+
+      // The selected effect: Alt+Up and Alt+Down move it in its chain, Delete
+      // takes it out. Anything else selected ignores these.
+      const moving = e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
+      if (moving || e.key === 'Backspace' || e.key === 'Delete') {
+        const sel = useSelection.getState().selection;
+        const node = sel?.kind === 'node' ? nodeById(sel.id) : null;
+        if (node?.fx) {
+          e.preventDefault();
+          if (moving) moveEffect(node, e.key === 'ArrowUp' ? -1 : 1);
+          else removeEffect(node);
+          return;
+        }
+      }
 
       // Deselect all. The inspector empties with it. A row waiting for a
       // MIDI control stops waiting, and a banner goes away.
@@ -720,7 +776,17 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, doSave, doLoad, setBrake, setReverse, setShowDebugger, setMode]);
+  }, [
+    togglePlay,
+    doSave,
+    doLoad,
+    setBrake,
+    setReverse,
+    setShowDebugger,
+    setMode,
+    moveEffect,
+    removeEffect,
+  ]);
 
   // How many parameters follow each modulator, for the tree and the editors.
   const linkedCounts = new Map<number, number>();
@@ -732,6 +798,19 @@ export default function App() {
     (n) => n.layer === 'patch' && n.lane === 'generate' && !n.setting,
   ).map((node) => ({ node, on: defs ? isNodeOn(defs, values, node) : true }));
   const absent = new Set(generators.filter((g) => !g.on).map((g) => g.node.id));
+  // The process lane's effects, in the order the chain runs them, and what
+  // can still be added to it: a kind has two copies, and a chain holds sixteen.
+  const chain = fxChain(values, level);
+  const addChoices = (defs ? fxKinds(defs) : []).map((k) => ({
+    kind: k.kind,
+    label: k.label,
+    disabled:
+      chain.length >= FX_ORDER_LEN
+        ? 'chain full'
+        : chain.filter((n) => n.fx?.kind === k.kind).length >= 2
+          ? 'both in use'
+          : undefined,
+  }));
   const selectedModulator =
     selection?.kind === 'lfo' || selection?.kind === 'envelope' ? selection : null;
   const refreshMod = () => void editMod(readModulation);
@@ -1072,27 +1151,37 @@ export default function App() {
             >
               {(mode === 'tracker' ? ARRANGEMENT_LANES : LANES).map((lane) => (
                 <section key={lane.id} className="flex min-w-0 flex-col gap-2">
-                  <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                    {lane.label}
-                  </h2>
-                  {(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
-                    .filter((n: NodeInfo) => n.lane === lane.id)
-                    // A generator that is off is not in the patch; the tree adds it.
-                    .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id))
-                    .map((node) => (
-                      <NodeCard
-                        key={node.id}
-                        node={node}
-                        defs={defs}
-                        values={values}
-                        ctx={panelCtx}
-                        selected={selection?.kind === 'node' && selection.id === node.id}
-                        onSelect={() => select({ kind: 'node', id: node.id })}
-                        onError={setError}
-                        onNote={setNote}
-                        onPresetApplied={refreshMod}
-                      />
-                    ))}
+                  <div className="flex items-center justify-between">
+                    <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                      {lane.label}
+                    </h2>
+                    {lane.id === 'process' && (
+                      <AddMenu title="Add an effect" choices={addChoices} onAdd={addEffect} />
+                    )}
+                  </div>
+                  {[
+                    // The chain first, in its order; then the fixed nodes.
+                    ...(lane.id === 'process' ? chain : []),
+                    ...(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
+                      .filter((n: NodeInfo) => n.lane === lane.id && !n.fx)
+                      // A generator that is off is not in the patch; the tree adds it.
+                      .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id)),
+                  ].map((node) => (
+                    <NodeCard
+                      key={node.id}
+                      node={node}
+                      defs={defs}
+                      values={values}
+                      ctx={panelCtx}
+                      selected={selection?.kind === 'node' && selection.id === node.id}
+                      onSelect={() => select({ kind: 'node', id: node.id })}
+                      onError={setError}
+                      onNote={setNote}
+                      onPresetApplied={refreshMod}
+                      onMove={node.fx ? (by) => moveEffect(node, by) : undefined}
+                      onRemove={node.fx ? () => removeEffect(node) : undefined}
+                    />
+                  ))}
                 </section>
               ))}
             </div>

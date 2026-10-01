@@ -103,6 +103,21 @@ export const setParam = (id: string, value: number) =>
   isArrangement(id)
     ? invoke<void>('set_arrangement_param', { id, value })
     : invoke<void>('set_param', { id, value });
+
+/** Which level's chain a palette command acts on. */
+export type ChainLevel = 'patch' | 'arrangement';
+
+/**
+ * The palette (`design/effect-palette.md`): add an effect to the end of a
+ * level's chain, take one out, or move one a place. The order is held in the
+ * Rust bank, so the answer arrives with the next poll. `n` is the instance
+ * number in `fx.<n>.<kind>.<param>`.
+ */
+export const fxAdd = (layer: ChainLevel, kind: string) => invoke<number>('fx_add', { layer, kind });
+export const fxRemove = (layer: ChainLevel, n: number) => invoke<void>('fx_remove', { layer, n });
+export const fxMove = (layer: ChainLevel, n: number, by: number) =>
+  invoke<boolean>('fx_move', { layer, n, by });
+
 export const meters = () => invoke<Meters>('meters');
 
 /** A material as the tree and the inspector show it. */

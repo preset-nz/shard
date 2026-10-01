@@ -256,6 +256,41 @@ fn set_arrangement_param(
     }
 }
 
+/// The bank of one level: `patch` or `arrangement`.
+fn layer_bank<'a>(state: &'a Audio, layer: &str) -> Result<&'a ParamBank, String> {
+    match layer {
+        "patch" => Ok(&state.bank),
+        "arrangement" => Ok(&state.arrangement),
+        other => Err(format!("there is no level called {other}")),
+    }
+}
+
+/// Puts the first free copy of an effect at the end of a level's chain,
+/// switched on (`design/effect-palette.md`). Answers with its instance number.
+#[tauri::command]
+fn fx_add(state: tauri::State<'_, Audio>, layer: String, kind: String) -> Result<usize, String> {
+    let kind = shard_dsp::fx::Kind::from_name(&kind)
+        .ok_or_else(|| format!("there is no effect called {kind}"))?;
+    shard_dsp::fx::add_to_chain(layer_bank(&state, &layer)?, kind).map_err(String::from)
+}
+
+/// Takes an effect out of a level's chain. Its settings stay.
+#[tauri::command]
+fn fx_remove(state: tauri::State<'_, Audio>, layer: String, n: usize) -> Result<(), String> {
+    shard_dsp::fx::remove_from_chain(layer_bank(&state, &layer)?, n).map_err(String::from)
+}
+
+/// Moves an effect one place earlier (`by` below zero) or later.
+#[tauri::command]
+fn fx_move(
+    state: tauri::State<'_, Audio>,
+    layer: String,
+    n: usize,
+    by: i32,
+) -> Result<bool, String> {
+    shard_dsp::fx::move_in_chain(layer_bank(&state, &layer)?, n, by).map_err(String::from)
+}
+
 fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
     defs.iter()
         .map(|p| ParamInfo {
@@ -1940,6 +1975,9 @@ pub fn run() {
             arrangement_defs,
             get_arrangement,
             set_arrangement_param,
+            fx_add,
+            fx_remove,
+            fx_move,
             meters,
             set_playing,
             tracker,

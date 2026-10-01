@@ -355,6 +355,49 @@ pub fn set_order(bank: &ParamBank, order: &Order) {
     }
 }
 
+/// Puts the first free copy of `kind` at the end of the chain a bank holds,
+/// switched on. Its other settings are whatever it last had. Returns the
+/// instance number.
+pub fn add_to_chain(bank: &ParamBank, kind: Kind) -> Result<usize, &'static str> {
+    let mut order = order_of(bank);
+    let n = order.add(kind).ok_or(if order.len() >= ORDER_LEN {
+        "the chain is full"
+    } else {
+        "both copies of that effect are already in the chain"
+    })?;
+    set_order(bank, &order);
+    let prefix = bank_prefix(bank);
+    bank.set_by_id(
+        &format!("{prefix}{}", row_id(n, &format!("{}.on", kind.name()))),
+        1.0,
+    );
+    Ok(n)
+}
+
+/// Takes instance `n` out of the chain a bank holds. Its settings stay.
+pub fn remove_from_chain(bank: &ParamBank, n: usize) -> Result<(), &'static str> {
+    let mut order = order_of(bank);
+    if !order.remove(n) {
+        return Err("that effect is not in the chain");
+    }
+    set_order(bank, &order);
+    Ok(())
+}
+
+/// Moves instance `n` one place earlier (`by < 0`) or later (`by > 0`).
+/// Returns whether it moved; at either end it does not.
+pub fn move_in_chain(bank: &ParamBank, n: usize, by: i32) -> Result<bool, &'static str> {
+    let mut order = order_of(bank);
+    if !order.contains(n) {
+        return Err("that effect is not in the chain");
+    }
+    let moved = order.nudge(n, by);
+    if moved {
+        set_order(bank, &order);
+    }
+    Ok(moved)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,6 +540,47 @@ mod tests {
             set_order(bank, &o);
             assert_eq!(order_of(bank), o);
         }
+    }
+
+    #[test]
+    fn add_remove_and_move_work_on_either_bank() {
+        let patch = ParamBank::new();
+        let arr = ParamBank::for_table(crate::arrangement::params());
+        for bank in [&patch, &arr] {
+            let d = add_to_chain(bank, Kind::Delay).unwrap();
+            let c = add_to_chain(bank, Kind::Chorus).unwrap();
+            assert_eq!(order_of(bank).as_slice(), &[d as u8, c as u8]);
+            assert_eq!(move_in_chain(bank, c, -1), Ok(true));
+            assert_eq!(order_of(bank).as_slice(), &[c as u8, d as u8]);
+            assert_eq!(move_in_chain(bank, c, -1), Ok(false));
+            assert!(move_in_chain(bank, 99, 1).is_err());
+            remove_from_chain(bank, c).unwrap();
+            assert!(remove_from_chain(bank, c).is_err());
+            assert_eq!(order_of(bank).as_slice(), &[d as u8]);
+        }
+    }
+
+    #[test]
+    fn a_removed_effect_keeps_its_settings_and_adding_it_back_switches_it_on() {
+        let bank = ParamBank::new();
+        let n = add_to_chain(&bank, Kind::Delay).unwrap();
+        bank.set_by_id(&row_id(n, "delay.time"), 777.0);
+        bank.set_by_id(&row_id(n, "delay.on"), 0.0);
+        remove_from_chain(&bank, n).unwrap();
+        assert_eq!(bank.get_by_id(&row_id(n, "delay.time")), Some(777.0));
+        let again = add_to_chain(&bank, Kind::Delay).unwrap();
+        assert_eq!(again, n, "the first free copy is the same one");
+        assert_eq!(bank.get_by_id(&row_id(n, "delay.time")), Some(777.0));
+        assert_eq!(bank.get_by_id(&row_id(n, "delay.on")), Some(1.0));
+    }
+
+    #[test]
+    fn a_third_copy_is_refused_with_a_reason() {
+        let bank = ParamBank::new();
+        add_to_chain(&bank, Kind::Echo).unwrap();
+        add_to_chain(&bank, Kind::Echo).unwrap();
+        let err = add_to_chain(&bank, Kind::Echo).unwrap_err();
+        assert!(err.contains("both copies"), "{err}");
     }
 
     #[test]
