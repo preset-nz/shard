@@ -140,6 +140,14 @@ fn knee(x: f32) -> f32 {
 }
 
 impl Delay {
+    /// Forgets the repeats it holds, without allocating. The smoothers keep their place: they follow controls, not signal.
+    pub fn reset(&mut self) {
+        for line in &mut self.lines {
+            line.fill(0.0);
+        }
+        self.lows = [0.0; 2];
+    }
+
     pub fn new(sample_rate: f32) -> Self {
         let frames = (DELAY_MAX_MS * 0.001 * sample_rate).ceil() as usize + MARGIN;
         let d = DelayParams::default();
@@ -671,5 +679,49 @@ mod tests {
         assert!((TONE_MIN_HZ..=TONE_MAX_HZ).contains(&p.tone_hz));
         assert!((0.0..=1.0).contains(&p.cross));
         assert!((0.0..=1.0).contains(&p.mix));
+    }
+
+    #[test]
+    fn reset_forgets_the_tail() {
+        let mut x = Delay::new(48_000.0);
+        let p = DelayParams {
+            time_ms: 2000.0,
+            feedback: FEEDBACK_MAX,
+            tone_hz: TONE_MAX_HZ,
+            cross: 0.5,
+            mix: 1.0,
+        };
+        let mut state = 0x9E37_79B9u32;
+        for _ in 0..48_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = state as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            x.process(v, -v, &p);
+        }
+        x.reset();
+        // Silence for longer than the longest line, so any stale audio shows.
+        for _ in 0..(48_000 * 3) {
+            let (l, r) = x.process(0.0, 0.0, &p);
+            assert_eq!((l, r), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_node_changes_nothing() {
+        let p = DelayParams {
+            time_ms: 2000.0,
+            feedback: FEEDBACK_MAX,
+            tone_hz: TONE_MAX_HZ,
+            cross: 0.5,
+            mix: 1.0,
+        };
+        let mut a = Delay::new(48_000.0);
+        let mut b = Delay::new(48_000.0);
+        b.reset();
+        for i in 0..4_800 {
+            let v = ((i % 211) as f32 / 211.0) - 0.5;
+            assert_eq!(a.process(v, v * 0.5, &p), b.process(v, v * 0.5, &p));
+        }
     }
 }

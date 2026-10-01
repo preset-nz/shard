@@ -200,6 +200,14 @@ pub struct Echo {
 }
 
 impl Echo {
+    /// Forgets the repeats it holds, without allocating. The wobble and the smoothers keep their place: they follow controls, not signal.
+    pub fn reset(&mut self) {
+        self.line.fill(0.0);
+        self.hp = [0.0; 2];
+        self.lp1 = [0.0; 2];
+        self.lp2 = [0.0; 2];
+    }
+
     pub fn new(sample_rate: f32) -> Self {
         let frames = ((ECHO_MAX_MS + HEADROOM_MS) * 0.001 * sample_rate).ceil() as usize + 4;
         let d = EchoParams::default();
@@ -781,6 +789,52 @@ mod tests {
         for i in 0..48_000 {
             let (l, r) = e.process(tone(i), tone(i), &p);
             assert!(l.is_finite() && r.is_finite() && l.abs() <= 4.0);
+        }
+    }
+
+    #[test]
+    fn reset_forgets_the_tail() {
+        let mut x = Echo::new(48_000.0);
+        let p = EchoParams {
+            time_ms: ECHO_MAX_MS,
+            feedback: MAX_FEEDBACK,
+            tone_hz: TONE_MAX_HZ,
+            wobble: 1.0,
+            grit: 1.0,
+            mix: 1.0,
+        };
+        let mut state = 0x9E37_79B9u32;
+        for _ in 0..48_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = state as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            x.process(v, -v, &p);
+        }
+        x.reset();
+        // Silence for longer than the longest line, so any stale audio shows.
+        for _ in 0..(48_000 * 3) {
+            let (l, r) = x.process(0.0, 0.0, &p);
+            assert_eq!((l, r), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_node_changes_nothing() {
+        let p = EchoParams {
+            time_ms: ECHO_MAX_MS,
+            feedback: MAX_FEEDBACK,
+            tone_hz: TONE_MAX_HZ,
+            wobble: 1.0,
+            grit: 1.0,
+            mix: 1.0,
+        };
+        let mut a = Echo::new(48_000.0);
+        let mut b = Echo::new(48_000.0);
+        b.reset();
+        for i in 0..4_800 {
+            let v = ((i % 211) as f32 / 211.0) - 0.5;
+            assert_eq!(a.process(v, v * 0.5, &p), b.process(v, v * 0.5, &p));
         }
     }
 }

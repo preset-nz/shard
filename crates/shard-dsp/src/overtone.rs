@@ -163,6 +163,15 @@ impl Overtone {
         }
     }
 
+    /// Forgets the audio it holds: the shifters' lines and the tone filter.
+    /// Level, tone and mix smoothers follow controls and keep their place.
+    pub fn reset(&mut self) {
+        for s in self.shifters.iter_mut().flatten() {
+            s.reset();
+        }
+        self.tone = [Tone::default(); 2];
+    }
+
     /// What the layers lag the dry by, in samples.
     pub fn latency_samples(&self) -> usize {
         self.shifters[0][0].latency_samples()
@@ -511,6 +520,34 @@ mod tests {
             assert!(l.is_finite() && r.is_finite());
             assert!((l - r).abs() < 1e-6, "identical shifters, identical sides");
             assert!(l.abs() < 2.0);
+        }
+    }
+
+    #[test]
+    fn reset_forgets_the_layers() {
+        let mut o = Overtone::new(SR);
+        let p = open(1.0, 1.0, 1.0);
+        let mut st = 12345u32;
+        for _ in 0..48_000 {
+            let x = noise(&mut st) * 0.8;
+            o.process(x, x, &p);
+        }
+        o.reset();
+        // The shifters' windows are 40 ms; two seconds is far past any tail.
+        for _ in 0..96_000 {
+            assert_eq!(o.process(0.0, 0.0, &p), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_overtone_changes_nothing() {
+        let p = OvertoneParams::default();
+        let mut a = Overtone::new(SR);
+        let mut b = Overtone::new(SR);
+        b.reset();
+        for i in 0..9_600 {
+            let x = sine(220.0, 0.5, i, SR);
+            assert_eq!(a.process(x, -x, &p), b.process(x, -x, &p));
         }
     }
 }

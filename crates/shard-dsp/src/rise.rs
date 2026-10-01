@@ -204,6 +204,15 @@ pub struct Rise {
 }
 
 impl Rise {
+    /// Forgets the repeats it holds, without allocating. The wander and the smoothers keep their place: they follow controls, not signal.
+    pub fn reset(&mut self) {
+        for side in &mut self.sides {
+            side.line.fill(0.0);
+            side.shifter.reset();
+            side.tone_state = 0.0;
+        }
+    }
+
     pub fn new(sample_rate: f32) -> Self {
         let len = (RISE_MAX_MS * 0.001 * sample_rate).ceil() as usize + GUARD + 4;
         let smoother = |ms: f32| {
@@ -604,6 +613,52 @@ mod tests {
                 heard |= i > (sr * 1.2) as usize && l.abs() > 0.01;
             }
             assert!(heard, "sr {sr}: no repeat");
+        }
+    }
+
+    #[test]
+    fn reset_forgets_the_tail() {
+        let mut x = Rise::new(48_000.0);
+        let p = RiseParams {
+            time_ms: RISE_MAX_MS,
+            feedback: MAX_FEEDBACK,
+            shift_st: 7.0,
+            wobble: 1.0,
+            tone_hz: TONE_MAX_HZ,
+            mix: 1.0,
+        };
+        let mut state = 0x9E37_79B9u32;
+        for _ in 0..48_000 {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let v = state as f32 / u32::MAX as f32 * 2.0 - 1.0;
+            x.process(v, -v, &p);
+        }
+        x.reset();
+        // Silence for longer than the longest line, so any stale audio shows.
+        for _ in 0..(48_000 * 3) {
+            let (l, r) = x.process(0.0, 0.0, &p);
+            assert_eq!((l, r), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_node_changes_nothing() {
+        let p = RiseParams {
+            time_ms: RISE_MAX_MS,
+            feedback: MAX_FEEDBACK,
+            shift_st: 7.0,
+            wobble: 1.0,
+            tone_hz: TONE_MAX_HZ,
+            mix: 1.0,
+        };
+        let mut a = Rise::new(48_000.0);
+        let mut b = Rise::new(48_000.0);
+        b.reset();
+        for i in 0..4_800 {
+            let v = ((i % 211) as f32 / 211.0) - 0.5;
+            assert_eq!(a.process(v, v * 0.5, &p), b.process(v, v * 0.5, &p));
         }
     }
 }

@@ -285,6 +285,10 @@ impl Delay {
         let b = self.buf[self.pos.wrapping_sub(i + 1) & self.mask];
         a + (b - a) * f
     }
+
+    fn clear(&mut self) {
+        self.buf.fill(0.0);
+    }
 }
 
 /// A value moving in a straight line to its target over a fixed number of
@@ -332,6 +336,10 @@ impl Allpass {
         let v = x - g * w;
         self.delay.push(flush(v));
         w + g * v
+    }
+
+    fn clear(&mut self) {
+        self.delay.clear();
     }
 }
 
@@ -439,6 +447,23 @@ impl Reverb {
             countdown: 0,
             primed: false,
         }
+    }
+
+    /// Forgets all the sound it holds, so nothing of what came before is
+    /// heard again. The glides, smoothers and drift phases follow controls
+    /// and time, not sound, so they stay where they are. Does not allocate.
+    pub fn reset(&mut self) {
+        for line in &mut self.lines {
+            line.delay.clear();
+            line.lp = 0.0;
+        }
+        for a in self.diffusers.iter_mut().flatten() {
+            a.clear();
+        }
+        for d in &mut self.pre {
+            d.clear();
+        }
+        self.dc = [(0.0, 0.0); 2];
     }
 
     /// Bytes of delay memory held, for a test to keep it bounded.
@@ -1063,5 +1088,41 @@ mod tests {
     fn memory_stays_small() {
         assert!(Reverb::new(48_000.0).memory_bytes() < 4_000_000);
         assert!(Reverb::new(96_000.0).memory_bytes() < 8_000_000);
+    }
+
+    #[test]
+    fn reset_forgets_the_tail() {
+        let mut rv = Reverb::new(SR);
+        let p = ReverbParams {
+            size: 1.0,
+            predelay_ms: MAX_PREDELAY_MS,
+            ..wet(ReverbType::Hall, MAX_DECAY_S)
+        };
+        let mut s = 99u32;
+        for _ in 0..SR as usize {
+            let x = noise(&mut s);
+            rv.process(x, x, &p);
+        }
+        let t = std::time::Instant::now();
+        rv.reset();
+        println!("Reverb::reset took {:?}", t.elapsed());
+        // Far past the longest line and predelay. Exact zero holds because
+        // every state that carries sound is cleared, and the dry is zero.
+        for _ in 0..SR as usize * 3 {
+            assert_eq!(rv.process(0.0, 0.0, &p), (0.0, 0.0));
+        }
+    }
+
+    #[test]
+    fn reset_on_a_fresh_reverb_changes_nothing() {
+        let p = ReverbParams::default();
+        let mut a = Reverb::new(SR);
+        let mut b = Reverb::new(SR);
+        b.reset();
+        let mut s = 7u32;
+        for _ in 0..24_000 {
+            let x = noise(&mut s) * 0.5;
+            assert_eq!(a.process(x, -x, &p), b.process(x, -x, &p));
+        }
     }
 }
