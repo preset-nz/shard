@@ -45,6 +45,7 @@ import {
   materials as readMaterials,
   meters as readMeters,
   modulation as readModulation,
+  redoEdit,
   removeEnvelope,
   removeLfo,
   removeMaterial,
@@ -58,6 +59,7 @@ import {
   setTracker,
   type Tracker,
   takeOpenedFile,
+  undoEdit,
   unlinkParam,
   wireMaterial,
 } from '@/audio';
@@ -689,6 +691,23 @@ export default function App() {
     [level],
   );
 
+  // Undo and redo. Rust steps the document back; the values arrive with the
+  // next poll, and the tracker and the modulation are asked for again here.
+  const stepHistory = useCallback(async (direction: 'undo' | 'redo') => {
+    try {
+      const label = await (direction === 'undo' ? undoEdit() : redoEdit());
+      if (label === null) {
+        setNote(direction === 'undo' ? 'Nothing to undo.' : 'Nothing to redo.');
+        return;
+      }
+      setTrackerView(await getTracker());
+      setMod(await readModulation());
+      setNote(`${direction === 'undo' ? 'Undid' : 'Redid'} “${label}”.`);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
   const togglePlay = useCallback(async () => {
     await setPlaying(!meter.playing);
   }, [meter.playing]);
@@ -705,6 +724,14 @@ export default function App() {
       if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
         e.preventDefault();
         void doLoad();
+        return;
+      }
+      // A text field keeps its own undo; everything else steps the document.
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
+        const field = e.target as HTMLElement | null;
+        if (field && /^(INPUT|TEXTAREA)$/.test(field.tagName)) return;
+        e.preventDefault();
+        void stepHistory(e.shiftKey ? 'redo' : 'undo');
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
@@ -788,6 +815,7 @@ export default function App() {
     setMode,
     moveEffect,
     removeEffect,
+    stepHistory,
   ]);
 
   // How many parameters follow each modulator, for the tree and the editors.

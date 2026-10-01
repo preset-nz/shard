@@ -26,6 +26,7 @@ use shard_dsp::steps::StepBank;
 use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, ReadingBank};
 
 mod controllers;
+mod history;
 mod mapping;
 mod materials;
 mod midi;
@@ -113,6 +114,8 @@ pub struct Audio {
     /// The open patch's LFOs and links. Every edit rebuilds a `ModSet` from
     /// this and hands it across through `mod_swap`.
     modulation: Mutex<modulation::Modulation>,
+    /// What Undo and Redo can step back to (`history.rs`).
+    history: Mutex<history::History>,
     /// A new source for each generator that has one waiting.
     swap: Arc<Mutex<SourceSlots>>,
     /// Source buffers the audio thread swapped out and handed back, waiting
@@ -249,6 +252,7 @@ fn set_arrangement_param(
     id: String,
     value: f32,
 ) -> Result<(), String> {
+    state.record_param(&state.arrangement, &id, value);
     if state.arrangement.set_by_id(&id, value) {
         Ok(())
     } else {
@@ -271,13 +275,26 @@ fn layer_bank<'a>(state: &'a Audio, layer: &str) -> Result<&'a ParamBank, String
 fn fx_add(state: tauri::State<'_, Audio>, layer: String, kind: String) -> Result<usize, String> {
     let kind = shard_dsp::fx::Kind::from_name(&kind)
         .ok_or_else(|| format!("there is no effect called {kind}"))?;
-    shard_dsp::fx::add_to_chain(layer_bank(&state, &layer)?, kind).map_err(String::from)
+    let bank = layer_bank(&state, &layer)?;
+    let began = state.record_edit(None, &format!("Add {}", kind.label()));
+    shard_dsp::fx::add_to_chain(bank, kind).map_err(|e| {
+        state.cancel_edit(began);
+        String::from(e)
+    })
 }
 
 /// Takes an effect out of a level's chain. Its settings stay.
 #[tauri::command]
 fn fx_remove(state: tauri::State<'_, Audio>, layer: String, n: usize) -> Result<(), String> {
-    shard_dsp::fx::remove_from_chain(layer_bank(&state, &layer)?, n).map_err(String::from)
+    let bank = layer_bank(&state, &layer)?;
+    let label = shard_dsp::fx::POOL
+        .get(n)
+        .map_or("effect", |(k, _)| k.label());
+    let began = state.record_edit(None, &format!("Remove {label}"));
+    shard_dsp::fx::remove_from_chain(bank, n).map_err(|e| {
+        state.cancel_edit(began);
+        String::from(e)
+    })
 }
 
 /// Moves an effect one place earlier (`by` below zero) or later.
@@ -288,7 +305,19 @@ fn fx_move(
     n: usize,
     by: i32,
 ) -> Result<bool, String> {
-    shard_dsp::fx::move_in_chain(layer_bank(&state, &layer)?, n, by).map_err(String::from)
+    let bank = layer_bank(&state, &layer)?;
+    let label = shard_dsp::fx::POOL
+        .get(n)
+        .map_or("effect", |(k, _)| k.label());
+    let began = state.record_edit(None, &format!("Move {label}"));
+    match shard_dsp::fx::move_in_chain(bank, n, by) {
+        Ok(true) => Ok(true),
+        // At an end, or not in the chain: nothing changed.
+        other => {
+            state.cancel_edit(began);
+            other.map_err(String::from)
+        }
+    }
 }
 
 fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
@@ -338,6 +367,7 @@ fn get_heard(state: tauri::State<'_, Audio>) -> Vec<f32> {
 
 #[tauri::command]
 fn set_param(state: tauri::State<'_, Audio>, id: String, value: f32) -> Result<(), String> {
+    state.record_param(&state.bank, &id, value);
     if state.bank.set_by_id(&id, value) {
         Ok(())
     } else {
@@ -692,6 +722,8 @@ fn load_patch(
     *state.materials.lock().expect("materials poisoned") = pool;
     *state.decoded.lock().expect("decoded poisoned") = decoded;
     state.send_pool();
+    // Nothing before this document can be undone into it.
+    state.history.lock().expect("history poisoned").clear();
 
     Ok(report)
 }
@@ -710,17 +742,32 @@ fn preset_names(state: tauri::State<'_, Audio>, node: String) -> Vec<String> {
 /// `update_preset` is for.
 #[tauri::command]
 fn save_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
-    let mut presets = state.presets.lock().expect("presets poisoned");
-    let doc = state.modulation.lock().expect("modulation poisoned");
-    presets.save(&state.bank, &doc.links, &node, &name)
+    // History is taken before presets, never while holding them.
+    let began = state.record_edit(None, "Save a preset");
+    let result = {
+        let mut presets = state.presets.lock().expect("presets poisoned");
+        let doc = state.modulation.lock().expect("modulation poisoned");
+        presets.save(&state.bank, &doc.links, &node, &name)
+    };
+    if result.is_err() {
+        state.cancel_edit(began);
+    }
+    result
 }
 
 /// Overwrite an existing preset with the node's current values and links.
 #[tauri::command]
 fn update_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
-    let mut presets = state.presets.lock().expect("presets poisoned");
-    let doc = state.modulation.lock().expect("modulation poisoned");
-    presets.update(&state.bank, &doc.links, &node, &name)
+    let began = state.record_edit(None, "Update a preset");
+    let result = {
+        let mut presets = state.presets.lock().expect("presets poisoned");
+        let doc = state.modulation.lock().expect("modulation poisoned");
+        presets.update(&state.bank, &doc.links, &node, &name)
+    };
+    if result.is_err() {
+        state.cancel_edit(began);
+    }
+    result
 }
 
 /// Write a preset's values into the bank and its links into the patch.
@@ -732,17 +779,27 @@ fn apply_preset(
     node: String,
     name: String,
 ) -> Result<presets::ApplyReport, String> {
-    let presets = state.presets.lock().expect("presets poisoned");
-    let mut doc = state.modulation.lock().expect("modulation poisoned");
-    let mut report = presets.apply(&state.bank, &mut doc.links, &node, &name)?;
-    // Only this node's refusals: anything else refused was already reported
-    // when it arrived.
-    report.refused = state
-        .send_modulation(&doc)
-        .into_iter()
-        .filter(|r| presets::belongs(&node, &r.id))
-        .collect();
-    Ok(report)
+    let began = state.record_edit(None, &format!("Apply the preset “{name}”"));
+    let result = {
+        let presets = state.presets.lock().expect("presets poisoned");
+        let mut doc = state.modulation.lock().expect("modulation poisoned");
+        presets
+            .apply(&state.bank, &mut doc.links, &node, &name)
+            .map(|mut report| {
+                // Only this node's refusals: anything else refused was already
+                // reported when it arrived.
+                report.refused = state
+                    .send_modulation(&doc)
+                    .into_iter()
+                    .filter(|r| presets::belongs(&node, &r.id))
+                    .collect();
+                report
+            })
+    };
+    if result.is_err() {
+        state.cancel_edit(began);
+    }
+    result
 }
 
 /// What an LFO can be set to, so the UI offers exactly what this build reads.
@@ -779,7 +836,7 @@ fn modulation(state: tauri::State<'_, Audio>) -> ModulationView {
 /// Add an LFO. It is last in the answer's `lfos`.
 #[tauri::command]
 fn add_lfo(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| {
+    state.edit_modulation(None, "Add LFO", |doc| {
         doc.add_lfo();
         Ok(())
     })
@@ -788,7 +845,7 @@ fn add_lfo(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
 /// Remove an LFO. Parameters that followed it stay linked, and are reported.
 #[tauri::command]
 fn remove_lfo(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.remove_lfo(id))
+    state.edit_modulation(None, "Remove LFO", |doc| doc.remove_lfo(id))
 }
 
 /// Change an LFO's name, rate, shape and phase. Running LFOs keep their place.
@@ -797,13 +854,14 @@ fn set_lfo(
     state: tauri::State<'_, Audio>,
     lfo: modulation::LfoRecord,
 ) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.set_lfo(lfo))
+    let key = format!("lfo:{}", lfo.id);
+    state.edit_modulation(Some(&key), "Change LFO", |doc| doc.set_lfo(lfo))
 }
 
 /// Add a modulation envelope. It is last in the answer's `envelopes`.
 #[tauri::command]
 fn add_envelope(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| {
+    state.edit_modulation(None, "Add envelope", |doc| {
         doc.add_envelope();
         Ok(())
     })
@@ -813,7 +871,7 @@ fn add_envelope(state: tauri::State<'_, Audio>) -> Result<ModulationView, String
 /// are reported.
 #[tauri::command]
 fn remove_envelope(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.remove_envelope(id))
+    state.edit_modulation(None, "Remove envelope", |doc| doc.remove_envelope(id))
 }
 
 /// Change a modulation envelope's name and stages.
@@ -822,7 +880,10 @@ fn set_envelope(
     state: tauri::State<'_, Audio>,
     envelope: modulation::EnvelopeRecord,
 ) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.set_envelope(envelope))
+    let key = format!("envelope:{}", envelope.id);
+    state.edit_modulation(Some(&key), "Change envelope", |doc| {
+        doc.set_envelope(envelope)
+    })
 }
 
 /// Make a parameter follow an LFO or envelope, or change the range it
@@ -835,16 +896,38 @@ fn link_param(
     lo: f32,
     hi: f32,
 ) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| doc.link(&id, source, lo, hi))
+    let key = format!("link:{id}");
+    state.edit_modulation(Some(&key), "Link a parameter", |doc| {
+        doc.link(&id, source, lo, hi)
+    })
 }
 
 /// Stop a parameter following anything.
 #[tauri::command]
 fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<ModulationView, String> {
-    state.edit_modulation(|doc| {
+    state.edit_modulation(None, "Unlink a parameter", |doc| {
         doc.unlink(&id);
         Ok(())
     })
+}
+
+/// What Undo and Redo would do, by name, for the UI.
+#[tauri::command]
+fn history_state(state: tauri::State<'_, Audio>) -> history::HistoryView {
+    state.history.lock().expect("history poisoned").view()
+}
+
+/// Step back one edit. Answers with the name of what was undone, or nothing
+/// when there was nothing to undo.
+#[tauri::command]
+fn undo(state: tauri::State<'_, Audio>) -> Option<String> {
+    state.undo_one()
+}
+
+/// Step forward again after an undo.
+#[tauri::command]
+fn redo(state: tauri::State<'_, Audio>) -> Option<String> {
+    state.redo_one()
 }
 
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
@@ -863,6 +946,11 @@ fn tracker(state: tauri::State<'_, Audio>) -> tracker::Tracker {
 /// differs from what was sent only where a value was out of range.
 #[tauri::command]
 fn set_tracker(state: tauri::State<'_, Audio>, tracker: tracker::Tracker) -> tracker::Tracker {
+    // Not an edit if it comes out as it already is.
+    let same = tracker.clone().sanitised() == *state.tracker.lock().expect("tracker poisoned");
+    if !same {
+        state.record_edit(Some("tracker"), "Edit the steps");
+    }
     apply_tracker(&state, tracker)
 }
 
@@ -1518,6 +1606,85 @@ fn rename_map(
 }
 
 impl Audio {
+    /// Everything an edit can change that Undo restores.
+    fn snapshot(&self) -> history::Snapshot {
+        let values = |bank: &ParamBank| (0..bank.defs().len()).map(|i| bank.get(i)).collect();
+        history::Snapshot {
+            patch: values(&self.bank),
+            arrangement: values(&self.arrangement),
+            tracker: self.tracker.lock().expect("tracker poisoned").clone(),
+            modulation: self.modulation.lock().expect("modulation poisoned").clone(),
+            presets: self.presets.lock().expect("presets poisoned").clone(),
+        }
+    }
+
+    /// Put a snapshot back: the values, the tracker, the LFOs and links, and
+    /// the presets. The bank clamps what it is given.
+    fn restore(&self, snap: &history::Snapshot) {
+        for (i, v) in snap.patch.iter().enumerate() {
+            self.bank.set(i, *v);
+        }
+        for (i, v) in snap.arrangement.iter().enumerate() {
+            self.arrangement.set(i, *v);
+        }
+        apply_tracker(self, snap.tracker.clone());
+        self.send_modulation(&snap.modulation);
+        *self.modulation.lock().expect("modulation poisoned") = snap.modulation.clone();
+        *self.presets.lock().expect("presets poisoned") = snap.presets.clone();
+    }
+
+    /// An edit is about to happen: keep the state from before it, as one step
+    /// of Undo. Edits with the same `key` in quick succession are one gesture.
+    /// Answers whether a step began, for `cancel_edit` if the edit is refused.
+    /// Call before taking any other lock.
+    fn record_edit(&self, key: Option<&str>, label: &str) -> bool {
+        let mut history = self.history.lock().expect("history poisoned");
+        history.record(key, label, std::time::Instant::now(), || self.snapshot())
+    }
+
+    /// A person set one parameter. Not recorded when it would change nothing,
+    /// and not for the held gestures (brake and reverse), which are playing the
+    /// instrument rather than editing the document.
+    fn record_param(&self, bank: &ParamBank, id: &str, value: f32) {
+        if id == "tape.brake" || id == "tape.reverse" {
+            return;
+        }
+        let Some(i) = bank.index(id) else { return };
+        if (bank.get(i) - value).abs() < 1.0e-6 {
+            return;
+        }
+        let name = bank.defs()[i].name;
+        let key = format!("param:{id}");
+        self.record_edit(Some(&key), &format!("Change {name}"));
+    }
+
+    /// Step back one edit; the name of what was undone.
+    fn undo_one(&self) -> Option<String> {
+        let current = self.snapshot();
+        let undone = self.history.lock().expect("history poisoned").undo(current);
+        undone.map(|(snap, label)| {
+            self.restore(&snap);
+            label
+        })
+    }
+
+    /// Step forward again; the name of what was redone.
+    fn redo_one(&self) -> Option<String> {
+        let current = self.snapshot();
+        let redone = self.history.lock().expect("history poisoned").redo(current);
+        redone.map(|(snap, label)| {
+            self.restore(&snap);
+            label
+        })
+    }
+
+    /// The edit was refused and changed nothing.
+    fn cancel_edit(&self, began: bool) {
+        if began {
+            self.history.lock().expect("history poisoned").cancel();
+        }
+    }
+
     /// Build the engine's modulation set from `doc` here, on the command
     /// thread, and leave it for the audio thread to take at a block boundary.
     /// A set still waiting from an earlier edit is replaced and freed here.
@@ -1532,10 +1699,17 @@ impl Audio {
     /// refused edit has changed nothing, so nothing is sent.
     fn edit_modulation(
         &self,
+        key: Option<&str>,
+        label: &str,
         edit: impl FnOnce(&mut modulation::Modulation) -> Result<(), String>,
     ) -> Result<ModulationView, String> {
+        let began = self.record_edit(key, label);
         let mut doc = self.modulation.lock().expect("modulation poisoned");
-        edit(&mut doc)?;
+        if let Err(e) = edit(&mut doc) {
+            drop(doc);
+            self.cancel_edit(began);
+            return Err(e);
+        }
         let refused = self.send_modulation(&doc);
         Ok(ModulationView::of(&doc, refused))
     }
@@ -1918,6 +2092,7 @@ fn build_audio() -> Result<Audio, String> {
         readings,
         presets: Mutex::new(presets::Presets::default()),
         modulation: Mutex::new(modulation::Modulation::default()),
+        history: Mutex::new(history::History::default()),
         swap,
         retired,
         mod_swap,
@@ -1978,6 +2153,9 @@ pub fn run() {
             fx_add,
             fx_remove,
             fx_move,
+            history_state,
+            undo,
+            redo,
             meters,
             set_playing,
             tracker,
@@ -2334,5 +2512,167 @@ mod tests {
         let p = fold_preview(&stereo, 48_000.0, false);
         assert_eq!(p.zoom_min.len(), PREVIEW_ZOOM_COLUMNS);
         assert!(p.seconds > 0.0 && !p.capped);
+    }
+
+    /// An `Audio` with no sound device behind it: the same state the commands
+    /// edit, and nothing playing it.
+    fn headless() -> Audio {
+        let sample_rate = 48_000.0;
+        let drone = Arc::new(source::startup_drone(sample_rate));
+        let pool = materials::Pool::with_drone();
+        let drone_id = pool.wires.material.expect("a new pool wires the drone");
+        Audio {
+            bank: Arc::new(ParamBank::new()),
+            arrangement: Arc::new(ParamBank::for_table(arrangement::params())),
+            heard: Arc::new(ParamBank::new()),
+            peak: Arc::new(AtomicU32::new(0)),
+            reduction: Arc::new(AtomicU32::new(1.0f32.to_bits())),
+            grains: Arc::new(AtomicU32::new(0)),
+            playing: Arc::new(AtomicBool::new(false)),
+            step: Arc::new(AtomicU32::new(0)),
+            grain_log: Engine::new(sample_rate, 8).grain_log(),
+            audition: Arc::new(Mutex::new(None)),
+            auditioning: Arc::new(AtomicBool::new(false)),
+            reversing: Arc::new(AtomicBool::new(false)),
+            playhead: Arc::new(AtomicU32::new(0)),
+            play_request: Arc::new(AtomicBool::new(false)),
+            steps: Arc::new(StepBank::new(tracker::Tracker::default().params())),
+            tracker: Mutex::new(tracker::Tracker::default()),
+            materials: Mutex::new(pool),
+            decoded: Mutex::new([(drone_id, Arc::clone(&drone))].into()),
+            drone,
+            feeding: Mutex::new([Some(drone_id); 2]),
+            readings: Arc::new(ReadingBank::new()),
+            presets: Mutex::new(presets::Presets::default()),
+            modulation: Mutex::new(modulation::Modulation::default()),
+            history: Mutex::new(history::History::default()),
+            swap: Arc::new(Mutex::new([None, None])),
+            retired: Arc::new(Mutex::new([None, None])),
+            mod_swap: Arc::new(Mutex::new(None)),
+            mod_retired: Arc::new(Mutex::new(None)),
+            timer: Arc::new(BlockTimer::new()),
+            reported_allocs: AtomicU64::new(0),
+            sample_rate,
+        }
+    }
+
+    /// What the `set_param` command does, without the Tauri wrapper.
+    fn edit(a: &Audio, id: &str, v: f32) {
+        a.record_param(&a.bank, id, v);
+        assert!(a.bank.set_by_id(id, v), "{id}");
+    }
+
+    #[test]
+    fn undo_puts_a_parameter_back_and_redo_changes_it_again() {
+        let a = headless();
+        let was = a.bank.get_by_id("grain.size").unwrap();
+        edit(&a, "grain.size", 123.0);
+        assert_eq!(a.bank.get_by_id("grain.size"), Some(123.0));
+        assert_eq!(a.undo_one().as_deref(), Some("Change Size"));
+        assert_eq!(a.bank.get_by_id("grain.size"), Some(was));
+        assert_eq!(a.redo_one().as_deref(), Some("Change Size"));
+        assert_eq!(a.bank.get_by_id("grain.size"), Some(123.0));
+        assert!(a.redo_one().is_none());
+    }
+
+    #[test]
+    fn dragging_a_slider_is_one_undo() {
+        let a = headless();
+        let was = a.bank.get_by_id("grain.size").unwrap();
+        for v in 50..150 {
+            edit(&a, "grain.size", v as f32);
+        }
+        assert_eq!(a.undo_one().as_deref(), Some("Change Size"));
+        assert_eq!(a.bank.get_by_id("grain.size"), Some(was));
+        assert!(a.undo_one().is_none(), "the drag was a single step");
+    }
+
+    #[test]
+    fn setting_a_value_to_what_it_already_is_is_not_an_edit() {
+        let a = headless();
+        let now = a.bank.get_by_id("grain.size").unwrap();
+        edit(&a, "grain.size", now);
+        assert!(a.undo_one().is_none());
+    }
+
+    #[test]
+    fn held_gestures_are_not_edits() {
+        let a = headless();
+        edit(&a, "tape.brake", 1.0);
+        edit(&a, "tape.reverse", 1.0);
+        assert!(a.undo_one().is_none());
+    }
+
+    #[test]
+    fn adding_and_removing_an_effect_undo_cleanly_and_keep_its_settings() {
+        use shard_dsp::fx::{self, Kind};
+        let a = headless();
+        a.record_edit(None, "Add Delay");
+        let n = fx::add_to_chain(&a.bank, Kind::Delay).unwrap();
+        edit(&a, &format!("fx.{n}.delay.time"), 777.0);
+        a.record_edit(None, "Remove Delay");
+        fx::remove_from_chain(&a.bank, n).unwrap();
+        assert!(fx::order_of(&a.bank).is_empty());
+
+        assert_eq!(a.undo_one().as_deref(), Some("Remove Delay"));
+        assert!(fx::order_of(&a.bank).contains(n), "back in the chain");
+        assert_eq!(a.bank.get_by_id(&format!("fx.{n}.delay.time")), Some(777.0));
+        assert_eq!(a.undo_one().as_deref(), Some("Change Time"));
+        assert_ne!(a.bank.get_by_id(&format!("fx.{n}.delay.time")), Some(777.0));
+        assert_eq!(a.undo_one().as_deref(), Some("Add Delay"));
+        assert!(fx::order_of(&a.bank).is_empty());
+    }
+
+    #[test]
+    fn the_arrangement_is_undone_with_the_patch() {
+        let a = headless();
+        a.record_param(&a.arrangement, "arrangement.track.gain", 0.25);
+        a.arrangement.set_by_id("arrangement.track.gain", 0.25);
+        edit(&a, "grain.size", 99.0);
+        a.undo_one();
+        a.undo_one();
+        assert_eq!(a.arrangement.get_by_id("arrangement.track.gain"), Some(1.0));
+    }
+
+    #[test]
+    fn undo_restores_the_tracker_the_engine_plays() {
+        let a = headless();
+        let mut t = a.tracker.lock().unwrap().clone();
+        t.tempo = 90.0;
+        a.record_edit(Some("tracker"), "Edit the steps");
+        apply_tracker(&a, t);
+        assert_eq!(a.tracker.lock().unwrap().tempo, 90.0);
+        a.undo_one();
+        assert_eq!(
+            a.tracker.lock().unwrap().tempo,
+            tracker::Tracker::default().tempo
+        );
+        assert_eq!(a.steps.load().tempo_bpm, tracker::Tracker::default().tempo);
+    }
+
+    #[test]
+    fn undo_restores_lfos_and_a_refused_edit_leaves_no_step() {
+        let a = headless();
+        a.edit_modulation(None, "Add LFO", |doc| {
+            doc.add_lfo();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(a.modulation.lock().unwrap().lfos.len(), 1);
+        // A refused edit changes nothing and is not a step.
+        let refused = a.edit_modulation(None, "Remove LFO", |doc| doc.remove_lfo(999_999));
+        assert!(refused.is_err());
+        assert_eq!(a.undo_one().as_deref(), Some("Add LFO"));
+        assert!(a.modulation.lock().unwrap().lfos.is_empty());
+        assert!(a.undo_one().is_none());
+    }
+
+    #[test]
+    fn a_new_edit_after_undo_drops_redo() {
+        let a = headless();
+        edit(&a, "grain.size", 10.0);
+        a.undo_one();
+        a.record_edit(None, "Something else");
+        assert!(a.redo_one().is_none());
     }
 }

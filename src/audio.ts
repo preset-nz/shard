@@ -118,6 +118,15 @@ export const fxRemove = (layer: ChainLevel, n: number) => invoke<void>('fx_remov
 export const fxMove = (layer: ChainLevel, n: number, by: number) =>
   invoke<boolean>('fx_move', { layer, n, by });
 
+/**
+ * Undo and redo (`design/undo.md`): step back or forward one edit. Each answers
+ * with the name of what it undid or redid, or null when there was nothing.
+ * The values arrive with the next poll; the tracker and the modulation are
+ * fetched again by the caller.
+ */
+export const undoEdit = () => invoke<string | null>('undo');
+export const redoEdit = () => invoke<string | null>('redo');
+
 export const meters = () => invoke<Meters>('meters');
 
 /** A material as the tree and the inspector show it. */
