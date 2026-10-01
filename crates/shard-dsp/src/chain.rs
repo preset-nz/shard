@@ -14,6 +14,7 @@ use crate::crush::{Crush, CrushParams};
 use crate::delay::{Delay, DelayParams};
 use crate::drive::{Drive, DriveParams, DriveType};
 use crate::filter::{Filter, FilterParams, FilterType};
+use crate::flanger::{Flanger, FlangerParams};
 use crate::params::ParamDef;
 use crate::ringmod::{RingMod, RingModParams};
 use crate::smooth::{OnePole, Ramp};
@@ -47,6 +48,12 @@ pub(crate) struct ChainSlots {
     pub chorus_spread: usize,
     pub chorus_lowcut: usize,
     pub chorus_eq: usize,
+    pub flanger_on: usize,
+    pub flanger_mix: usize,
+    pub flanger_manual: usize,
+    pub flanger_rate: usize,
+    pub flanger_depth: usize,
+    pub flanger_feedback: usize,
     pub delay_on: usize,
     pub delay_mix: usize,
     pub delay_time: usize,
@@ -87,6 +94,12 @@ impl ChainSlots {
             chorus_spread: at("chorus.spread"),
             chorus_lowcut: at("chorus.lowcut"),
             chorus_eq: at("chorus.eq"),
+            flanger_on: at("flanger.on"),
+            flanger_mix: at("flanger.mix"),
+            flanger_manual: at("flanger.manual"),
+            flanger_rate: at("flanger.rate"),
+            flanger_depth: at("flanger.depth"),
+            flanger_feedback: at("flanger.feedback"),
             delay_on: at("delay.on"),
             delay_mix: at("delay.mix"),
             delay_time: at("delay.time"),
@@ -117,6 +130,8 @@ pub(crate) struct ChainParams {
     pub ring_on: f32,
     pub chorus: ChorusParams,
     pub chorus_on: f32,
+    pub flanger: FlangerParams,
+    pub flanger_on: f32,
     pub delay: DelayParams,
     pub delay_on: f32,
     pub filter: FilterParams,
@@ -158,6 +173,14 @@ impl ChainParams {
                 mix: value(s.chorus_mix),
             },
             chorus_on: gate(s.chorus_on),
+            flanger: FlangerParams {
+                manual_ms: value(s.flanger_manual),
+                rate_hz: value(s.flanger_rate),
+                depth: value(s.flanger_depth),
+                feedback: value(s.flanger_feedback),
+                mix: value(s.flanger_mix),
+            },
+            flanger_on: gate(s.flanger_on),
             delay: DelayParams {
                 time_ms: value(s.delay_time),
                 feedback: value(s.delay_feedback),
@@ -183,6 +206,7 @@ struct ChainFades {
     crush: Ramp,
     ring: Ramp,
     chorus: Ramp,
+    flanger: Ramp,
     delay: Ramp,
     filter: Ramp,
 }
@@ -192,6 +216,7 @@ pub(crate) struct Chain {
     crush: Crush,
     ringmod: RingMod,
     chorus: Chorus,
+    flanger: Flanger,
     delay: Delay,
     filter: Filter,
     fades: ChainFades,
@@ -219,6 +244,7 @@ impl Chain {
             crush: Crush::new(sample_rate),
             ringmod: RingMod::new(sample_rate),
             chorus: Chorus::new(sample_rate),
+            flanger: Flanger::new(sample_rate),
             delay: Delay::new(sample_rate),
             filter: Filter::new(sample_rate),
             fades: ChainFades {
@@ -226,6 +252,7 @@ impl Chain {
                 crush: ramp(s.crush_on),
                 ring: ramp(s.ring_on),
                 chorus: ramp(s.chorus_on),
+                flanger: ramp(s.flanger_on),
                 delay: ramp(s.delay_on),
                 filter: ramp(s.filter_on),
             },
@@ -277,6 +304,14 @@ impl Chain {
         };
         let (l, r) = self.chorus.process(l, r, &chorus);
 
+        // Right after the chorus, which it is the close cousin of.
+        let flanger_on = self.fades.flanger.process(p.flanger_on);
+        let flanger = FlangerParams {
+            mix: p.flanger.mix * flanger_on,
+            ..p.flanger
+        };
+        let (l, r) = self.flanger.process(l, r, &flanger);
+
         // After the chorus, so the repeats carry its width. Its line keeps
         // running while it is off, so switching it on never plays stale audio.
         let delay_on = self.fades.delay.process(p.delay_on);
@@ -284,7 +319,9 @@ impl Chain {
             mix: p.delay.mix * delay_on,
             ..p.delay
         };
-        self.delay.process(l, r, &delay)
+        let (l, r) = self.delay.process(l, r, &delay);
+
+        (l, r)
     }
 
     /// The filter, then the output gain, for one frame. Switched off, the

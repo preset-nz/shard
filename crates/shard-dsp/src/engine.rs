@@ -166,6 +166,7 @@ impl ArrangementBlock {
             fx.ring_on = 0.0;
             fx.chorus_on = 0.0;
             fx.delay_on = 0.0;
+            fx.flanger_on = 0.0;
             fx.filter_on = 0.0;
             fx.gain = 1.0;
             track_gain = 1.0;
@@ -1516,7 +1517,7 @@ mod tests {
         // the signal; a generator, the same generator never switched on, which
         // proves nothing of it lingers.
         type Settings<'a> = &'a [(&'a str, f32)];
-        let cases: [(&str, &str, Settings, Settings, bool); 8] = [
+        let cases: [(&str, &str, Settings, Settings, bool); 9] = [
             ("material", "material.on", &[], &[], false),
             ("granular", "grain.on", &[], &[], false),
             (
@@ -1552,6 +1553,13 @@ mod tests {
                 "delay.on",
                 &[("delay.mix", 1.0)],
                 &[("delay.mix", 0.0)],
+                true,
+            ),
+            (
+                "flanger",
+                "flanger.on",
+                &[("flanger.mix", 1.0)],
+                &[("flanger.mix", 0.0)],
                 true,
             ),
             (

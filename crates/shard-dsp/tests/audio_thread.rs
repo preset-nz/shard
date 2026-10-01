@@ -187,6 +187,7 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
         "drive.on",
         "chorus.on",
         "delay.on",
+        "flanger.on",
     ] {
         bank.set_by_id(id, 1.0);
     }
