@@ -1,0 +1,53 @@
+---
+name: pattern-to-shard
+description: Turn a step pattern (a local model's JSON of step / midi_note / velocity / duration, or one written by hand) into a .shard document that opens in Shard, with FM or another generator playing it. Use when asked to "make a shard file from this pattern/bassline/beat", or to try what an LLM generated.
+---
+
+# Pattern to `.shard`
+
+The first, file-writing stage of the agent player
+(`~/rhizomatic-preset/guidance/projects/shard/design/agent-player.md`). The app
+will later do this live through tools; until then this makes a model's output
+audible.
+
+## Input
+
+The shape a prompted model returns (see the agent-player doc for the prompt):
+
+```json
+{"bpm": 87, "tracks": {"bass": [
+  {"step": 0, "midi_note": 29, "velocity": 120, "duration": 1.0, "comment": "..."}
+]}}
+```
+
+- `step` 0 to 63, sixteenths. `duration` in quarter notes, so 0.25 is one step.
+- Trust `midi_note`, not the comments. Models name notes wrongly (28 is E1, not Eb1).
+
+## Run
+
+```sh
+python3 .claude/skills/pattern-to-shard/pattern_to_shard.py pattern.json ~/Downloads/name.shard \
+  --root 29 --set fm.ratio=1 --set fm.index=2.4 --set filter.on=1 --set filter.cutoff=420
+```
+
+What it does:
+- **One track.** One track sounds today. `--track bass` picks one; the default is the first.
+- **FM plays it.** `material.on` 0, `fm.on` 1, `fm.freq` the root's frequency.
+  Step pitch is semitones from the root, within ±24. `--root` defaults to the lowest note.
+- **Notes hold.** `patch.length` is 2 (Hold) and each step's `hold` is its duration × 4, from 1 to 16.
+- **`--set id=value`** for any patch parameter. Ids, ranges and step names are in
+  `crates/shard-dsp/src/params.rs`. FM type, filter type and the like are stepped indices.
+- **Sparse by default.** Ids left out keep their defaults, and Shard says "N left at
+  default" on open. For a clean open, pass `--defaults` a dump of every patch id. To make one,
+  add a throwaway `crates/shard-dsp/examples/` that prints
+  `P\t{id}\t{default}` for `shard_dsp::params::PARAMS`, run it, then delete it.
+- The arrangement is left empty, so it stays at its defaults.
+
+## Check
+
+Open the file in Shard (`open ~/Downloads/name.shard`) and press play. To check
+it without the app, a throwaway test in `src-tauri/src/patch.rs` can call
+`Document::from_json` and `patch.apply` on a fresh `ParamBank` and assert that
+`unknown` is empty and `tracker.clone().sanitised() == tracker`. Revert it afterwards.
+
+Save files to `~/Downloads/` unless told otherwise. Renders go to `~/rhizomatic-preset/renders/`.
