@@ -400,6 +400,11 @@ def pct(rows, key):
 
 def report(args):
     rows = [json.loads(l) for p in args.files for l in open(p) if l.strip()]
+    # Re-score from the saved answers, so a fixed check applies to old runs.
+    specs = {s["id"]: s for s in (json.loads(l) for l in open(HERE / "prompts.jsonl") if l.strip())}
+    for r in rows:
+        if r.get("pattern") and r["prompt"] in specs:
+            r["checks"] = check(r["pattern"], specs[r["prompt"]])
     groups = {}
     for r in rows:
         groups.setdefault((r["model"], r["variant"], r["think"]), []).append(r)
