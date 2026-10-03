@@ -109,3 +109,10 @@ package: build
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
         zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-LICENSES)
     echo "Packaged: $outdir/${product}-v${version}.zip"
+
+# Measure local models writing tracker patterns against LM Studio. Pass
+# arguments through, e.g. `just eval-agent run --model qwen/qwen3.6-35b-a3b
+# --think off on`, then `just eval-agent report evals/agent/results/*.jsonl`.
+[group('eval')]
+eval-agent *args:
+    python3 evals/agent/agent_eval.py {{args}}

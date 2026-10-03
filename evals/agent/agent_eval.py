@@ -1,0 +1,318 @@
+#!/usr/bin/env python3
+"""Measure local models writing tracker patterns.
+
+    agent_eval.py run --model qwen/qwen3.6-35b-a3b --variant fewshot schema --think off on --reps 3
+    agent_eval.py report results/*.jsonl
+
+`run` asks every prompt in `prompts.jsonl` under every model, prompt variant
+and reasoning setting, `--reps` times, and appends one JSON line per answer to
+`results/<timestamp>.jsonl` as it goes, so a stopped run keeps what it has.
+`report` prints a Markdown summary of any number of result files.
+
+The hard checks mirror what Shard's tracker accepts (`Tracker::sanitised`): a
+step inside the track, pitch within 24 semitones of the track's root, a hold of
+at most 16 steps, velocity 0 to 127, and one note per step, since a track is
+monophonic. The rest describes the music rather than judging it.
+
+Talks to an OpenAI-compatible server, LM Studio by default. Standard library only.
+"""
+
+import argparse
+import datetime
+import json
+import pathlib
+import statistics
+import subprocess
+import sys
+import time
+import urllib.request
+
+HERE = pathlib.Path(__file__).parent
+PITCH_RANGE = 24
+HOLD_MAX = 16
+
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "genre": {"type": "string"},
+        "bpm": {"type": "integer"},
+        "time_signature": {"type": "string"},
+        "tracks": {
+            "type": "object",
+            "additionalProperties": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "step": {"type": "integer"},
+                        "midi_note": {"type": "integer"},
+                        "velocity": {"type": "integer"},
+                        "duration": {"type": "number"},
+                    },
+                    "required": ["step", "midi_note", "velocity", "duration"],
+                },
+            },
+        },
+    },
+    "required": ["bpm", "tracks"],
+}
+
+KEYS = {"C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6,
+        "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11}
+MINOR = [0, 2, 3, 5, 7, 8, 10]
+MAJOR = [0, 2, 4, 5, 7, 9, 11]
+DRUM_WORDS = ("kick", "snare", "hat", "perc", "clap", "drum", "tom", "cymbal", "rim")
+
+
+def power():
+    try:
+        out = subprocess.run(["pmset", "-g", "batt"], capture_output=True, text=True).stdout
+        return "ac" if "AC Power" in out else "battery"
+    except OSError:
+        return None
+
+
+def ask(base, model, system, prompt, think, schema, temperature):
+    body = {
+        "model": model,
+        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    if not think:
+        body["reasoning_effort"] = "none"
+    if schema:
+        body["response_format"] = {
+            "type": "json_schema",
+            "json_schema": {"name": "pattern", "strict": True, "schema": SCHEMA},
+        }
+    req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode(),
+                                 headers={"Content-Type": "application/json"})
+    start = time.monotonic()
+    first = first_answer = None
+    answer, reasoning, usage, chunks = [], [], None, 0
+    with urllib.request.urlopen(req, timeout=900) as resp:
+        for raw in resp:
+            line = raw.decode().strip()
+            if not line.startswith("data:"):
+                continue
+            data = line[5:].strip()
+            if data == "[DONE]":
+                break
+            msg = json.loads(data)
+            usage = msg.get("usage") or usage
+            for choice in msg.get("choices", []):
+                delta = choice.get("delta", {})
+                r = delta.get("reasoning_content") or delta.get("reasoning")
+                c = delta.get("content")
+                if (r or c) and first is None:
+                    first = time.monotonic()
+                if r:
+                    reasoning.append(r)
+                    chunks += 1
+                if c:
+                    if first_answer is None:
+                        first_answer = time.monotonic()
+                    answer.append(c)
+                    chunks += 1
+    end = time.monotonic()
+    completion = (usage or {}).get("completion_tokens", chunks)
+    gen = end - (first or end)
+    return {
+        "text": "".join(answer),
+        "reasoning_chars": len("".join(reasoning)),
+        "first_token_s": round((first or end) - start, 2),
+        "first_answer_s": round((first_answer or end) - start, 2),
+        "total_s": round(end - start, 2),
+        "prompt_tokens": (usage or {}).get("prompt_tokens"),
+        "completion_tokens": completion,
+        "tok_per_s": round(completion / gen, 1) if gen > 0 else None,
+    }
+
+
+def parse(text):
+    text = text.strip()
+    if "</think>" in text:
+        text = text.split("</think>", 1)[1].strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1].rsplit("```", 1)[0]
+    return json.loads(text)
+
+
+def in_key(notes, key):
+    tonic, mode = key.split()
+    scale = MINOR if mode.lower() == "minor" else MAJOR
+    root = KEYS[tonic]
+    hits = [((n - root) % 12) in scale for n in notes]
+    return sum(hits) / len(hits) if hits else None
+
+
+def check(pattern, spec):
+    """Hard checks (would Shard take it as asked?) and descriptions."""
+    out = {"valid_json": True}
+    tracks = pattern.get("tracks")
+    if not isinstance(tracks, dict) or not tracks:
+        out["schema_ok"] = False
+        return out
+    try:
+        notes = {name: [(int(n["step"]), int(n["midi_note"]), int(n["velocity"]),
+                         float(n.get("duration", 0.25))) for n in ns]
+                 for name, ns in tracks.items()}
+    except (KeyError, TypeError, ValueError):
+        out["schema_ok"] = False
+        return out
+    out["schema_ok"] = True
+    steps = spec.get("steps", 16)
+    want = spec["tracks"]
+    names = [n.lower() for n in notes]
+    out["track_count"] = len(notes)
+    out["extra_tracks"] = max(0, len(notes) - want)
+    out["missing_tracks"] = max(0, want - len(notes))
+    if spec.get("names"):
+        out["names_ok"] = all(any(w in n for n in names) for w in spec["names"])
+    out["bpm_ok"] = pattern.get("bpm") == spec["bpm"] if "bpm" in spec else None
+
+    out_of_range = collisions = 0
+    for ns in notes.values():
+        seen = set()
+        if ns:
+            low = min(n[1] for n in ns)
+        for step, note, vel, dur in ns:
+            if not 0 <= step < steps:
+                out_of_range += 1
+            if not 0 <= vel <= 127:
+                out_of_range += 1
+            if note - low > 2 * PITCH_RANGE:
+                out_of_range += 1
+            if dur * 4 > HOLD_MAX:
+                out_of_range += 1
+            if step in seen:
+                collisions += 1
+            seen.add(step)
+    out["out_of_range"] = out_of_range
+    out["collisions"] = collisions
+    out["hard_pass"] = bool(
+        out["extra_tracks"] == 0 and out["missing_tracks"] == 0
+        and out.get("names_ok", True) and out["bpm_ok"] is not False
+        and out_of_range == 0 and collisions == 0
+    )
+
+    pitched = [n for name, ns in notes.items() if not any(w in name.lower() for w in DRUM_WORDS)
+               for n in ns]
+    if spec.get("key") and pitched:
+        out["in_key"] = round(in_key([n[1] for n in pitched], spec["key"]), 2)
+    all_notes = [n for ns in notes.values() for n in ns]
+    out["notes"] = len(all_notes)
+    out["density"] = round(len(all_notes) / (len(notes) * steps), 2)
+    vels = [n[2] for n in all_notes]
+    out["velocity_sd"] = round(statistics.pstdev(vels), 1) if vels else 0
+    out["distinct_pitches"] = len({n[1] for n in pitched})
+    return out
+
+
+def run(args):
+    prompts = [json.loads(l) for l in open(HERE / "prompts.jsonl") if l.strip()]
+    if args.only:
+        prompts = [p for p in prompts if p["id"] in args.only]
+    outdir = HERE / "results"
+    outdir.mkdir(exist_ok=True)
+    path = outdir / f"{datetime.datetime.now():%Y-%m-%dT%H%M%S}.jsonl"
+    cells = [(m, v, t) for m in args.model for v in args.variant for t in args.think]
+    total = len(cells) * len(prompts) * args.reps
+    done = 0
+    for model, variant, think in cells:
+        system = (HERE / "variants" / f"{variant}.txt").read_text()
+        schema = variant == "schema"
+        for rep in range(args.reps):
+            for spec in prompts:
+                done += 1
+                row = {"model": model, "variant": variant, "think": think, "prompt": spec["id"],
+                       "rep": rep, "power": power(), "temperature": args.temperature,
+                       "at": datetime.datetime.now().isoformat(timespec="seconds")}
+                try:
+                    row.update(ask(args.base, model, system, spec["prompt"], think == "on",
+                                   schema, args.temperature))
+                    try:
+                        row["pattern"] = parse(row["text"])
+                        row["checks"] = check(row["pattern"], spec)
+                    except (json.JSONDecodeError, IndexError, AttributeError):
+                        row["checks"] = {"valid_json": False, "hard_pass": False}
+                except Exception as e:  # a failed call is a result too
+                    row["error"] = repr(e)
+                    row["checks"] = {"valid_json": False, "hard_pass": False}
+                with open(path, "a") as f:
+                    f.write(json.dumps(row) + "\n")
+                c = row["checks"]
+                print(f"[{done}/{total}] {model} {variant} think={think} {spec['id']} "
+                      f"{row.get('total_s', '-')}s pass={c.get('hard_pass')} "
+                      f"tracks={c.get('track_count')} coll={c.get('collisions')}", flush=True)
+    print(path)
+
+
+def mean(xs):
+    xs = [x for x in xs if x is not None]
+    return round(statistics.mean(xs), 1) if xs else None
+
+
+def pct(rows, key):
+    xs = [r["checks"].get(key) for r in rows]
+    xs = [x for x in xs if x is not None]
+    return f"{100 * sum(bool(x) for x in xs) / len(xs):.0f} %" if xs else "–"
+
+
+def report(args):
+    rows = [json.loads(l) for p in args.files for l in open(p) if l.strip()]
+    groups = {}
+    for r in rows:
+        groups.setdefault((r["model"], r["variant"], r["think"]), []).append(r)
+    print("| Model | Variant | Think | n | Valid | Hard pass | Extra tracks | Collisions | Prompt tok | First answer | Total | Tok/s |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    for (m, v, t), rs in sorted(groups.items()):
+        extra = sum(1 for r in rs if r["checks"].get("extra_tracks"))
+        print(f"| {m.split('/')[-1]} | {v} | {t} | {len(rs)} | {pct(rs, 'valid_json')} | "
+              f"{pct(rs, 'hard_pass')} | {extra}/{len(rs)} | "
+              f"{mean([r['checks'].get('collisions') for r in rs])} | "
+              f"{mean([r.get('prompt_tokens') for r in rs])} | "
+              f"{mean([r.get('first_answer_s') for r in rs])} s | "
+              f"{mean([r.get('total_s') for r in rs])} s | {mean([r.get('tok_per_s') for r in rs])} |")
+    print()
+    print("| Prompt | Think | n | Hard pass | Tracks right | Collisions | Notes | Density | Vel. sd | In key | Total |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|")
+    by = {}
+    for r in rows:
+        by.setdefault((r["prompt"], r["think"]), []).append(r)
+    for (p, t), rs in sorted(by.items()):
+        right = sum(1 for r in rs if r["checks"].get("extra_tracks") == 0
+                    and r["checks"].get("missing_tracks") == 0)
+        print(f"| {p} | {t} | {len(rs)} | {pct(rs, 'hard_pass')} | {right}/{len(rs)} | "
+              f"{mean([r['checks'].get('collisions') for r in rs])} | "
+              f"{mean([r['checks'].get('notes') for r in rs])} | "
+              f"{mean([r['checks'].get('density') for r in rs])} | "
+              f"{mean([r['checks'].get('velocity_sd') for r in rs])} | "
+              f"{mean([r['checks'].get('in_key') for r in rs])} | "
+              f"{mean([r.get('total_s') for r in rs])} s |")
+    power_states = sorted({r.get("power") or "?" for r in rows})
+    print(f"\nPower: {', '.join(power_states)}. {len(rows)} answers.")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    sub = ap.add_subparsers(dest="cmd", required=True)
+    r = sub.add_parser("run")
+    r.add_argument("--model", nargs="+", required=True)
+    r.add_argument("--variant", nargs="+", default=["fewshot"],
+                   help="files in variants/; 'schema' also sends a JSON schema")
+    r.add_argument("--think", nargs="+", default=["off"], choices=["off", "on"])
+    r.add_argument("--reps", type=int, default=3)
+    r.add_argument("--only", nargs="+", help="prompt ids")
+    r.add_argument("--temperature", type=float, default=0.7)
+    r.add_argument("--base", default="http://localhost:1234/v1")
+    p = sub.add_parser("report")
+    p.add_argument("files", nargs="+")
+    args = ap.parse_args()
+    (run if args.cmd == "run" else report)(args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

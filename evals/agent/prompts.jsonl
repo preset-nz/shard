@@ -1,0 +1,6 @@
+{"id": "bass-claustro", "prompt": "a bass line that is claustrophobic, 87 bpm, 16 steps", "tracks": 1, "steps": 16, "bpm": 87}
+{"id": "bass-acid-drop", "prompt": "a bass line with a bass drop, grim, acidic", "tracks": 1, "steps": 16}
+{"id": "lead-dminor", "prompt": "a slow, mournful lead melody in D minor, 70 bpm, 32 steps", "tracks": 1, "steps": 32, "bpm": 70, "key": "D minor"}
+{"id": "two-kick-bass", "prompt": "dark trip-hop, 85 bpm, 16 steps. One track per voice: kick, bass.", "tracks": 2, "names": ["kick", "bass"], "steps": 16, "bpm": 85}
+{"id": "four-acid", "prompt": "a grim acid groove, 132 bpm, 16 steps. One track per voice: kick, snare, hat, bass.", "tracks": 4, "names": ["kick", "snare", "hat", "bass"], "steps": 16, "bpm": 132}
+{"id": "six-illbient", "prompt": "industrial illbient in F minor, 95 bpm, 32 steps. One track per voice: kick, snare, hat, perc, bass, lead.", "tracks": 6, "names": ["kick", "snare", "hat", "perc", "bass", "lead"], "steps": 32, "bpm": 95, "key": "F minor"}
