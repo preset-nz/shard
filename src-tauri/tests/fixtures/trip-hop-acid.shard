@@ -1,0 +1,710 @@
+{
+  "version": 3,
+  "tracker": {
+    "tempo": 82.0,
+    "swing": 0.12,
+    "tracks": [
+      {
+        "on": true,
+        "length": 32,
+        "steps": [
+          {
+            "on": true,
+            "pitch": 0,
+            "hold": 2,
+            "velocity": 120,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 0,
+            "hold": 1,
+            "velocity": 80,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 12,
+            "hold": 1,
+            "velocity": 105,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 0,
+            "hold": 1,
+            "velocity": 75,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 3,
+            "hold": 1,
+            "velocity": 95,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 0,
+            "hold": 2,
+            "velocity": 115,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 15,
+            "hold": 1,
+            "velocity": 85,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 10,
+            "hold": 1,
+            "velocity": 95,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 0,
+            "hold": 2,
+            "velocity": 120,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 12,
+            "hold": 1,
+            "velocity": 90,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 0,
+            "hold": 1,
+            "velocity": 75,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 3,
+            "hold": 1,
+            "velocity": 100,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 5,
+            "hold": 1,
+            "velocity": 80,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 7,
+            "hold": 2,
+            "velocity": 115,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 12,
+            "hold": 1,
+            "velocity": 90,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 10,
+            "hold": 1,
+            "velocity": 85,
+            "nudge": 0
+          },
+          {
+            "on": true,
+            "pitch": 3,
+            "hold": 1,
+            "velocity": 70,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          },
+          {
+            "on": false,
+            "pitch": 0,
+            "hold": 0,
+            "velocity": 127,
+            "nudge": 0
+          }
+        ]
+      }
+    ],
+    "kit": {
+      "on": true,
+      "length": 32,
+      "kick": [
+        110,
+        0,
+        0,
+        0,
+        0,
+        0,
+        80,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        110,
+        0,
+        110,
+        0,
+        0,
+        0,
+        0,
+        0,
+        80,
+        0,
+        0,
+        0,
+        0,
+        70,
+        0,
+        0,
+        100,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "snare": [
+        0,
+        0,
+        35,
+        0,
+        0,
+        0,
+        0,
+        0,
+        110,
+        0,
+        35,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        35,
+        0,
+        0,
+        0,
+        0,
+        0,
+        110,
+        0,
+        35,
+        0,
+        0,
+        0,
+        0,
+        40,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "hat": [
+        80,
+        0,
+        35,
+        0,
+        80,
+        0,
+        35,
+        0,
+        80,
+        0,
+        35,
+        0,
+        80,
+        0,
+        35,
+        0,
+        80,
+        0,
+        35,
+        0,
+        80,
+        0,
+        35,
+        0,
+        80,
+        0,
+        35,
+        0,
+        105,
+        0,
+        35,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  },
+  "arrangement": {
+    "arrangement.kit.gain": 0.9,
+    "arrangement.track.gain": 0.8
+  },
+  "patch": {
+    "params": {
+      "env.decay": 220.0,
+      "env.release": 60.0,
+      "env.sustain": 0.35,
+      "filter.cutoff": 420.0,
+      "filter.on": 1.0,
+      "filter.resonance": 0.82,
+      "filter.type": 0.0,
+      "fm.feedback": 0.45,
+      "fm.freq": 87.307,
+      "fm.gain": 0.8,
+      "fm.index": 3.2,
+      "fm.on": 1.0,
+      "fm.ratio": 1.0,
+      "material.on": 0.0,
+      "patch.length": 2.0,
+      "fx.0.drive.on": 1.0,
+      "fx.0.drive.mix": 0.6,
+      "fx.0.drive.amount": 20.0,
+      "fx.order.0": 1.0
+    },
+    "envelopes": [
+      {
+        "id": 1,
+        "name": "Filter pluck",
+        "attack": 2.0,
+        "decay": 180.0,
+        "sustain": 0.1,
+        "release": 80.0
+      }
+    ],
+    "links": {
+      "filter.cutoff": {
+        "source": 1,
+        "lo": 0.36,
+        "hi": 0.74
+      }
+    },
+    "next_modulator_id": 2
+  }
+}

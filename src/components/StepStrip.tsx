@@ -9,6 +9,7 @@ import {
   type Tracker,
   type TrackerEdit,
 } from '@/audio';
+import { NodeSwitch } from '@/components/NodeCard';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
 
@@ -432,18 +433,10 @@ function KitGrid({
   return (
     <div className={`flex basis-full flex-col gap-2 ${kit.on ? '' : 'opacity-60'}`}>
       <div className="flex items-center gap-4">
-        <button
-          type="button"
-          aria-pressed={kit.on}
-          title={kit.on ? 'Drums on. Click to mute them.' : 'Drums off. Click to play them.'}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => onChange({ ...kit, on: !kit.on })}
-          className={`rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
-            kit.on ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
-          }`}
-        >
-          Drums
-        </button>
+        <span className="flex items-center gap-2">
+          <span className="text-[11px] font-semibold uppercase tracking-wider">Drums</span>
+          <NodeSwitch label="Drums" on={kit.on} onSwitch={(on) => onChange({ ...kit, on })} />
+        </span>
         <fieldset className="flex items-center gap-0.5" aria-label="Drum length">
           {LENGTHS.map((n) => (
             <button

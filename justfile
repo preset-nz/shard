@@ -49,6 +49,13 @@ still file="":
 render out="shard-render.wav" file="":
     cargo run --release -p shard-play -- {{file}} --render {{out}}
 
+# End to end: the trip-hop fixture (src-tauri/tests/fixtures) loaded as the app
+# loads it and checked, then rendered to ~/rhizomatic-preset/renders/ to hear.
+[group('quality')]
+e2e:
+    mkdir -p ~/rhizomatic-preset/renders
+    SHARD_RENDERS=~/rhizomatic-preset/renders cargo test -p shard e2e -- --nocapture
+
 [group('quality')]
 check:
     ./node_modules/.bin/tsc --noEmit
