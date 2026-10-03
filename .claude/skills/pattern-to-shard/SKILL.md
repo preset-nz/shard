@@ -23,6 +23,17 @@ The shape a prompted model returns (see the agent-player doc for the prompt):
 - `step` 0 to 63, sixteenths. `duration` in quarter notes, so 0.25 is one step.
 - Trust `midi_note`, not the comments. Models name notes wrongly (28 is E1, not Eb1).
 
+## Ask a model
+
+`ask_model.py` sends `groove-engine.txt` (the system prompt from the first trial) and a request to LM Studio, prints timings and a JSON check, and writes the pattern:
+
+```sh
+python3 .claude/skills/pattern-to-shard/ask_model.py "a bass line that is claustrophobic, 87 bpm, 16 steps" \
+  --model qwen/qwen3.6-35b-a3b --no-think --out pattern.json
+```
+
+`--no-think` sends `reasoning_effort: "none"`, which takes Qwen from about a minute to about six seconds. Setup and measurements: `~/rhizomatic-preset/guidance/runbooks/local-llm-lm-studio.md`.
+
 ## Run
 
 ```sh
@@ -31,7 +42,7 @@ python3 .claude/skills/pattern-to-shard/pattern_to_shard.py pattern.json ~/Downl
 ```
 
 What it does:
-- **One track.** One track sounds today. `--track bass` picks one; the default is the first.
+- **One track.** One track sounds today. `--track drums` picks one; the default is `bass`, else the first. Models add tracks nobody asked for.
 - **FM plays it.** `material.on` 0, `fm.on` 1, `fm.freq` the root's frequency.
   Step pitch is semitones from the root, within ±24. `--root` defaults to the lowest note.
 - **Notes hold.** `patch.length` is 2 (Hold) and each step's `hold` is its duration × 4, from 1 to 16.

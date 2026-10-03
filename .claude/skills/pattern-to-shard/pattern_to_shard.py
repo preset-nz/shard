@@ -6,8 +6,8 @@ The pattern is the shape a prompted local model returns:
     {"bpm": 87, "tracks": {"bass": [
         {"step": 0, "midi_note": 29, "velocity": 120, "duration": 1.0}, ...]}}
 
-One track sounds in Shard today, so one track is taken (`--track`, default the
-first). Pitches are semitones from the FM operator's frequency, which is set to
+One track sounds in Shard today, so one track is taken (`--track`, default `bass`,
+else the first). Pitches are semitones from the FM operator's frequency, which is set to
 the root note. Durations are in quarter notes, so 0.25 is one step; they
 become step holds and the patch's Length is set to Hold.
 
@@ -65,7 +65,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("pattern", help="the model's JSON")
     ap.add_argument("out", help="the .shard to write")
-    ap.add_argument("--track", help="which track to take; default the first")
+    ap.add_argument("--track", help="which track to take; default bass, else the first")
     ap.add_argument("--root", type=int, help="MIDI root note; default the lowest note")
     ap.add_argument("--swing", type=float, default=0.0)
     ap.add_argument("--set", action="append", default=[], metavar="ID=VALUE",
@@ -74,7 +74,8 @@ def main():
     args = ap.parse_args()
 
     pattern = json.load(open(args.pattern))
-    track = args.track or next(iter(pattern["tracks"]))
+    tracks = pattern["tracks"]
+    track = args.track or ("bass" if "bass" in tracks else next(iter(tracks)))
     root = args.root if args.root is not None else min(
         int(n["midi_note"]) for n in pattern["tracks"][track]
     )
