@@ -66,13 +66,21 @@ fn a_kick_and_a_hat_on_one_step_both_sound() {
     let both = render_steps(drums_alone(&[(KICK, 0), (HAT, 0)], 16), frames);
     let energy = |x: &[f32]| x.iter().map(|s| s * s).sum::<f32>();
     assert!(energy(&kick) > 1.0 && energy(&hat) > 0.1);
-    // Neither cuts the other: together is each one's sound added.
-    let worst = both
-        .iter()
-        .zip(kick.iter().zip(&hat))
-        .map(|(b, (k, h))| (b - (k + h)).abs())
-        .fold(0.0f32, f32::max);
-    assert!(worst < 1e-4, "kick plus hat is off by {worst}");
+    // Neither cuts the other. The kit's glue saturates the sum, so together
+    // is not exactly each added; but the hat's fizz (how much the signal
+    // jumps sample to sample) and the kick's low end (a 2 ms moving average)
+    // both come through.
+    let fizz = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>();
+    let low = |x: &[f32]| {
+        let n = 96;
+        energy(
+            &x.windows(n)
+                .map(|w| w.iter().sum::<f32>() / n as f32)
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert!(fizz(&both) > fizz(&hat) * 0.6, "the kick cut the hat");
+    assert!(low(&both) > low(&kick) * 0.6, "the hat cut the kick");
 }
 
 #[test]
@@ -151,4 +159,19 @@ fn a_kit_switched_off_plays_nothing() {
     let p = drums_alone(&[(KICK, 0), (KICK, 4)], 16);
     let off = ParamBank::for_table(arrangement::params());
     assert!(render_with(p, 48_000, &off).iter().all(|s| *s == 0.0));
+}
+
+#[test]
+fn the_default_beat_is_loud_enough_to_stand_beside_a_patch() {
+    // Georg, 2026-10-04: "the drums are just too quiet, even with 200% gain
+    // on drums and master". The voices peaked near full scale but fell away
+    // so fast their level was -20 dBFS, and the limiter held the peaks, so
+    // no fader could help. A drum loop sits nearer -12.
+    let mut p = drums_alone(&[], 16);
+    p.kit = shard_dsp::kit::KitPattern::default();
+    let out = render_steps(p, 96_000);
+    let rms = (out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32).sqrt();
+    let db = 20.0 * rms.log10();
+    assert!(db > -15.0, "the default beat is {db:.1} dBFS");
+    assert!(out.iter().all(|s| s.abs() <= 1.0));
 }

@@ -128,6 +128,9 @@ impl Default for KitParams {
     }
 }
 
+/// How hard each drum drives its saturation. A drum never reaches one.
+const GLUE: f32 = 1.8;
+
 /// Below this a voice is done and plays an exact zero: −80 dB.
 const SILENT: f32 = 1e-4;
 /// A voice cut by its own next hit fades out over this, so the cut does not
@@ -153,9 +156,8 @@ struct Voice {
     rest: f32,
     /// Cycles, 0 to 1.
     phase: f32,
-    /// One-pole lowpass states, for the noise's highpass.
+    /// A one-pole lowpass state, for the noise's highpass.
     lp1: f32,
-    lp2: f32,
 }
 
 /// A voice's next sample, given a noise sample.
@@ -183,11 +185,10 @@ fn snare(v: &mut Voice, noise: f32, hp: f32) -> f32 {
 }
 
 fn hat(v: &mut Voice, noise: f32, hp: f32) -> f32 {
-    // Two highpasses, so only the fizz is left.
+    // One highpass: the fizz, with enough of it left to be heard. Two threw
+    // away all but a fifth of the noise.
     v.lp1 += hp * (noise - v.lp1);
-    let once = noise - v.lp1;
-    v.lp2 += hp * (once - v.lp2);
-    (once - v.lp2) * v.amp
+    (noise - v.lp1) * v.amp
 }
 
 const RENDER: [Render; VOICES] = [kick, snare, hat];
@@ -224,7 +225,7 @@ impl Kit {
             tail_left: [0.0; VOICES],
             noise: Rng::new(0x005E_EDD2),
             snare_hp: one_pole(1_200.0, sample_rate),
-            hat_hp: one_pole(7_000.0, sample_rate),
+            hat_hp: one_pole(5_000.0, sample_rate),
         }
     }
 
@@ -254,9 +255,11 @@ impl Kit {
         let tune = (p.tune / 12.0).exp2();
         let decay = p.decay.clamp(0.1, 10.0);
         let voice = &mut self.voices[v];
+        // Squared, as velocity usually maps to level, so the glue after the
+        // sum does not flatten a ghost note into a normal one.
         *voice = Voice {
             sounding: true,
-            amp: velocity,
+            amp: velocity * velocity,
             ..Voice::default()
         };
         match v {
@@ -266,25 +269,31 @@ impl Kit {
                 voice.bend_fall = fall_over(0.15, sr);
                 voice.tone = 0.5;
                 voice.tone_fall = fall_over(0.008, sr);
-                voice.fall = fall_over(0.4 * decay, sr);
-                voice.amp *= 0.8;
+                voice.fall = fall_over(0.6 * decay, sr);
+                voice.amp *= 0.9;
             }
             SNARE => {
                 voice.rest = 185.0 * tune / sr;
                 voice.tone = 0.5;
                 voice.tone_fall = fall_over(0.12 * decay, sr);
-                voice.fall = fall_over(0.25 * decay, sr);
-                voice.amp *= 0.7;
+                voice.fall = fall_over(0.35 * decay, sr);
+                voice.amp *= 0.8;
             }
             _ => {
-                voice.fall = fall_over(0.1 * decay, sr);
-                voice.amp *= 0.6;
+                voice.fall = fall_over(0.12 * decay, sr);
+                voice.amp *= 1.1;
             }
         }
     }
 
-    /// One frame, mono. Voices are summed; a voice that has fallen below
-    /// `SILENT` stops and plays an exact zero.
+    /// One frame, mono. Each drum is glued by a soft saturation on its own,
+    /// as if on its own channel, then the three are summed. The glue lifts the
+    /// body of each hit against its peak, so the kit holds its own beside a
+    /// sustained patch rather than being only transients the limiter takes
+    /// away. On its own channel, a loud kick cannot squash the hat on top of
+    /// it, as one shared saturation did. Each drum stays under one; the sum
+    /// can pass it, and the arrangement's limiter holds it. A voice that has
+    /// fallen below `SILENT` stops and plays an exact zero.
     #[inline]
     pub fn process(&mut self) -> f32 {
         if !self.sounding() {
@@ -295,19 +304,23 @@ impl Kit {
         let cut = 1.0 / (CUT_MS * 0.001 * self.sample_rate);
         let mut out = 0.0;
         for v in 0..VOICES {
+            // This drum's own channel: its tail fading out and its hit.
+            let mut drum = 0.0;
             if self.tail_left[v] > 0.0 {
                 let gain = self.tail_left[v] * cut;
-                out += RENDER[v](&mut self.tails[v], noise, hp[v]) * gain;
+                drum += RENDER[v](&mut self.tails[v], noise, hp[v]) * gain;
                 self.tail_left[v] = (self.tail_left[v] - 1.0).max(0.0);
             }
             let voice = &mut self.voices[v];
-            if !voice.sounding {
-                continue;
+            if voice.sounding {
+                drum += RENDER[v](voice, noise, hp[v]);
+                voice.amp *= voice.fall;
+                if voice.amp < SILENT {
+                    voice.sounding = false;
+                }
             }
-            out += RENDER[v](voice, noise, hp[v]);
-            voice.amp *= voice.fall;
-            if voice.amp < SILENT {
-                voice.sounding = false;
+            if drum != 0.0 {
+                out += (drum * GLUE).tanh();
             }
         }
         out
@@ -353,8 +366,10 @@ mod tests {
                 .iter()
                 .fold(0.0f32, |m, s| m.max(s.abs()))
         };
+        // Half velocity is about 7 dB down, through the curve and the glue.
         let (soft, full) = (peak(0.5), peak(1.0));
-        assert!((soft / full - 0.5).abs() < 0.01, "{soft} against {full}");
+        assert!(soft < full * 0.55, "{soft} against {full}");
+        assert!(soft > full * 0.3, "{soft} against {full}");
     }
 
     #[test]
