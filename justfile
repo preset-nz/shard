@@ -56,6 +56,13 @@ e2e:
     mkdir -p ~/rhizomatic-preset/renders
     SHARD_RENDERS=~/rhizomatic-preset/renders cargo test -p shard e2e -- --nocapture
 
+# Any .shard measured as the agent references were tuned: loads clean, level,
+# drums against the track. Renders eight bars to ~/rhizomatic-preset/renders/.
+[group('eval')]
+shard-check file:
+    mkdir -p ~/rhizomatic-preset/renders
+    SHARD_FILE="$(cd '{{invocation_directory()}}' && realpath '{{file}}')" SHARD_RENDERS=~/rhizomatic-preset/renders cargo test -q -p shard check_a_shard_file -- --nocapture
+
 [group('quality')]
 check:
     ./node_modules/.bin/tsc --noEmit

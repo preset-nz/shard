@@ -246,3 +246,71 @@ fn the_drums_are_heard_over_the_bass() {
         "the drums add {ratio:.2} of the bass's level to the mix"
     );
 }
+
+#[test]
+fn check_a_shard_file() {
+    // `just shard-check <file>`: any document, measured the way the
+    // references in `evals/agent/references/` were tuned. Whether it loads
+    // clean, how loud it is, and how the drums sit against the track; then
+    // eight bars rendered to listen to.
+    let Ok(path) = std::env::var("SHARD_FILE") else {
+        return;
+    };
+    let text = std::fs::read_to_string(&path).expect("the file reads");
+    let doc = Document::from_json(&text).expect("the file parses");
+    let bank = ParamBank::new();
+    let report = doc.patch.apply(&bank);
+    let arr = ParamBank::for_table(arrangement::params());
+    let arr_unknown = apply_arrangement(&doc.arrangement, &arr);
+    let tracker = doc.tracker.clone().sanitised();
+    println!(
+        "loads: {} unknown, {} refused, {} missing, {} unknown in the arrangement; tracker in range: {}",
+        report.unknown.len(),
+        report.refused.len(),
+        report.missing.len(),
+        arr_unknown.len(),
+        tracker == doc.tracker
+    );
+    let mut steps = tracker.params();
+    steps.on = true;
+    let l = Loaded {
+        bank,
+        arrangement: arr,
+        steps,
+        doc,
+    };
+    let mut track = steps;
+    track.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
+    let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+    let db = |x: f32| 20.0 * x.max(1e-9).log10();
+    let mix = render(&l, steps, 4);
+    let alone = render(&l, track, 4);
+    let added: Vec<f32> = mix.iter().zip(&alone).map(|(x, y)| x - y).collect();
+    let peak = mix.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    println!(
+        "level: mix {:.1} dBFS RMS, peak {peak:.2}; track alone {:.1} dBFS; drums add {:.2} of the track",
+        db(rms(&mix)),
+        db(rms(&alone)),
+        rms(&added) / rms(&alone).max(1e-9)
+    );
+    let Ok(dir) = std::env::var("SHARD_RENDERS") else {
+        return;
+    };
+    let stem = std::path::Path::new(&path)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("shard");
+    let dest = std::path::Path::new(&dir).join(format!("{stem}.wav"));
+    let spec = hound::WavSpec {
+        channels: 2,
+        sample_rate: SR as u32,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(&dest, spec).expect("the renders folder is writable");
+    for s in render(&l, steps, 8) {
+        w.write_sample(s).unwrap();
+    }
+    w.finalize().unwrap();
+    println!("wrote {}", dest.display());
+}

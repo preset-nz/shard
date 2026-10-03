@@ -4,3 +4,5 @@
 {"id": "two-kick-bass", "prompt": "dark trip-hop, 85 bpm, 16 steps. One track per voice: kick, bass.", "tracks": 2, "names": ["kick", "bass"], "steps": 16, "bpm": 85}
 {"id": "four-acid", "prompt": "a grim acid groove, 132 bpm, 16 steps. One track per voice: kick, snare, hat, bass.", "tracks": 4, "names": ["kick", "snare", "hat", "bass"], "steps": 16, "bpm": 132}
 {"id": "six-illbient", "prompt": "industrial illbient in F minor, 95 bpm, 32 steps. One track per voice: kick, snare, hat, perc, bass, lead.", "tracks": 6, "names": ["kick", "snare", "hat", "perc", "bass", "lead"], "steps": 32, "bpm": 95, "key": "F minor"}
+{"id": "industrial-1990", "prompt": "grim dark industrial 1990. One track per voice: kick, snare, hat, bass.", "tracks": 4, "names": ["kick", "snare", "hat", "bass"], "reference": "references/grim-industrial-1990.shard"}
+{"id": "ambient-afterparty", "prompt": "ambient chillout afterparty. One track per voice: kick, snare, hat, lead.", "tracks": 4, "names": ["kick", "snare", "hat", "lead"], "key": "D minor", "reference": "references/ambient-chillout-afterparty.shard"}
