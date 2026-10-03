@@ -287,14 +287,14 @@ def check(pattern, spec):
     out = {"valid_json": True}
     tracks = pattern.get("tracks")
     if not isinstance(tracks, dict) or not tracks:
-        out["schema_ok"] = False
+        out.update(schema_ok=False, hard_pass=False)
         return out
     try:
         notes = {name: [(int(n["step"]), int(n["midi_note"]), int(n["velocity"]),
                          float(n.get("duration", 0.25))) for n in ns]
                  for name, ns in tracks.items()}
     except (KeyError, TypeError, ValueError):
-        out["schema_ok"] = False
+        out.update(schema_ok=False, hard_pass=False)
         return out
     out["schema_ok"] = True
     # A prompt that names no length leaves it to the model, up to four bars.
