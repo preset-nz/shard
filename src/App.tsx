@@ -148,6 +148,7 @@ export default function App() {
     grains: 0,
     playing: false,
     step: -1,
+    kit_step: -1,
     playhead: 0,
     auditioning: false,
     reversing: false,
@@ -1279,6 +1280,7 @@ export default function App() {
             <StepStrip
               tracker={tracker}
               step={meter.step}
+              kitStep={meter.kit_step}
               root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
               onEdit={(edit) => void editTrackerView(edit)}
               onChange={(next) => void changeTracker(next)}

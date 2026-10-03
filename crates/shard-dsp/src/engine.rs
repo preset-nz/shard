@@ -12,6 +12,7 @@ use crate::envelope::EnvParams;
 use crate::fm::{Fm, FmParams, FmType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
+use crate::kit::{Kit, KitClock, KitParams, VOICES as KIT_VOICES};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::modulation::ModSet;
 use crate::note::Length;
@@ -139,6 +140,9 @@ impl Slots {
 struct ArrangementSlots {
     fx: ChainSlots,
     track_gain: usize,
+    kit_gain: usize,
+    kit_tune: usize,
+    kit_decay: usize,
     limit: usize,
     ceiling: usize,
 }
@@ -152,6 +156,9 @@ impl ArrangementSlots {
         Self {
             fx: ChainSlots::resolve(at),
             track_gain: at("track.gain"),
+            kit_gain: at("kit.gain"),
+            kit_tune: at("kit.tune"),
+            kit_decay: at("kit.decay"),
             limit: at("amp.limit"),
             ceiling: at("amp.ceiling"),
         }
@@ -164,6 +171,9 @@ impl ArrangementSlots {
 struct ArrangementBlock {
     fx: ChainParams,
     track_gain: f32,
+    /// The drum kit's level, zero for the patch alone, and its sound.
+    kit_gain: f32,
+    kit: KitParams,
     limiter: LimiterParams,
 }
 
@@ -173,6 +183,7 @@ impl ArrangementBlock {
     fn read(s: &ArrangementSlots, value: impl Fn(usize) -> f32 + Copy, patch_alone: bool) -> Self {
         let mut fx = ChainParams::read(&s.fx, value, value);
         let mut track_gain = value(s.track_gain);
+        let mut kit_gain = value(s.kit_gain);
         // The patch alone, as sound scaping hears it (Georg, 2026-09-26). Not
         // a separate path: the arrangement's chain is emptied and both gains
         // go to unity, so the ramps fade the change in 10 ms, and once they
@@ -181,10 +192,16 @@ impl ArrangementBlock {
         if patch_alone {
             fx = fx.without_effects();
             track_gain = 1.0;
+            kit_gain = 0.0;
         }
         Self {
             fx,
             track_gain,
+            kit_gain,
+            kit: KitParams {
+                tune: value(s.kit_tune),
+                decay: value(s.kit_decay),
+            },
             limiter: LimiterParams {
                 ceiling: value(s.ceiling),
                 on: value(s.limit) >= 0.5,
@@ -336,6 +353,11 @@ pub struct Engine {
     arr_fx: Chain,
     arr: ArrangementBlock,
     track_gain: OnePole,
+    /// The drum kit beside the patch, its place in its own loop, and its
+    /// fader. See `kit.rs`.
+    kit: Kit,
+    kit_clock: KitClock,
+    kit_gain: OnePole,
     /// After everything, the arrangement included.
     limiter: Limiter,
     slots: Slots,
@@ -405,6 +427,9 @@ impl Engine {
         let mut track_gain = OnePole::new();
         track_gain.set_time(arr_defs[arr_slots.track_gain].smooth_ms, sample_rate);
         track_gain.reset(arr_defs[arr_slots.track_gain].default);
+        let mut kit_gain = OnePole::new();
+        kit_gain.set_time(arr_defs[arr_slots.kit_gain].smooth_ms, sample_rate);
+        kit_gain.reset(arr_defs[arr_slots.kit_gain].default);
 
         let log = Arc::new(GrainLog::new());
         let mut granular = Granular::new(sample_rate, max_grains);
@@ -441,6 +466,9 @@ impl Engine {
             arr_slots,
             arr,
             track_gain,
+            kit: Kit::new(sample_rate),
+            kit_clock: KitClock::default(),
+            kit_gain,
             limiter: Limiter::new(sample_rate),
             slots,
             smooth,
@@ -634,6 +662,9 @@ impl Engine {
         // block starts them again from step one.
         self.steps.set_running(false);
         self.tail_left = 0.0;
+        // The kit too: no drum rings on into the next play.
+        self.kit.reset();
+        self.kit_clock.reset();
         // Under the steps nothing sounds until a step does, so play does not
         // pick up the pass the transport stopped in.
         if playing && !self.playing && self.step_params.on {
@@ -682,6 +713,15 @@ impl Engine {
     /// The step the clock is in, or none while it is off. For the UI.
     pub fn current_step(&self) -> Option<u32> {
         self.steps.current()
+    }
+
+    /// The step the drum kit is in, or none while the steps are off.
+    pub fn current_kit_step(&self) -> Option<u32> {
+        if self.steps.running() {
+            self.kit_clock.current()
+        } else {
+            None
+        }
     }
 
     /// What the steps play, handed in once a block like the parameters.
@@ -805,6 +845,9 @@ impl Engine {
             self.tail_left = self.player.seam_samples();
             self.tail_ratio = self.pass_ratio;
             self.player.finish();
+        }
+        if steps.on && !self.steps.running() {
+            self.kit_clock.reset();
         }
         self.steps.set_running(steps.on);
         // Under the steps a pass plays once (Georg, 2026-09-14); without them
@@ -972,6 +1015,21 @@ impl Engine {
                     self.player.rewind();
                 }
             }
+            // The kit, on the same clock: it reads how far the steps have
+            // run, so it stays on their grid at any length of its own. Its
+            // clock runs while it is off, so switching it on lands in step.
+            if self.steps.running() {
+                if let Some(k) = self
+                    .kit_clock
+                    .tick(self.steps.elapsed(), &steps.kit, steps.swing)
+                {
+                    if steps.kit.on {
+                        for v in 0..KIT_VOICES {
+                            self.kit.hit(v, steps.kit.hit(v, k), &arr.kit);
+                        }
+                    }
+                }
+            }
             p.position = self.smooth.position.process(target.position);
             p.jitter = self.smooth.jitter.process(target.jitter);
             p.size_ms = self.smooth.size.process(target.size_ms);
@@ -1131,7 +1189,11 @@ impl Engine {
             // own drive, crush, ring, chorus, filter and output. It has no pass, so
             // its crusher has no envelope.
             let t = self.track_gain.process(arr.track_gain);
-            let (l, r) = self.arr_fx.front(l * t, r * t, &arr.fx, 1.0);
+            // The kit joins here, beside the patch at its fader: past the
+            // patch's envelope, velocity and brake, into the arrangement's
+            // chain. Mono, into both sides.
+            let kit = self.kit.process() * self.kit_gain.process(arr.kit_gain);
+            let (l, r) = self.arr_fx.front(l * t + kit, r * t + kit, &arr.fx, 1.0);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
 
             // The limiter holds peaks under the ceiling, a millisecond late.

@@ -516,3 +516,41 @@ fn held_steps_never_touch_the_allocator() {
         "held steps touched the allocator {caught} time(s)"
     );
 }
+
+#[test]
+fn the_drum_kit_never_touches_the_allocator() {
+    // Every voice on every step, so hits cut hits and tails overlap; the
+    // kit's length, tempo, swing and tune move along the way, and the kit
+    // switches off and on.
+    use shard_dsp::kit::{KitPattern, VOICES};
+    use shard_dsp::steps::STEPS;
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    let bank = ParamBank::new();
+    let arr = ParamBank::for_table(arrangement::params());
+    e.set_playing(true);
+    let mut out = vec![0.0f32; 512];
+
+    let ((), caught) = no_alloc(|| {
+        for block in 0..1_200 {
+            arr.set_by_id("arrangement.kit.tune", (block % 25) as f32 - 12.0);
+            arr.set_by_id("arrangement.kit.decay", 0.25 + (block % 16) as f32 * 0.25);
+            e.set_arrangement(&arr, false);
+            e.set_steps(StepParams {
+                on: true,
+                tempo_bpm: 120.0 + (block % 120) as f32,
+                swing: (block % 50) as f32 * 0.01,
+                pattern: 0xFFFF,
+                kit: KitPattern {
+                    on: block % 200 < 150,
+                    length: [4, 8, 16, 32, 64][block / 100 % 5],
+                    hits: [[100; STEPS]; VOICES],
+                },
+                ..Default::default()
+            });
+            e.process_block(&mut out, &bank);
+            assert!(out.iter().all(|v| v.is_finite()), "block {block}");
+        }
+    });
+    assert_eq!(caught, 0, "the kit touched the allocator {caught} time(s)");
+}

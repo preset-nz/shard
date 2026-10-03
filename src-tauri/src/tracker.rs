@@ -16,6 +16,7 @@
 //! Saved in the same `.shard` file as the patch, above it. See `patch.rs`.
 
 use serde::{Deserialize, Serialize};
+use shard_dsp::kit::{KitPattern, HAT, HIT_MAX, KICK, SNARE};
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::StepParams;
 
@@ -35,6 +36,51 @@ pub struct Tracker {
     /// 0 to `SWING_MAX` of a sixteenth, on the even steps.
     pub swing: f32,
     pub tracks: Vec<Track>,
+    /// The drum kit beside the tracks, a stop-gap until roadmap row 25.
+    pub kit: Kit,
+}
+
+/// The drum kit's grid: kick, snare and hat, synthesised, on the tracks'
+/// clock (`shard_dsp::kit`). Each row is a velocity a step, zero for none,
+/// so several drums land on one step.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Kit {
+    pub on: bool,
+    /// 4, 8, 16, 32 or 64 sixteenths, as a track's.
+    pub length: u32,
+    pub kick: Vec<u8>,
+    pub snare: Vec<u8>,
+    pub hat: Vec<u8>,
+}
+
+impl Default for Kit {
+    fn default() -> Self {
+        let p = KitPattern::default();
+        Self {
+            on: p.on,
+            length: p.length,
+            kick: p.hits[KICK].to_vec(),
+            snare: p.hits[SNARE].to_vec(),
+            hat: p.hits[HAT].to_vec(),
+        }
+    }
+}
+
+impl Kit {
+    fn pattern(&self) -> KitPattern {
+        let mut hits = [[0u8; STEPS]; shard_dsp::kit::VOICES];
+        for (v, row) in [(KICK, &self.kick), (SNARE, &self.snare), (HAT, &self.hat)] {
+            for (i, hit) in row.iter().take(STEPS).enumerate() {
+                hits[v][i] = *hit;
+            }
+        }
+        KitPattern {
+            on: self.on,
+            length: self.length,
+            hits,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -88,6 +134,7 @@ impl Default for Tracker {
             tempo: p.tempo_bpm,
             swing: p.swing,
             tracks: vec![Track::default()],
+            kit: Kit::default(),
         }
     }
 }
@@ -132,12 +179,22 @@ impl Tracker {
         if self.tracks.is_empty() {
             self.tracks.push(Track::default());
         }
-        for t in &mut self.tracks {
-            t.length = LENGTHS
+        let snap = |length: u32| {
+            LENGTHS
                 .iter()
                 .copied()
-                .min_by_key(|n| n.abs_diff(t.length))
-                .unwrap_or(16);
+                .min_by_key(|n| n.abs_diff(length))
+                .unwrap_or(16)
+        };
+        self.kit.length = snap(self.kit.length);
+        for row in [&mut self.kit.kick, &mut self.kit.snare, &mut self.kit.hat] {
+            row.resize(STEPS, 0);
+            for hit in row.iter_mut() {
+                *hit = (*hit).min(HIT_MAX);
+            }
+        }
+        for t in &mut self.tracks {
+            t.length = snap(t.length);
             t.steps.resize(STEPS, Step::default());
             for step in &mut t.steps {
                 step.pitch = step.pitch.clamp(-PITCH_RANGE, PITCH_RANGE);
@@ -162,6 +219,7 @@ impl Tracker {
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
             nudges: [0; STEPS],
+            kit: self.kit.pattern(),
         };
         for (i, step) in t.steps.iter().take(STEPS).enumerate() {
             p.pattern |= u64::from(step.on) << i;
@@ -292,6 +350,7 @@ mod tests {
             tempo: f32::NAN,
             swing: 9.0,
             tracks: vec![track(11, 0)],
+            kit: Kit::default(),
         };
         t.tracks[0].steps = vec![
             Step {
@@ -383,10 +442,18 @@ mod tests {
             };
             100
         ];
+        // A kit too long, too loud and too short in its rows.
         let sent = Tracker {
             tempo: 500.0,
             swing: -1.0,
             tracks: vec![t],
+            kit: Kit {
+                on: true,
+                length: 30,
+                kick: vec![200; 3],
+                snare: vec![9; 100],
+                hat: Vec::new(),
+            },
         };
         let kept = sent.sanitised();
         let bank = StepBank::default();
@@ -403,6 +470,16 @@ mod tests {
                 holds: [3; STEPS],
                 velocities: [5; STEPS],
                 nudges: [7; STEPS],
+                kit: KitPattern {
+                    on: true,
+                    length: 32,
+                    hits: {
+                        let mut h = [[0; STEPS]; shard_dsp::kit::VOICES];
+                        h[KICK][..3].fill(HIT_MAX);
+                        h[SNARE] = [9; STEPS];
+                        h
+                    },
+                },
             }
         );
     }
@@ -420,6 +497,7 @@ mod tests {
             tempo: 82.0,
             swing: 0.12,
             tracks: vec![first, track(4, 0b1)],
+            kit: Kit::default(),
         };
         assert_eq!(
             t.params(),
@@ -433,6 +511,7 @@ mod tests {
                 holds: [2; STEPS],
                 velocities: [64; STEPS],
                 nudges: [-3; STEPS],
+                kit: KitPattern::default(),
             }
         );
     }

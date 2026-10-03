@@ -49,6 +49,39 @@ const ROWS: &[Row] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     }),
+    // The drum kit beside the patch (`kit.rs`), a stop-gap until roadmap
+    // row 25. Its switch is in the tracker, with its grid, so the level row
+    // leads, as the patch's fader does.
+    Row::Own(ParamDef {
+        id: "arrangement.kit.gain",
+        name: "Gain",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    }),
+    Row::Own(ParamDef {
+        id: "arrangement.kit.tune",
+        name: "Tune",
+        min: -12.0,
+        max: 12.0,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::Semitones,
+        smooth_ms: 0.0,
+    }),
+    Row::Own(ParamDef {
+        id: "arrangement.kit.decay",
+        name: "Decay",
+        min: 0.25,
+        max: 4.0,
+        default: 1.0,
+        taper: Taper::Exponential,
+        unit: Unit::Percent,
+        smooth_ms: 0.0,
+    }),
     // The palette: every instance's rows and the order rows, borrowed from
     // the patch's by `fx::rows`. Which effects run, and in what order, is the
     // arrangement's own: the patch's order is not heard here.

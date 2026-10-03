@@ -75,6 +75,8 @@ pub struct Audio {
     playing: Arc<AtomicBool>,
     /// The sequencer's step, plus one; zero while it is off.
     step: Arc<AtomicU32>,
+    /// The drum kit's step, the same way. Its loop has its own length.
+    kit_step: Arc<AtomicU32>,
     /// Every grain the cloud has spawned, drained by the UI at poll rate.
     grain_log: Arc<GrainLog>,
     /// One grain waiting to be auditioned. Handed across the same way a sample
@@ -161,6 +163,8 @@ pub struct Meters {
     pub playing: bool,
     /// The sequencer's current step, from zero, or -1 while it is off.
     pub step: i32,
+    /// The drum kit's current step, the same way.
+    pub kit_step: i32,
     /// Where plain playback has reached, 0 to 1.
     pub playhead: f32,
     /// True while one grain is being auditioned on its own.
@@ -405,6 +409,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         grains: state.grains.load(Ordering::Relaxed),
         playing: state.playing.load(Ordering::Relaxed),
         step: state.step.load(Ordering::Relaxed) as i32 - 1,
+        kit_step: state.kit_step.load(Ordering::Relaxed) as i32 - 1,
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
         reversing: state.reversing.load(Ordering::Relaxed),
@@ -1884,6 +1889,7 @@ fn build_audio() -> Result<Audio, String> {
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
     let step = Arc::new(AtomicU32::new(0));
+    let kit_step = Arc::new(AtomicU32::new(0));
     let steps = Arc::new(StepBank::new(tracker::Tracker::default().params()));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
@@ -1918,6 +1924,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_playing = Arc::clone(&playing);
     let audio_playhead = Arc::clone(&playhead);
     let audio_step = Arc::clone(&step);
+    let audio_kit_step = Arc::clone(&kit_step);
     let audio_steps = Arc::clone(&steps);
     let audio_arrangement = Arc::clone(&arrangement);
     let audio_readings = Arc::clone(&readings);
@@ -2084,6 +2091,10 @@ fn build_audio() -> Result<Audio, String> {
                                     engine.current_step().map_or(0, |s| s + 1),
                                     Ordering::Relaxed,
                                 );
+                                audio_kit_step.store(
+                                    engine.current_kit_step().map_or(0, |s| s + 1),
+                                    Ordering::Relaxed,
+                                );
                                 audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
                                 audio_reversing.store(engine.reversing(), Ordering::Relaxed);
                             });
@@ -2145,6 +2156,7 @@ fn build_audio() -> Result<Audio, String> {
         grains,
         playing,
         step,
+        kit_step,
         grain_log,
         audition,
         auditioning,
@@ -2357,6 +2369,7 @@ mod tests {
             grains: 0,
             playing: false,
             step: -1,
+            kit_step: -1,
             playhead: 0.0,
             auditioning: false,
             reversing: false,
@@ -2370,6 +2383,7 @@ mod tests {
             "reduction",
             "grains",
             "step",
+            "kit_step",
             "playing",
             "playhead",
             "auditioning",
@@ -2383,7 +2397,7 @@ mod tests {
 
         let tracker =
             serde_json::to_value(tracker::Tracker::default()).expect("Tracker is serialisable");
-        for key in ["tempo", "swing", "tracks"] {
+        for key in ["tempo", "swing", "tracks", "kit"] {
             assert!(tracker.get(key).is_some(), "Tracker lost `{key}`");
         }
         for key in ["on", "length", "steps"] {
@@ -2611,6 +2625,7 @@ mod tests {
             grains: Arc::new(AtomicU32::new(0)),
             playing: Arc::new(AtomicBool::new(false)),
             step: Arc::new(AtomicU32::new(0)),
+            kit_step: Arc::new(AtomicU32::new(0)),
             grain_log: Engine::new(sample_rate, 8).grain_log(),
             audition: Arc::new(Mutex::new(None)),
             auditioning: Arc::new(AtomicBool::new(false)),

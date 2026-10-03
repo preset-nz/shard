@@ -192,6 +192,9 @@ const arrangementNode = (node: string, label: string, lane: Lane): NodeInfo => {
  */
 export const ARRANGEMENT_NODES: NodeInfo[] = [
   arrangementNode('track', 'Patch', 'generate'),
+  // The drum kit beside the patch: its fader, tune and decay. Its switch and
+  // grid are in the tracker strip.
+  arrangementNode('kit', 'Drums', 'generate'),
   arrangementNode('filter', 'Filter', 'master'),
   arrangementNode('amp', 'Output', 'master'),
 ];

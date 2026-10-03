@@ -1,6 +1,14 @@
 import { listen } from '@tauri-apps/api/event';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
-import type { Step, Track, Tracker, TrackerEdit } from '@/audio';
+import {
+  KIT_VOICES,
+  type Kit,
+  type KitVoice,
+  type Step,
+  type Track,
+  type Tracker,
+  type TrackerEdit,
+} from '@/audio';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
 
@@ -38,6 +46,7 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
 export function StepStrip({
   tracker,
   step,
+  kitStep,
   root,
   onChange,
   onEdit,
@@ -45,6 +54,8 @@ export function StepStrip({
   tracker: Tracker;
   /** The step playing, from zero, or -1. */
   step: number;
+  /** The drum kit's step playing, from zero, or -1. */
+  kitStep: number;
   /** The Sample material's root note, a MIDI number, so pitches show as names. */
   root: number | null;
   onChange: (next: Tracker) => void;
@@ -379,6 +390,127 @@ export function StepStrip({
           +{hiddenSteps(track)} past step {track.length}
         </span>
       )}
+
+      <KitGrid
+        kit={tracker.kit}
+        step={track.on ? kitStep : -1}
+        onChange={(kit) => onChange({ ...tracker, kit })}
+      />
+    </div>
+  );
+}
+
+const KIT_LABELS: Record<KitVoice, string> = { kick: 'Kick', snare: 'Snare', hat: 'Hat' };
+/** A hit at full velocity, and the ghost note a second click leaves. `HIT_MAX` and `HIT_GHOST` in Rust. */
+const HIT_MAX = 127;
+const HIT_GHOST = 48;
+/** What a click on a drum step does: off, then full, then a ghost note, then off. */
+const nextHit = (v: number) => (v === 0 ? HIT_MAX : v === HIT_MAX ? HIT_GHOST : 0);
+
+/**
+ * The drum kit's grid (Georg, 2026-10-03, a stop-gap until roadmap row 25):
+ * a row per drum, a column a sixteenth, and any number of drums on one step.
+ * It runs on the tracks' clock with a length of its own, so a bar of drums
+ * loops under a longer line. Its level, tune and decay are the Drums card.
+ */
+function KitGrid({
+  kit,
+  step,
+  onChange,
+}: {
+  kit: Kit;
+  /** The kit's step playing, from zero, or -1. */
+  step: number;
+  onChange: (next: Kit) => void;
+}) {
+  const bars = Array.from({ length: Math.ceil(kit.length / BAR) }, (_, b) => b);
+  const setHit = (voice: KitVoice, i: number, v: number) => {
+    const row = Array.from({ length: STEPS }, (_, j) => kit[voice][j] ?? 0);
+    row[i] = v;
+    onChange({ ...kit, [voice]: row });
+  };
+  return (
+    <div className={`flex basis-full flex-col gap-2 ${kit.on ? '' : 'opacity-60'}`}>
+      <div className="flex items-center gap-4">
+        <button
+          type="button"
+          aria-pressed={kit.on}
+          title={kit.on ? 'Drums on. Click to mute them.' : 'Drums off. Click to play them.'}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onChange({ ...kit, on: !kit.on })}
+          className={`rounded px-1.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider ${
+            kit.on ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
+          }`}
+        >
+          Drums
+        </button>
+        <fieldset className="flex items-center gap-0.5" aria-label="Drum length">
+          {LENGTHS.map((n) => (
+            <button
+              key={n}
+              type="button"
+              aria-pressed={kit.length === n}
+              title={`${n} steps`}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => onChange({ ...kit, length: n })}
+              className={`rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${
+                kit.length === n ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
+              }`}
+            >
+              {n}
+            </button>
+          ))}
+        </fieldset>
+      </div>
+      {bars.map((bar) => {
+        const first = bar * BAR;
+        const cells = Array.from(
+          { length: Math.min(BAR, kit.length - first) },
+          (_, k) => first + k,
+        );
+        return (
+          <div key={bar} className="flex min-w-0 flex-col gap-1">
+            {KIT_VOICES.map((voice) => (
+              <fieldset
+                key={voice}
+                className="flex min-w-0 items-center gap-1"
+                aria-label={`${KIT_LABELS[voice]}, bar ${bar + 1}`}
+              >
+                {cells.map((i) => {
+                  const v = kit[voice][i] ?? 0;
+                  const playing = step === i;
+                  const label = `${KIT_LABELS[voice]}, step ${i + 1}`;
+                  return (
+                    <button
+                      key={i}
+                      type="button"
+                      aria-pressed={v > 0}
+                      aria-label={label}
+                      title={
+                        v === 0
+                          ? `${label}. Click for a hit, again for a ghost note.`
+                          : `${label}: velocity ${v}. Click to ${v === HIT_MAX ? 'make it a ghost note' : 'clear it'}.`
+                      }
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => setHit(voice, i, nextHit(v))}
+                      className={`h-4 w-6 shrink-0 rounded-sm border transition-colors ${
+                        i % BAR > 0 && i % 4 === 0 ? 'ml-2' : ''
+                      } ${
+                        v === 0
+                          ? 'border-border hover:bg-muted'
+                          : v >= HIT_MAX
+                            ? 'border-primary bg-primary'
+                            : 'border-primary bg-primary/40'
+                      } ${playing ? 'ring-2 ring-foreground ring-offset-1 ring-offset-background' : ''}`}
+                    />
+                  );
+                })}
+                {bar === 0 && <span className="pl-1 text-[10px]">{KIT_LABELS[voice]}</span>}
+              </fieldset>
+            ))}
+          </div>
+        );
+      })}
     </div>
   );
 }

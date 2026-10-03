@@ -33,6 +33,8 @@ export interface Meters {
   playing: boolean;
   /** The sequencer's step, from zero, or -1 while it or the transport is off. */
   step: number;
+  /** The drum kit's step, the same way. Its loop has its own length. */
+  kit_step: number;
   /** Where plain playback has reached, 0 to 1. */
   playhead: number;
   /** True while one grain is being played on its own. */
@@ -450,6 +452,23 @@ export interface Tracker {
   /** Of a sixteenth, 0 to 0.75, on the even steps. */
   swing: number;
   tracks: Track[];
+  /** The drum kit beside the tracks, on their clock. */
+  kit: Kit;
+}
+
+/** The kit's voices, in the order its rows are drawn. */
+export const KIT_VOICES = ['kick', 'snare', 'hat'] as const;
+export type KitVoice = (typeof KIT_VOICES)[number];
+
+/**
+ * The drum kit: kick, snare and hat, synthesised. Each row is a velocity a
+ * step, 0 to 127, zero for no hit, so several drums land on one step. A
+ * stop-gap until a kit sliced from a material (roadmap row 25).
+ */
+export interface Kit extends Record<KitVoice, number[]> {
+  on: boolean;
+  /** 4, 8, 16, 32 or 64 sixteenths, as a track's. */
+  length: number;
 }
 
 export const getTracker = () => invoke<Tracker>('tracker');
