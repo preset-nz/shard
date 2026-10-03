@@ -9,7 +9,6 @@ import {
   type Tracker,
   type TrackerEdit,
 } from '@/audio';
-import { NodeSwitch } from '@/components/NodeCard';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
 
@@ -412,7 +411,8 @@ const nextHit = (v: number) => (v === 0 ? HIT_MAX : v === HIT_MAX ? HIT_GHOST : 
  * The drum kit's grid (Georg, 2026-10-03, a stop-gap until roadmap row 25):
  * a row per drum, a column a sixteenth, and any number of drums on one step.
  * It runs on the tracks' clock with a length of its own, so a bar of drums
- * loops under a longer line. Its level, tune and decay are the Drums card.
+ * loops under a longer line. Its switch, level, tune and decay are the
+ * Drums card.
  */
 function KitGrid({
   kit,
@@ -431,12 +431,10 @@ function KitGrid({
     onChange({ ...kit, [voice]: row });
   };
   return (
-    <div className={`flex basis-full flex-col gap-2 ${kit.on ? '' : 'opacity-60'}`}>
+    <div className="flex basis-full flex-col gap-2">
       <div className="flex items-center gap-4">
-        <span className="flex items-center gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wider">Drums</span>
-          <NodeSwitch label="Drums" on={kit.on} onSwitch={(on) => onChange({ ...kit, on })} />
-        </span>
+        {/* No switch here: the Drums card has it, as every node's card does. */}
+        <span className="text-[11px] font-semibold uppercase tracking-wider">Drums</span>
         <fieldset className="flex items-center gap-0.5" aria-label="Drum length">
           {LENGTHS.map((n) => (
             <button

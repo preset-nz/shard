@@ -140,6 +140,7 @@ impl Slots {
 struct ArrangementSlots {
     fx: ChainSlots,
     track_gain: usize,
+    kit_on: usize,
     kit_gain: usize,
     kit_tune: usize,
     kit_decay: usize,
@@ -156,6 +157,7 @@ impl ArrangementSlots {
         Self {
             fx: ChainSlots::resolve(at),
             track_gain: at("track.gain"),
+            kit_on: at("kit.on"),
             kit_gain: at("kit.gain"),
             kit_tune: at("kit.tune"),
             kit_decay: at("kit.decay"),
@@ -171,7 +173,9 @@ impl ArrangementSlots {
 struct ArrangementBlock {
     fx: ChainParams,
     track_gain: f32,
-    /// The drum kit's level, zero for the patch alone, and its sound.
+    /// Whether the drum kit plays, its level (zero when it is off and for
+    /// the patch alone) and its sound.
+    kit_on: bool,
     kit_gain: f32,
     kit: KitParams,
     limiter: LimiterParams,
@@ -183,7 +187,8 @@ impl ArrangementBlock {
     fn read(s: &ArrangementSlots, value: impl Fn(usize) -> f32 + Copy, patch_alone: bool) -> Self {
         let mut fx = ChainParams::read(&s.fx, value, value);
         let mut track_gain = value(s.track_gain);
-        let mut kit_gain = value(s.kit_gain);
+        let kit_on = value(s.kit_on) >= 0.5;
+        let mut kit_gain = if kit_on { value(s.kit_gain) } else { 0.0 };
         // The patch alone, as sound scaping hears it (Georg, 2026-09-26). Not
         // a separate path: the arrangement's chain is emptied and both gains
         // go to unity, so the ramps fade the change in 10 ms, and once they
@@ -197,6 +202,7 @@ impl ArrangementBlock {
         Self {
             fx,
             track_gain,
+            kit_on,
             kit_gain,
             kit: KitParams {
                 tune: value(s.kit_tune),
@@ -429,7 +435,7 @@ impl Engine {
         track_gain.reset(arr_defs[arr_slots.track_gain].default);
         let mut kit_gain = OnePole::new();
         kit_gain.set_time(arr_defs[arr_slots.kit_gain].smooth_ms, sample_rate);
-        kit_gain.reset(arr_defs[arr_slots.kit_gain].default);
+        kit_gain.reset(arr.kit_gain);
 
         let log = Arc::new(GrainLog::new());
         let mut granular = Granular::new(sample_rate, max_grains);
@@ -1023,7 +1029,7 @@ impl Engine {
                     .kit_clock
                     .tick(self.steps.elapsed(), &steps.kit, steps.swing)
                 {
-                    if steps.kit.on {
+                    if arr.kit_on {
                         for v in 0..KIT_VOICES {
                             self.kit.hit(v, steps.kit.hit(v, k), &arr.kit);
                         }

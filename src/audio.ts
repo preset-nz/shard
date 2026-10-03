@@ -466,7 +466,6 @@ export type KitVoice = (typeof KIT_VOICES)[number];
  * stop-gap until a kit sliced from a material (roadmap row 25).
  */
 export interface Kit extends Record<KitVoice, number[]> {
-  on: boolean;
   /** 4, 8, 16, 32 or 64 sixteenths, as a track's. */
   length: number;
 }

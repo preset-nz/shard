@@ -578,8 +578,9 @@ pub static PARAMS: LazyLock<Vec<ParamDef>> = LazyLock::new(|| {
 });
 
 /// The switchable nodes that make sound rather than shape it. They lead with
-/// Gain; every other switchable node is an effect and leads with Mix.
-pub const GENERATORS: &[&str] = &["material", "grain", "fm"];
+/// Gain; every other switchable node is an effect and leads with Mix. The
+/// drum kit is the arrangement's (`arrangement.kit`), beside the patch.
+pub const GENERATORS: &[&str] = &["material", "grain", "fm", "kit"];
 
 pub fn index_of(id: &str) -> Option<usize> {
     PARAMS.iter().position(|p| p.id == id)

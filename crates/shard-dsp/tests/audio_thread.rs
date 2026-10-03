@@ -535,6 +535,7 @@ fn the_drum_kit_never_touches_the_allocator() {
         for block in 0..1_200 {
             arr.set_by_id("arrangement.kit.tune", (block % 25) as f32 - 12.0);
             arr.set_by_id("arrangement.kit.decay", 0.25 + (block % 16) as f32 * 0.25);
+            arr.set_by_id("arrangement.kit.on", f32::from(u8::from(block % 200 < 150)));
             e.set_arrangement(&arr, false);
             e.set_steps(StepParams {
                 on: true,
@@ -542,7 +543,6 @@ fn the_drum_kit_never_touches_the_allocator() {
                 swing: (block % 50) as f32 * 0.01,
                 pattern: 0xFFFF,
                 kit: KitPattern {
-                    on: block % 200 < 150,
                     length: [4, 8, 16, 32, 64][block / 100 % 5],
                     hits: [[100; STEPS]; VOICES],
                 },

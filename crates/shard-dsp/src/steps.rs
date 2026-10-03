@@ -157,7 +157,6 @@ pub struct StepBank {
     velocities: [AtomicU64; WORDS],
     /// The nudges, a byte a step, packed like the pitches.
     nudges: [AtomicU64; WORDS],
-    kit_on: AtomicBool,
     kit_length: AtomicU32,
     /// The kit's hits, a voice at a time, packed like the velocities.
     kit_hits: [[AtomicU64; WORDS]; VOICES],
@@ -196,7 +195,6 @@ impl StepBank {
                 AtomicU64::new(pack_u8(&p.velocities[w * 8..w * 8 + 8]))
             }),
             nudges: std::array::from_fn(|w| AtomicU64::new(pack(&p.nudges[w * 8..w * 8 + 8]))),
-            kit_on: AtomicBool::new(p.kit.on),
             kit_length: AtomicU32::new(p.kit.length),
             kit_hits: std::array::from_fn(|v| {
                 std::array::from_fn(|w| AtomicU64::new(pack_u8(&p.kit.hits[v][w * 8..w * 8 + 8])))
@@ -221,7 +219,6 @@ impl StepBank {
                     .store(pack_u8(&p.kit.hits[v][w * 8..w * 8 + 8]), Ordering::Relaxed);
             }
         }
-        self.kit_on.store(p.kit.on, Ordering::Relaxed);
         self.kit_length.store(p.kit.length, Ordering::Relaxed);
     }
 
@@ -254,7 +251,6 @@ impl StepBank {
             velocities,
             nudges,
             kit: KitPattern {
-                on: self.kit_on.load(Ordering::Relaxed),
                 length: self.kit_length.load(Ordering::Relaxed),
                 hits,
             },
@@ -532,7 +528,6 @@ mod tests {
                 n
             },
             kit: KitPattern {
-                on: true,
                 length: 32,
                 hits: std::array::from_fn(|v| {
                     std::array::from_fn(|i| ((i * 11 + v * 29) % 128) as u8)

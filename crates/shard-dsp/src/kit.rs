@@ -6,6 +6,8 @@
 //! voice playing the patch, so a kick and a hat could not land on the same
 //! step. The kit is beside it, not inside it:
 //!
+//! - **A switch like any node's.** `arrangement.kit.on`, on the Drums card.
+//!   Its clock runs while it is off, so switching it on lands on the grid.
 //! - **Its own grid.** A row per voice and a byte per step: zero is off,
 //!   anything else is the hit's velocity. Several voices fire on one step.
 //! - **The tracker's clock.** The kit does not count time itself. It reads
@@ -38,9 +40,6 @@ pub const HIT_GHOST: u8 = 48;
 /// the tracker and crosses through `StepBank`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KitPattern {
-    /// Whether the kit plays. Its clock runs either way, so switching it on
-    /// mid-bar lands on the grid.
-    pub on: bool,
     /// How many steps the kit's loop runs, 1 to `STEPS`, as a track's does.
     pub length: u32,
     /// Per voice, a byte a step: zero is no hit, else its velocity up to
@@ -49,7 +48,7 @@ pub struct KitPattern {
 }
 
 impl Default for KitPattern {
-    /// Off, with a beat in it, so switching on does something: kick on one
+    /// A beat, so switching the kit on does something: kick on one
     /// and the and of three, snare on two and four, eighth-note hats with the
     /// offbeats softer.
     fn default() -> Self {
@@ -63,11 +62,7 @@ impl Default for KitPattern {
         for k in (0..16).step_by(2) {
             hits[HAT][k] = if k % 4 == 0 { HIT_MAX } else { 80 };
         }
-        Self {
-            on: false,
-            length: 16,
-            hits,
-        }
+        Self { length: 16, hits }
     }
 }
 
@@ -147,7 +142,8 @@ struct Voice {
     /// The level, which falls by `fall` a sample from the hit's velocity.
     amp: f32,
     fall: f32,
-    /// The tonal part's level and its fall, for the snare's body.
+    /// The second part's level and its fall: the snare's body, the kick's
+    /// click.
     tone: f32,
     tone_fall: f32,
     /// The pitch above the resting one, falling by `bend_fall`, in Hz.
@@ -165,11 +161,15 @@ struct Voice {
 /// A voice's next sample, given a noise sample.
 type Render = fn(&mut Voice, noise: f32, hp: f32) -> f32;
 
-fn kick(v: &mut Voice, _noise: f32, _hp: f32) -> f32 {
-    let out = (v.phase * core::f32::consts::TAU).sin() * v.amp;
+/// A sine falling from body to sub (`design/drum-programming.md` section 3:
+/// the body is what small speakers hear), with a few milliseconds of noise
+/// on top as the click.
+fn kick(v: &mut Voice, noise: f32, _hp: f32) -> f32 {
+    let out = ((v.phase * core::f32::consts::TAU).sin() + noise * v.tone) * v.amp;
     v.phase += v.rest + v.bend;
     v.phase -= v.phase.floor();
     v.bend *= v.bend_fall;
+    v.tone *= v.tone_fall;
     out
 }
 
@@ -179,7 +179,7 @@ fn snare(v: &mut Voice, noise: f32, hp: f32) -> f32 {
     v.phase -= v.phase.floor();
     v.tone *= v.tone_fall;
     v.lp1 += hp * (noise - v.lp1);
-    (body + (noise - v.lp1) * 0.8) * v.amp
+    (body + (noise - v.lp1)) * v.amp
 }
 
 fn hat(v: &mut Voice, noise: f32, hp: f32) -> f32 {
@@ -261,22 +261,24 @@ impl Kit {
         };
         match v {
             KICK => {
-                voice.rest = 48.0 * tune / sr;
-                voice.bend = 110.0 * tune / sr;
-                voice.bend_fall = fall_over(0.12, sr);
-                voice.fall = fall_over(0.45 * decay, sr);
-                voice.amp *= 0.9;
+                voice.rest = 50.0 * tune / sr;
+                voice.bend = 130.0 * tune / sr;
+                voice.bend_fall = fall_over(0.15, sr);
+                voice.tone = 0.5;
+                voice.tone_fall = fall_over(0.008, sr);
+                voice.fall = fall_over(0.4 * decay, sr);
+                voice.amp *= 0.8;
             }
             SNARE => {
                 voice.rest = 185.0 * tune / sr;
-                voice.tone = 0.6;
+                voice.tone = 0.5;
                 voice.tone_fall = fall_over(0.12 * decay, sr);
                 voice.fall = fall_over(0.25 * decay, sr);
-                voice.amp *= 0.6;
+                voice.amp *= 0.7;
             }
             _ => {
-                voice.fall = fall_over(0.09 * decay, sr);
-                voice.amp *= 0.35;
+                voice.fall = fall_over(0.1 * decay, sr);
+                voice.amp *= 0.6;
             }
         }
     }

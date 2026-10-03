@@ -134,7 +134,7 @@ fn the_drums_land_on_their_steps() {
     // the kit adds starts on the swung grid, not before it.
     let l = load();
     let mut muted = l.steps;
-    muted.kit.on = false;
+    muted.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
     let with = render(&l, l.steps, 2);
     let without = render(&l, muted, 2);
     let added: Vec<f32> = with.iter().zip(&without).map(|(a, b)| a - b).collect();
@@ -178,7 +178,7 @@ fn the_bass_is_acid_its_filter_plucked_on_every_note() {
     // its own, so the same render with the link removed is the yardstick.
     let l = load();
     let mut bass = l.steps;
-    bass.kit.on = false;
+    bass.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
     let mut flat = Document::from_json(FIXTURE).unwrap();
     flat.patch.modulation.links.clear();
     let still = Loaded {
@@ -225,4 +225,24 @@ fn render_to_listen() {
     }
     w.finalize().unwrap();
     println!("wrote {}", path.display());
+}
+
+#[test]
+fn the_drums_are_heard_over_the_bass() {
+    // Georg, 2026-10-04, on the first render: "the wav doesn't have drums,
+    // just a squeaky bassline". The kit was in it, 12 dB under a bass that
+    // held the limiter down. What the drums add to the limited mix has to be
+    // a good part of the bass's own level, or nobody hears them.
+    let l = load();
+    let mut bass = l.steps;
+    bass.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
+    let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+    let mix = render(&l, l.steps, 2);
+    let alone = render(&l, bass, 2);
+    let added: Vec<f32> = mix.iter().zip(&alone).map(|(x, y)| x - y).collect();
+    let ratio = rms(&added) / rms(&alone);
+    assert!(
+        ratio > 0.7,
+        "the drums add {ratio:.2} of the bass's level to the mix"
+    );
 }

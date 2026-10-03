@@ -460,7 +460,6 @@
       }
     ],
     "kit": {
-      "on": true,
       "length": 32,
       "kick": [
         110,
@@ -663,8 +662,9 @@
     }
   },
   "arrangement": {
-    "arrangement.kit.gain": 0.9,
-    "arrangement.track.gain": 0.8
+    "arrangement.kit.gain": 1.0,
+    "arrangement.track.gain": 0.8,
+    "arrangement.kit.on": 1.0
   },
   "patch": {
     "params": {
@@ -673,20 +673,21 @@
       "env.sustain": 0.35,
       "filter.cutoff": 420.0,
       "filter.on": 1.0,
-      "filter.resonance": 0.82,
+      "filter.resonance": 0.7,
       "filter.type": 0.0,
-      "fm.feedback": 0.45,
+      "fm.feedback": 0.3,
       "fm.freq": 87.307,
       "fm.gain": 0.8,
-      "fm.index": 3.2,
+      "fm.index": 2.6,
       "fm.on": 1.0,
       "fm.ratio": 1.0,
       "material.on": 0.0,
       "patch.length": 2.0,
       "fx.0.drive.on": 1.0,
-      "fx.0.drive.mix": 0.6,
-      "fx.0.drive.amount": 20.0,
-      "fx.order.0": 1.0
+      "fx.0.drive.mix": 0.4,
+      "fx.0.drive.amount": 14.0,
+      "fx.order.0": 1.0,
+      "amp.gain": 0.28
     },
     "envelopes": [
       {
@@ -702,7 +703,7 @@
       "filter.cutoff": {
         "source": 1,
         "lo": 0.36,
-        "hi": 0.74
+        "hi": 0.64
       }
     },
     "next_modulator_id": 2

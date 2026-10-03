@@ -9,7 +9,6 @@ use shard_dsp::{Engine, ParamBank, StepParams};
 /// sound scaping hears the patch alone. `hits` are (voice, step) pairs.
 fn drums_alone(hits: &[(usize, usize)], length: u32) -> StepParams {
     let mut kit = shard_dsp::kit::KitPattern {
-        on: true,
         length,
         hits: [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES],
     };
@@ -24,8 +23,27 @@ fn drums_alone(hits: &[(usize, usize)], length: u32) -> StepParams {
     }
 }
 
-fn render_steps(p: StepParams, frames: usize) -> Vec<f32> {
+/// The arrangement with the Drums card switched on.
+fn kit_on() -> ParamBank {
+    let arr = ParamBank::for_table(arrangement::params());
+    arr.set_by_id("arrangement.kit.on", 1.0);
+    arr
+}
+
+/// An engine in tracker mode with the drums switched on.
+fn drums_engine() -> Engine {
     let mut e = Engine::new(48_000.0, 64);
+    e.set_arrangement(&kit_on(), false);
+    e
+}
+
+fn render_steps(p: StepParams, frames: usize) -> Vec<f32> {
+    render_with(p, frames, &kit_on())
+}
+
+fn render_with(p: StepParams, frames: usize, arr: &ParamBank) -> Vec<f32> {
+    let mut e = Engine::new(48_000.0, 64);
+    e.set_arrangement(arr, false);
     e.set_steps(p);
     e.set_playing(true);
     let bank = ParamBank::new();
@@ -62,7 +80,7 @@ fn a_kit_hit_lands_on_its_step() {
     use shard_dsp::kit::SNARE;
     // Step five at 120 bpm is four sixteenths in: 24,000 frames at 48 k,
     // then the limiter's look-ahead.
-    let mut e = Engine::new(48_000.0, 64);
+    let mut e = drums_engine();
     let latency = e.latency();
     e.set_steps(drums_alone(&[(SNARE, 4)], 16));
     e.set_playing(true);
@@ -83,7 +101,7 @@ fn the_kit_keeps_the_melodys_grid_through_a_tempo_change() {
     // Whatever each loop's length, both are on the same sixteenth of the
     // shorter one, every block.
     for (track, kit) in [(64u32, 16u32), (16, 64), (8, 32)] {
-        let mut e = Engine::new(48_000.0, 64);
+        let mut e = drums_engine();
         e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 256];
@@ -109,14 +127,14 @@ fn the_kit_keeps_the_melodys_grid_through_a_tempo_change() {
 #[test]
 fn the_kit_is_silent_in_sound_scaping() {
     use shard_dsp::kit::KICK;
-    // Sound scaping is the steps off and the patch alone. A kit left on,
-    // with a beat in it, must not leak in.
+    // Sound scaping is the steps off and the patch alone. A kit switched
+    // on, with a beat in it, must not leak in.
     let mut p = drums_alone(&[(KICK, 0), (KICK, 4), (KICK, 8)], 16);
     p.on = false;
     let mut e = Engine::new(48_000.0, 64);
     e.set_playing(true);
     e.set_steps(p);
-    e.set_arrangement(&ParamBank::for_table(arrangement::params()), true);
+    e.set_arrangement(&kit_on(), true);
     let bank = ParamBank::new();
     bank.set_by_id("material.on", 0.0);
     let mut out = vec![0.0; 512];
@@ -129,7 +147,8 @@ fn the_kit_is_silent_in_sound_scaping() {
 #[test]
 fn a_kit_switched_off_plays_nothing() {
     use shard_dsp::kit::KICK;
-    let mut p = drums_alone(&[(KICK, 0), (KICK, 4)], 16);
-    p.kit.on = false;
-    assert!(render_steps(p, 48_000).iter().all(|s| *s == 0.0));
+    // The arrangement at its defaults: the Drums card starts off.
+    let p = drums_alone(&[(KICK, 0), (KICK, 4)], 16);
+    let off = ParamBank::for_table(arrangement::params());
+    assert!(render_with(p, 48_000, &off).iter().all(|s| *s == 0.0));
 }

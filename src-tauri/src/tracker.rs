@@ -41,12 +41,12 @@ pub struct Tracker {
 }
 
 /// The drum kit's grid: kick, snare and hat, synthesised, on the tracks'
-/// clock (`shard_dsp::kit`). Each row is a velocity a step, zero for none,
+/// clock (`shard_dsp::kit`). Its switch and level are the Drums card, in the
+/// arrangement's table. Each row is a velocity a step, zero for none,
 /// so several drums land on one step.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Kit {
-    pub on: bool,
     /// 4, 8, 16, 32 or 64 sixteenths, as a track's.
     pub length: u32,
     pub kick: Vec<u8>,
@@ -58,7 +58,6 @@ impl Default for Kit {
     fn default() -> Self {
         let p = KitPattern::default();
         Self {
-            on: p.on,
             length: p.length,
             kick: p.hits[KICK].to_vec(),
             snare: p.hits[SNARE].to_vec(),
@@ -76,7 +75,6 @@ impl Kit {
             }
         }
         KitPattern {
-            on: self.on,
             length: self.length,
             hits,
         }
@@ -448,7 +446,6 @@ mod tests {
             swing: -1.0,
             tracks: vec![t],
             kit: Kit {
-                on: true,
                 length: 30,
                 kick: vec![200; 3],
                 snare: vec![9; 100],
@@ -471,7 +468,6 @@ mod tests {
                 velocities: [5; STEPS],
                 nudges: [7; STEPS],
                 kit: KitPattern {
-                    on: true,
                     length: 32,
                     hits: {
                         let mut h = [[0; STEPS]; shard_dsp::kit::VOICES];

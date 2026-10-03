@@ -50,8 +50,19 @@ const ROWS: &[Row] = &[
         smooth_ms: 20.0,
     }),
     // The drum kit beside the patch (`kit.rs`), a stop-gap until roadmap
-    // row 25. Its switch is in the tracker, with its grid, so the level row
-    // leads, as the patch's fader does.
+    // row 25. A generator, so its switch and then its Gain, drawn on its
+    // card like every other node's. Its grid is in the tracker. Off by
+    // default, as the effects are.
+    Row::Own(ParamDef {
+        id: "arrangement.kit.on",
+        name: "Drums",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    }),
     Row::Own(ParamDef {
         id: "arrangement.kit.gain",
         name: "Gain",
