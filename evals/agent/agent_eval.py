@@ -297,7 +297,8 @@ def check(pattern, spec):
         out["schema_ok"] = False
         return out
     out["schema_ok"] = True
-    steps = spec.get("steps", 16)
+    # A prompt that names no length leaves it to the model, up to four bars.
+    steps = spec.get("steps", 64)
     want = spec["tracks"]
     names = [n.lower() for n in notes]
     out["track_count"] = len(notes)
