@@ -125,10 +125,64 @@ def power():
         return None
 
 
+MAX_TURNS = 10
+
+
 def ask(base, model, system, prompt, think, schema, temperature, tools=None):
+    """One request, or with tools the loop an agent runs: call, result, next
+    call, until the model stops calling or `MAX_TURNS`. Timings add up."""
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": prompt}]
+    if not tools:
+        return turn(base, model, messages, think, schema, temperature, None)
+    song = {"tracks": {}}
+    calls, turns, out = [], 0, None
+    while turns < MAX_TURNS:
+        t = turn(base, model, messages, think, schema, temperature, tools)
+        turns += 1
+        if out is None:
+            out = dict(t)
+        else:
+            out["total_s"] = round(out["total_s"] + t["total_s"], 2)
+            out["completion_tokens"] += t["completion_tokens"]
+            out["reasoning_chars"] += t["reasoning_chars"]
+            out["gen_s"] += t["gen_s"]
+            out["text"] += t["text"]
+        if not t["calls"]:
+            break
+        calls += t["calls"]
+        ids = [f"call_{len(calls) - len(t['calls']) + i}" for i in range(len(t["calls"]))]
+        messages.append({"role": "assistant", "content": t["text"] or None, "tool_calls": [
+            {"id": i, "type": "function", "function": c} for i, c in zip(ids, t["calls"])]})
+        for i, c in zip(ids, t["calls"]):
+            messages.append({"role": "tool", "tool_call_id": i, "content": result(c, song)})
+    out["calls"] = calls
+    out["turns"] = turns
+    out["tok_per_s"] = round(out["completion_tokens"] / out["gen_s"], 1) if out["gen_s"] else None
+    return out
+
+
+def result(call, song):
+    """What the app would answer a tool call with."""
+    try:
+        a = json.loads(call["arguments"] or "{}")
+    except json.JSONDecodeError as e:
+        return f"refused: arguments are not JSON ({e})"
+    name = call["name"]
+    if name == "set_tempo":
+        song["bpm"] = a.get("bpm")
+        return f"tempo is {a.get('bpm')} bpm"
+    if name == "set_track":
+        song["tracks"][a.get("name")] = a.get("notes", [])
+        return f"track {a.get('name')} written, {len(a.get('notes', []))} notes"
+    if name == "read_song":
+        return json.dumps(song)
+    return "done"
+
+
+def turn(base, model, messages, think, schema, temperature, tools):
     body = {
         "model": model,
-        "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
+        "messages": messages,
         "temperature": temperature,
         "stream": True,
         "stream_options": {"include_usage": True},
@@ -195,6 +249,7 @@ def ask(base, model, system, prompt, think, schema, temperature, tools=None):
         "prompt_tokens": (usage or {}).get("prompt_tokens"),
         "completion_tokens": completion,
         "tok_per_s": round(completion / gen, 1) if gen > 0 else None,
+        "gen_s": gen,
     }
 
 
@@ -314,7 +369,8 @@ def run(args):
                 c = row["checks"]
                 print(f"[{done}/{total}] {model} {variant} think={think} {spec['id']} "
                       f"{row.get('total_s', '-')}s pass={c.get('hard_pass')} "
-                      f"tracks={c.get('track_count')} coll={c.get('collisions')}", flush=True)
+                      f"tracks={c.get('track_count')} coll={c.get('collisions')} turns={row.get('turns', 1)}",
+                      flush=True)
     print(path)
 
 
@@ -334,8 +390,8 @@ def report(args):
     groups = {}
     for r in rows:
         groups.setdefault((r["model"], r["variant"], r["think"]), []).append(r)
-    print("| Model | Variant | Think | n | Valid | Hard pass | Extra tracks | Collisions | Prompt tok | First answer | Total | Tok/s |")
-    print("|---|---|---|---|---|---|---|---|---|---|---|---|")
+    print("| Model | Variant | Think | n | Valid | Hard pass | Extra tracks | Collisions | Prompt tok | First answer | Total | Tok/s | Turns |")
+    print("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for (m, v, t), rs in sorted(groups.items()):
         extra = sum(1 for r in rs if r["checks"].get("extra_tracks"))
         print(f"| {m.split('/')[-1]} | {v} | {t} | {len(rs)} | {pct(rs, 'valid_json')} | "
@@ -343,7 +399,8 @@ def report(args):
               f"{mean([r['checks'].get('collisions') for r in rs])} | "
               f"{mean([r.get('prompt_tokens') for r in rs])} | "
               f"{mean([r.get('first_answer_s') for r in rs])} s | "
-              f"{mean([r.get('total_s') for r in rs])} s | {mean([r.get('tok_per_s') for r in rs])} |")
+              f"{mean([r.get('total_s') for r in rs])} s | {mean([r.get('tok_per_s') for r in rs])} | "
+              f"{mean([r.get('turns', 1) for r in rs])} |")
     print()
     print("| Prompt | Think | n | Hard pass | Tracks right | Collisions | Notes | Density | Vel. sd | In key | Total |")
     print("|---|---|---|---|---|---|---|---|---|---|---|")
