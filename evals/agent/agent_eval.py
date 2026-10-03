@@ -126,6 +126,10 @@ def power():
 
 
 MAX_TURNS = 10
+# A reasoning model with tools can loop without end, and a stream that keeps
+# sending never times out. The app needs the same two limits.
+MAX_TOKENS = 8000
+BUDGET_S = 240
 
 
 def ask(base, model, system, prompt, think, schema, temperature, tools=None):
@@ -136,7 +140,8 @@ def ask(base, model, system, prompt, think, schema, temperature, tools=None):
         return turn(base, model, messages, think, schema, temperature, None)
     song = {"tracks": {}}
     calls, turns, out = [], 0, None
-    while turns < MAX_TURNS:
+    started = time.monotonic()
+    while turns < MAX_TURNS and time.monotonic() - started < BUDGET_S:
         t = turn(base, model, messages, think, schema, temperature, tools)
         turns += 1
         if out is None:
@@ -147,6 +152,7 @@ def ask(base, model, system, prompt, think, schema, temperature, tools=None):
             out["reasoning_chars"] += t["reasoning_chars"]
             out["gen_s"] += t["gen_s"]
             out["text"] += t["text"]
+            out["stopped"] = out["stopped"] or t["stopped"]
         if not t["calls"]:
             break
         calls += t["calls"]
@@ -186,6 +192,7 @@ def turn(base, model, messages, think, schema, temperature, tools):
         "temperature": temperature,
         "stream": True,
         "stream_options": {"include_usage": True},
+        "max_tokens": MAX_TOKENS,
     }
     if not think:
         body["reasoning_effort"] = "none"
@@ -199,6 +206,7 @@ def turn(base, model, messages, think, schema, temperature, tools):
     req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     start = time.monotonic()
+    stopped = False
     first = first_answer = None
     answer, reasoning, usage, chunks = [], [], None, 0
     calls = {}
@@ -209,6 +217,9 @@ def turn(base, model, messages, think, schema, temperature, tools):
                 continue
             data = line[5:].strip()
             if data == "[DONE]":
+                break
+            if time.monotonic() - start > BUDGET_S:
+                stopped = True
                 break
             msg = json.loads(data)
             usage = msg.get("usage") or usage
@@ -250,6 +261,7 @@ def turn(base, model, messages, think, schema, temperature, tools):
         "completion_tokens": completion,
         "tok_per_s": round(completion / gen, 1) if gen > 0 else None,
         "gen_s": gen,
+        "stopped": stopped,
     }
 
 
