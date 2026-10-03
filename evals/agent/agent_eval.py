@@ -57,6 +57,59 @@ SCHEMA = {
     "required": ["bpm", "tracks"],
 }
 
+STEP_ITEMS = SCHEMA["properties"]["tracks"]["additionalProperties"]
+
+
+def tool(name, description, properties, required):
+    return {"type": "function", "function": {"name": name, "description": description,
+            "parameters": {"type": "object", "properties": properties, "required": required}}}
+
+
+# What Shard's agent would get: coarse tools in its own vocabulary (design/agent-tools.md).
+TOOLS = [
+    tool("set_tempo", "Set the song's tempo in beats per minute.",
+         {"bpm": {"type": "integer"}}, ["bpm"]),
+    tool("set_track", "Write one whole track: a voice (kick, bass, lead) and its notes. "
+         "Replaces the track if it exists. A track plays one note at a time.",
+         {"name": {"type": "string"}, "length": {"type": "integer", "description": "steps: 16, 32 or 64"},
+          "notes": STEP_ITEMS}, ["name", "notes"]),
+    tool("read_song", "Read the song as it is now: tempo, swing and every track.", {}, []),
+]
+# Plausible extras, to see whether more tools make the model worse at the ones it needs.
+DECOYS = [
+    tool("set_swing", "Set swing, 50 (straight) to 75 (heavy).", {"percent": {"type": "number"}}, ["percent"]),
+    tool("mute_track", "Mute or unmute a track by name.",
+         {"name": {"type": "string"}, "muted": {"type": "boolean"}}, ["name", "muted"]),
+    tool("set_patch_value", "Set one sound parameter on a track's patch, e.g. filter.cutoff.",
+         {"track": {"type": "string"}, "id": {"type": "string"}, "value": {"type": "number"}},
+         ["track", "id", "value"]),
+    tool("transpose_track", "Move every note of a track up or down by semitones.",
+         {"name": {"type": "string"}, "semitones": {"type": "integer"}}, ["name", "semitones"]),
+    tool("clear_track", "Remove every note from a track.", {"name": {"type": "string"}}, ["name"]),
+    tool("rotate_track", "Shift a track's notes left or right by steps.",
+         {"name": {"type": "string"}, "steps": {"type": "integer"}}, ["name", "steps"]),
+    tool("load_patch", "Load a saved patch onto a track by patch name.",
+         {"track": {"type": "string"}, "patch": {"type": "string"}}, ["track", "patch"]),
+]
+
+
+def from_calls(calls):
+    """The pattern a reply's tool calls would leave in the song."""
+    pattern = {"tracks": {}, "calls": [c["name"] for c in calls]}
+    for c in calls:
+        try:
+            a = json.loads(c["arguments"] or "{}")
+        except json.JSONDecodeError:
+            pattern.setdefault("bad_calls", 0)
+            pattern["bad_calls"] = pattern.get("bad_calls", 0) + 1
+            continue
+        if c["name"] == "set_tempo":
+            pattern["bpm"] = a.get("bpm")
+        elif c["name"] == "set_track":
+            pattern["tracks"][a.get("name", f"track{len(pattern['tracks'])}")] = a.get("notes", [])
+    return pattern
+
+
 KEYS = {"C": 0, "C#": 1, "Db": 1, "D": 2, "D#": 3, "Eb": 3, "E": 4, "F": 5, "F#": 6,
         "Gb": 6, "G": 7, "G#": 8, "Ab": 8, "A": 9, "A#": 10, "Bb": 10, "B": 11}
 MINOR = [0, 2, 3, 5, 7, 8, 10]
@@ -72,7 +125,7 @@ def power():
         return None
 
 
-def ask(base, model, system, prompt, think, schema, temperature):
+def ask(base, model, system, prompt, think, schema, temperature, tools=None):
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}],
@@ -87,11 +140,14 @@ def ask(base, model, system, prompt, think, schema, temperature):
             "type": "json_schema",
             "json_schema": {"name": "pattern", "strict": True, "schema": SCHEMA},
         }
+    if tools:
+        body["tools"] = tools
     req = urllib.request.Request(f"{base}/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Content-Type": "application/json"})
     start = time.monotonic()
     first = first_answer = None
     answer, reasoning, usage, chunks = [], [], None, 0
+    calls = {}
     with urllib.request.urlopen(req, timeout=900) as resp:
         for raw in resp:
             line = raw.decode().strip()
@@ -116,11 +172,22 @@ def ask(base, model, system, prompt, think, schema, temperature):
                         first_answer = time.monotonic()
                     answer.append(c)
                     chunks += 1
+                for tc in delta.get("tool_calls") or []:
+                    if first_answer is None:
+                        first_answer = time.monotonic()
+                    if first is None:
+                        first = time.monotonic()
+                    slot = calls.setdefault(tc.get("index", 0), {"name": "", "arguments": ""})
+                    fn = tc.get("function") or {}
+                    slot["name"] += fn.get("name") or ""
+                    slot["arguments"] += fn.get("arguments") or ""
+                    chunks += 1
     end = time.monotonic()
     completion = (usage or {}).get("completion_tokens", chunks)
     gen = end - (first or end)
     return {
         "text": "".join(answer),
+        "calls": [calls[i] for i in sorted(calls)],
         "reasoning_chars": len("".join(reasoning)),
         "first_token_s": round((first or end) - start, 2),
         "first_answer_s": round((first_answer or end) - start, 2),
@@ -224,6 +291,7 @@ def run(args):
     for model, variant, think in cells:
         system = (HERE / "variants" / f"{variant}.txt").read_text()
         schema = variant == "schema"
+        tools = {"tools": TOOLS, "tools-many": TOOLS + DECOYS}.get(variant)
         for rep in range(args.reps):
             for spec in prompts:
                 done += 1
@@ -232,9 +300,9 @@ def run(args):
                        "at": datetime.datetime.now().isoformat(timespec="seconds")}
                 try:
                     row.update(ask(args.base, model, system, spec["prompt"], think == "on",
-                                   schema, args.temperature))
+                                   schema, args.temperature, tools))
                     try:
-                        row["pattern"] = parse(row["text"])
+                        row["pattern"] = from_calls(row["calls"]) if tools else parse(row["text"])
                         row["checks"] = check(row["pattern"], spec)
                     except (json.JSONDecodeError, IndexError, AttributeError):
                         row["checks"] = {"valid_json": False, "hard_pass": False}
@@ -302,7 +370,8 @@ def main():
     r = sub.add_parser("run")
     r.add_argument("--model", nargs="+", required=True)
     r.add_argument("--variant", nargs="+", default=["fewshot"],
-                   help="files in variants/; 'schema' also sends a JSON schema")
+                   help="files in variants/; 'schema' also sends a JSON schema, "
+                        "'tools' and 'tools-many' answer through tool calls")
     r.add_argument("--think", nargs="+", default=["off"], choices=["off", "on"])
     r.add_argument("--reps", type=int, default=3)
     r.add_argument("--only", nargs="+", help="prompt ids")

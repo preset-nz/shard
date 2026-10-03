@@ -8,7 +8,14 @@ towards the agent player; the design and the results live in the guidance repo
   count and names, steps, bpm, key).
 - `variants/`: system prompts. `fewshot` is the first trial's, with a drums and
   a bass example; `fewshot-bass` keeps only a bass example; `schema` has the
-  rules and no examples, and sends a JSON schema as `response_format`.
+  rules and no examples, and sends a JSON schema as `response_format`;
+  `tools` and `tools-many` answer through tool calls (`set_tempo`,
+  `set_track`, `read_song`, and seven plausible extras in `tools-many`), the
+  way the agent will.
+- **Schema and reasoning don't mix on LM Studio.** The schema constrains the
+  output from its first token, so the thinking block is forced into JSON and
+  arrives as `reasoning_content` with an empty answer. Run `schema` with
+  `--think off` only.
 - `agent_eval.py run` asks every prompt under every model, variant and
   reasoning setting, appending to `results/` (not in git) as it goes.
   `agent_eval.py report` summarises.
