@@ -134,10 +134,6 @@ pub const POOL: [(Kind, u8); INSTANCES] = [
     (Kind::Reverb, 1),
 ];
 
-/// The instance that owns the crusher's envelope. Only the first crusher has
-/// one: the engine keeps a single envelope state.
-pub const CRUSH_ENV_INSTANCE: usize = 1;
-
 pub fn kind_of(n: usize) -> Kind {
     POOL[n].0
 }
@@ -170,12 +166,6 @@ pub fn is_order_row(id: &str) -> bool {
         .is_some_and(|p| p.parse::<usize>().is_ok_and(|p| p < ORDER_LEN))
 }
 
-/// Whether instance `n` has this template row. The crusher's envelope rows
-/// exist for one instance only.
-fn has_row(n: usize, template: &str) -> bool {
-    n == CRUSH_ENV_INSTANCE || !template.starts_with("crush.env.")
-}
-
 fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
@@ -187,9 +177,6 @@ pub(crate) fn rows() -> &'static [ParamDef] {
         let mut out = Vec::new();
         for (n, (kind, _)) in POOL.iter().enumerate() {
             for row in kind.rows() {
-                if !has_row(n, row.id) {
-                    continue;
-                }
                 let mut def = *row;
                 def.id = leak(row_id(n, row.id));
                 // An added effect arrives on; `on` is a bypass from there.
@@ -425,7 +412,6 @@ mod tests {
                 ("drive", 1),
             ]
         );
-        assert_eq!(POOL[CRUSH_ENV_INSTANCE], (Kind::Crush, 0));
     }
 
     #[test]
@@ -450,21 +436,6 @@ mod tests {
                 assert!(template.starts_with(kind_of(n).name()), "{}", def.id);
             }
         }
-    }
-
-    #[test]
-    fn only_the_first_crusher_has_an_envelope() {
-        let has = |n: usize| {
-            rows()
-                .iter()
-                .any(|d| d.id.starts_with(&format!("fx.{n}.crush.env.")))
-        };
-        assert!(has(CRUSH_ENV_INSTANCE));
-        let second = POOL
-            .iter()
-            .position(|&(k, c)| k == Kind::Crush && c == 1)
-            .unwrap();
-        assert!(!has(second));
     }
 
     #[test]

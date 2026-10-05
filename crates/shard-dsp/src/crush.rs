@@ -10,8 +10,8 @@
 //! Deliberately not anti-aliased. The aliasing *is* the effect; filtering it
 //! away would leave a quiet, polite version of a rude thing.
 //!
-//! `mix` arrives already shaped by the crush envelope, which is why nothing
-//! here smooths it. See `Engine::process_block`.
+//! `mix` arrives already smoothed by the chain, which is why nothing here
+//! smooths it. See `Chain::front`.
 
 use crate::smooth::OnePole;
 
@@ -156,8 +156,8 @@ mod tests {
 
     #[test]
     fn a_mix_of_zero_bypasses_whatever_the_other_controls_say() {
-        // Mix is the gate, so the envelope can hold the node open at zero
-        // while bits and rate sit at their most destructive.
+        // Mix is the gate, so an envelope on it can hold the node open at
+        // zero while bits and rate sit at their most destructive.
         let mut c = Crush::new(SR);
         let p = CrushParams {
             bits: 1.0,

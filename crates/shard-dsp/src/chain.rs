@@ -31,7 +31,7 @@ use crate::drive::{Drive, DriveParams, DriveType};
 use crate::echo::{Echo, EchoParams};
 use crate::filter::{Filter, FilterParams, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
-use crate::fx::{self, Kind, Order, CRUSH_ENV_INSTANCE, INSTANCES, ORDER_LEN, POOL};
+use crate::fx::{self, Kind, Order, INSTANCES, ORDER_LEN, POOL};
 use crate::overtone::{Overtone, OvertoneParams};
 use crate::params::ParamDef;
 use crate::reverb::{Reverb, ReverbParams, ReverbType};
@@ -79,16 +79,9 @@ impl ChainSlots {
     pub fn resolve(at: impl Fn(&str) -> usize) -> Self {
         let mut inst = [[0; MAX_ROWS]; INSTANCES];
         for (n, (kind, _)) in POOL.iter().enumerate() {
-            let mut j = 0;
-            for row in kind.rows() {
-                // The crusher's envelope is read by the engine, and the
-                // arrangement has none.
-                if row.id.starts_with("crush.env.") {
-                    continue;
-                }
+            for (j, row) in kind.rows().iter().enumerate() {
                 assert!(j < MAX_ROWS, "{} has too many rows", kind.name());
                 inst[n][j] = at(&fx::row_id(n, row.id));
-                j += 1;
             }
         }
         let mut order = [0; ORDER_LEN];
@@ -542,10 +535,9 @@ impl Chain {
         self.run = next;
     }
 
-    /// The palette, for one frame. `crush_env` scales the first crusher's
-    /// mix: the patch's crush envelope, or exactly one where there is none.
+    /// The palette, for one frame.
     #[inline]
-    pub fn front(&mut self, l: f32, r: f32, p: &ChainParams, crush_env: f32) -> (f32, f32) {
+    pub fn front(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
         let duck = self
             .duck
             .process(if self.pending.is_some() { 0.0 } else { 1.0 });
@@ -566,11 +558,6 @@ impl Chain {
             }
             let on = inst.on.process(p.inst[n].on);
             let level = on * presence;
-            let env = if n == CRUSH_ENV_INSTANCE {
-                crush_env
-            } else {
-                1.0
-            };
             (l, r) = match (&mut inst.proc, &p.inst[n].p) {
                 (Proc::Drive(x), FxParams::Drive(q)) => x.process(
                     l,
@@ -581,7 +568,7 @@ impl Chain {
                     },
                 ),
                 (Proc::Crush(x), FxParams::Crush(q)) => {
-                    let mix = inst.crush_mix.process(q.mix) * env * level;
+                    let mix = inst.crush_mix.process(q.mix) * level;
                     x.process(l, r, &CrushParams { mix, ..*q })
                 }
                 (Proc::Ring(x), FxParams::Ring(q)) => x.process(
@@ -707,12 +694,7 @@ mod tests {
     #[test]
     fn no_kind_has_more_rows_than_a_slot_array() {
         for kind in Kind::ALL {
-            let read = kind
-                .rows()
-                .iter()
-                .filter(|r| !r.id.starts_with("crush.env."))
-                .count();
-            assert!(read <= MAX_ROWS, "{}", kind.name());
+            assert!(kind.rows().len() <= MAX_ROWS, "{}", kind.name());
         }
     }
 
@@ -781,7 +763,7 @@ mod tests {
             (0..n)
                 .map(|i| {
                     let x = input(i);
-                    self.chain.front(x, -x, &p, 1.0).0
+                    self.chain.front(x, -x, &p).0
                 })
                 .collect()
         }

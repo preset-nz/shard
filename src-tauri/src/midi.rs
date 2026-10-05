@@ -745,7 +745,6 @@ mod tests {
         assert_eq!(bank.defs()[i].id, "arrangement.fx.1.crush.mix");
         let (bank, i) = c.locate("fx.1.crush.mix").expect("patch row");
         assert_eq!(bank.defs()[i].id, "fx.1.crush.mix");
-        assert!(c.locate("arrangement.fx.1.crush.env.amount").is_none());
         assert!(
             c.locate("fx.order.0").is_none(),
             "no knob reorders the chain"

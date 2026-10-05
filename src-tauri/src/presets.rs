@@ -212,8 +212,8 @@ mod tests {
         let values = &p.0["fx.1.crush"]["gritty"].values;
         assert!(values.contains_key("fx.1.crush.mix"));
         assert!(
-            values.contains_key("fx.1.crush.env.attack"),
-            "the crush envelope belongs to crush"
+            values.contains_key("fx.1.crush.bits"),
+            "every row of crush belongs to crush"
         );
         assert!(
             !values.contains_key("fx.1.crush.on"),

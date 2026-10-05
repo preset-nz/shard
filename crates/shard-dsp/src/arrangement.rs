@@ -12,10 +12,8 @@
 //! once a block with `Engine::set_arrangement`.
 //!
 //! **Borrowed rows** are the patch's own rows under `arrangement.`, with the
-//! same range, taper and smoothing, so the two chains cannot drift apart. The
-//! crusher's envelope is not borrowed: it follows a pass through one patch,
-//! and the arrangement has no pass (Georg: *"no envelope"*). **Own rows** are
-//! the patch's fader and the limiter.
+//! same range, taper and smoothing, so the two chains cannot drift apart.
+//! **Own rows** are the patch's fader and the limiter.
 //!
 //! Ids are a wire format, as in the patch table.
 
@@ -151,15 +149,10 @@ pub fn params() -> &'static [ParamDef] {
                     ..*source_of(id)
                 }),
                 Row::Own(def) => out.push(*def),
-                Row::Fx => out.extend(
-                    crate::fx::rows()
-                        .iter()
-                        .filter(|def| !def.id.contains(".env."))
-                        .map(|def| ParamDef {
-                            id: Box::leak(format!("{PREFIX}{}", def.id).into_boxed_str()),
-                            ..*def
-                        }),
-                ),
+                Row::Fx => out.extend(crate::fx::rows().iter().map(|def| ParamDef {
+                    id: Box::leak(format!("{PREFIX}{}", def.id).into_boxed_str()),
+                    ..*def
+                })),
             }
         }
         out
@@ -207,11 +200,7 @@ mod tests {
             .iter()
             .filter(|p| p.id.starts_with("arrangement.fx."))
             .collect();
-        // The crusher's envelope follows a pass, and the arrangement has none.
-        let theirs: Vec<_> = crate::fx::rows()
-            .iter()
-            .filter(|d| !d.id.contains(".env."))
-            .collect();
+        let theirs: Vec<_> = crate::fx::rows().iter().collect();
         assert_eq!(ours.len(), theirs.len());
         for (a, b) in ours.iter().zip(theirs.iter()) {
             assert_eq!(a.id, format!("{PREFIX}{}", b.id));
@@ -224,11 +213,6 @@ mod tests {
                 (b.taper, b.unit, b.smooth_ms)
             );
         }
-    }
-
-    #[test]
-    fn the_crusher_has_no_envelope_here() {
-        assert!(params().iter().all(|p| !p.id.contains(".env.")));
     }
 
     #[test]

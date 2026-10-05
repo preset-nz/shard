@@ -107,11 +107,6 @@ impl ParamDef {
 /// The set the engine actually reads. Deliberately small: a row exists here
 /// because a node reads it, never because a control might be nice to have.
 ///
-/// Two envelopes live in this table and they are not interchangeable. `env.*`
-/// shapes amplitude, where neutral means transparent. `crush.env.*` shapes the
-/// crush mix, where neutral means "leave the knob alone". Same maths, opposite
-/// reading of the same number — see `Engine::process_block`.
-///
 /// **Every switchable node follows one pattern, by role** (Georg, 2026-09-13).
 /// Its switch is `<node>.on`. A **generator** makes sound, and its first row
 /// after the switch is `<node>.gain`, named "Gain". An **effect** shapes

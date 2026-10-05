@@ -106,61 +106,6 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
         unit: Unit::Hz,
         smooth_ms: 20.0,
     },
-    // The crush envelope. Multiplies `crush.mix` rather than the signal, so
-    // an attack is "starts clean, then crushes" and a release is the reverse.
-    // Its neutral shape is a flat one, which leaves the knob untouched.
-    ParamDef {
-        id: "crush.env.amount",
-        name: "Env amount",
-        min: 0.0,
-        max: 1.0,
-        // Full depth, like the amplitude envelope. Harmless as a default
-        // because a neutral ADSR is flat whatever the depth is set to.
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    },
-    ParamDef {
-        id: "crush.env.attack",
-        name: "Env attack",
-        min: 0.0,
-        max: 4000.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.env.decay",
-        name: "Env decay",
-        min: 0.0,
-        max: 4000.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.env.sustain",
-        name: "Env sustain",
-        min: 0.0,
-        max: 1.0,
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 0.0,
-    },
-    ParamDef {
-        id: "crush.env.release",
-        name: "Env release",
-        min: 0.0,
-        max: 4000.0,
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
 ];
 
 pub(crate) const RING_ROWS: &[ParamDef] = &[

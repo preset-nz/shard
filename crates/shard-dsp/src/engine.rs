@@ -37,11 +37,6 @@ struct Slots {
     pan: usize,
     reverse: usize,
     window: usize,
-    crush_env_amount: usize,
-    crush_env_attack: usize,
-    crush_env_decay: usize,
-    crush_env_sustain: usize,
-    crush_env_release: usize,
     grain_gain: usize,
     material_on: usize,
     material_gain: usize,
@@ -87,26 +82,6 @@ impl Slots {
             pan: at("grain.pan"),
             reverse: at("grain.reverse"),
             window: at("grain.window"),
-            crush_env_amount: at(&crate::fx::row_id(
-                crate::fx::CRUSH_ENV_INSTANCE,
-                "crush.env.amount",
-            )),
-            crush_env_attack: at(&crate::fx::row_id(
-                crate::fx::CRUSH_ENV_INSTANCE,
-                "crush.env.attack",
-            )),
-            crush_env_decay: at(&crate::fx::row_id(
-                crate::fx::CRUSH_ENV_INSTANCE,
-                "crush.env.decay",
-            )),
-            crush_env_sustain: at(&crate::fx::row_id(
-                crate::fx::CRUSH_ENV_INSTANCE,
-                "crush.env.sustain",
-            )),
-            crush_env_release: at(&crate::fx::row_id(
-                crate::fx::CRUSH_ENV_INSTANCE,
-                "crush.env.release",
-            )),
             grain_gain: at("grain.gain"),
             material_on: at("material.on"),
             material_gain: at("material.gain"),
@@ -292,8 +267,6 @@ struct NoteClock {
     /// climbs from, so a retrigger mid-release does not click.
     amp_shape: f32,
     amp_from: f32,
-    crush_shape: f32,
-    crush_from: f32,
 }
 
 impl NoteClock {
@@ -306,7 +279,6 @@ impl NoteClock {
         self.end = end;
         self.id = self.id.wrapping_add(1);
         self.amp_from = self.amp_shape;
-        self.crush_from = self.crush_shape;
     }
 }
 
@@ -888,20 +860,6 @@ impl Engine {
         // it exists. `position` and the player both address the window, not
         // the file, which is what makes trimming a long sample feel like
         // loading a short one.
-        // The crush envelope reads the same clock as the amplitude one, so the
-        // two stay in step, but it means something different. The amplitude
-        // envelope multiplies the *signal*, where one is transparent; this one
-        // multiplies the *mix knob*, where one is "as set" and zero is clean.
-        // An attack is therefore "starts clean, then crushes", and a release
-        // is the same gesture backwards.
-        let crush_env = EnvParams {
-            amount: read(&self.mods, bank, self.slots.crush_env_amount),
-            attack_ms: read(&self.mods, bank, self.slots.crush_env_attack),
-            decay_ms: read(&self.mods, bank, self.slots.crush_env_decay),
-            sustain: read(&self.mods, bank, self.slots.crush_env_sustain),
-            release_ms: read(&self.mods, bank, self.slots.crush_env_release),
-        };
-
         // The tape. Brake and reverse are two ways of asking for a speed, and
         // they share one slew — so flipping direction slows to a stop and
         // climbs back the other way, exactly as a reel does. An instant flip
@@ -1137,26 +1095,12 @@ impl Engine {
             let l = (material + gl + fm) * note_level;
             let r = (material + gr + fm) * note_level;
 
-            // Drive, crush and ring. The crush envelope reads the pass's
-            // clock, so it is worked out here and handed in.
-            let elapsed = self.player.elapsed();
-            let crush_env_gain = if length == Length::Sample {
-                crush_env.gain_at(elapsed, window_len, self.sample_rate)
-            } else {
-                self.note.crush_shape = crush_env.shape_at_note(
-                    self.note.age as f32,
-                    gate,
-                    self.note.crush_from,
-                    self.sample_rate,
-                );
-                crush_env.gain_of(self.note.crush_shape)
-            };
             // A step's velocity scales its note where it is made, before the
             // effects, so a soft step does not turn down the tails the loud
             // one before it left in a delay or a reverb.
             let vel = self.vel.process(self.vel_target);
             let (l, r) = (l * vel, r * vel);
-            let (l, r) = self.fx.front(l, r, &fx, crush_env_gain);
+            let (l, r) = self.fx.front(l, r, &fx);
 
             // A stopping reel loses level as well as pitch, because the head
             // stops seeing tape. Without this the last of the brake is a cloud
@@ -1174,6 +1118,7 @@ impl Engine {
                 amount: env.amount * self.fades.env.process(env_on_target),
                 ..env
             };
+            let elapsed = self.player.elapsed();
             let e = if length == Length::Sample {
                 faded_env.gain_at(elapsed, window_len, self.sample_rate)
             } else {
@@ -1199,7 +1144,7 @@ impl Engine {
             // patch's envelope, velocity and brake, into the arrangement's
             // chain. Mono, into both sides.
             let kit = self.kit.process() * self.kit_gain.process(arr.kit_gain);
-            let (l, r) = self.arr_fx.front(l * t + kit, r * t + kit, &arr.fx, 1.0);
+            let (l, r) = self.arr_fx.front(l * t + kit, r * t + kit, &arr.fx);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
 
             // The limiter holds peaks under the ceiling, a millisecond late.
@@ -2339,24 +2284,51 @@ mod tests {
     }
 
     #[test]
-    fn the_crush_envelope_starts_clean_and_then_crushes() {
-        // The contract this feature exists for. An attack on the crush
-        // envelope must leave the beginning of the pass untouched and have the
-        // effect fully in by the end of it.
-        let clean = render_crushed(&[]);
-        let swelling = render_crushed(&[
-            ("fx.1.crush.on", 1.0),
-            ("fx.1.crush.bits", 1.0),
-            ("fx.1.crush.rate", 400.0),
-            ("fx.1.crush.mix", 1.0),
-            ("fx.1.crush.env.amount", 1.0),
-            // 900 ms of attack across a one-second pass.
-            ("fx.1.crush.env.attack", 900.0),
-        ]);
+    fn a_mod_envelope_on_the_crush_mix_starts_clean_and_then_crushes() {
+        // What crush's own envelope was for, now done by a modulation
+        // envelope linked to the mix (Georg, 2026-10-04). An attack must
+        // leave the beginning of the pass untouched and have the effect fully
+        // in by the end of it.
+        let render = |swell: bool| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(48_000));
+            if swell {
+                // 900 ms of attack across a one-second pass.
+                let rise = crate::modulation::EnvSpec {
+                    id: 3,
+                    attack_ms: 900.0,
+                    decay_ms: 0.0,
+                    sustain: 1.0,
+                    release_ms: 0.0,
+                };
+                let mut set = ModSet::with_envelopes(&[], &[rise]);
+                set.link("fx.1.crush.mix", 3, 0.0, 1.0).unwrap();
+                drop(e.set_modulation(set));
+            }
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "grain.on", 0.0);
+            set(&bank, "amp.gain", 1.0);
+            if swell {
+                set(&bank, "fx.1.crush.on", 1.0);
+                set(&bank, "fx.1.crush.bits", 1.0);
+                set(&bank, "fx.1.crush.rate", 400.0);
+                set(&bank, "fx.1.crush.mix", 1.0);
+            }
+            let mut out = vec![0.0; 512];
+            let mut all = Vec::new();
+            for _ in 0..180 {
+                e.process_block(&mut out, &bank);
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        let clean = render(false);
+        let swelling = render(true);
 
         // The first 50 ms: the envelope has barely opened, so this is still
-        // the material. Not bit-exact, because the mix smoother is already
-        // moving, but audibly the same sound.
+        // the material. Not bit-exact, because the mix is smoothed and read a
+        // block at a time, but audibly the same sound.
         let head = (0.05 * 48_000.0) as usize * 2;
         let early = clean
             .iter()
@@ -2375,26 +2347,6 @@ mod tests {
             .take(head)
             .fold(0.0f32, |w, (a, b)| w.max((a - b).abs()));
         assert!(late > 0.3, "the crush never arrived: {late}");
-    }
-
-    #[test]
-    fn the_crush_envelope_runs_independently_of_the_amplitude_one() {
-        // Two envelopes, one clock, opposite gestures: the amplitude envelope
-        // fades the pass out while the crush envelope fades the effect in.
-        // Neither may cancel the other.
-        let out = render_crushed(&[
-            ("fx.1.crush.on", 1.0),
-            ("fx.1.crush.bits", 2.0),
-            ("fx.1.crush.mix", 1.0),
-            ("fx.1.crush.env.attack", 900.0),
-            ("env.release", 400.0),
-        ]);
-        assert!(out.iter().all(|s| s.is_finite()));
-
-        // The amplitude release still closes the pass.
-        let tail = (0.99 * 48_000.0) as usize * 2;
-        let level = out.iter().skip(tail).fold(0.0f32, |a, s| a.max(s.abs()));
-        assert!(level < 0.1, "the amplitude release did not close: {level}");
     }
 
     #[test]
