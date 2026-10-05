@@ -1176,71 +1176,79 @@ export default function App() {
           {/* The waveform follows the selection. Its title selects the
               material shown, for its octave and trim. The playhead and the
               envelope are drawn only over Sample's material, and the grains
-              only over Granular's. */}
-          <div className="-mb-2 flex items-baseline gap-2">
-            <button
-              type="button"
-              disabled={shownId === null}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => {
-                if (shownId === null) return;
-                // Editing lives in sound scaping, where the inspector is.
-                select({ kind: 'material', id: shownId });
-                setMode('soundscape');
-              }}
-              title="Show this material's octave and trim"
-              className={`text-[11px] font-semibold uppercase tracking-wider ${
-                selection?.kind === 'material' && selection.id === shownId
-                  ? 'text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              Material
-            </button>
-            <span className="truncate text-xs text-muted-foreground">
-              {shownRecord
-                ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
-                    blank
-                      ? 'Sample is off'
-                      : clockOnly
-                        ? 'Sample is off · its trim still sets how long a pass is'
-                        : readers.length > 0
-                          ? `read by ${readers.join(' and ')}`
-                          : 'not wired'
-                  }`
-                : `Nothing is wired into ${shownFor}`}
-            </span>
-          </div>
-          <div className={clockOnly ? 'opacity-40' : ''}>
-            <Waveform
-              peaks={blank ? [] : (shownWave?.peaks ?? [])}
-              position={values['grain.position'] ?? 0}
-              jitter={values['grain.jitter'] ?? 0}
-              showGrain={shownIsGrain}
-              playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
-              trimStart={shownRecord?.trim_start ?? 0}
-              trimEnd={shownRecord?.trim_end ?? 1}
-              envelope={shownIsPlayer ? envelope : null}
-              grains={shownIsGrain ? grains : []}
-              newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
-              selected={picked}
-              totalSamples={shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0}
-              // Stopped or frozen, the waveform is an inspector; playing, it is
-              // still the trim control it has always been.
-              inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
-              onTrim={(which, v) => {
-                if (!shownRecord) return;
-                void changeMaterial(
-                  which === 'start'
-                    ? { ...shownRecord, trim_start: v }
-                    : { ...shownRecord, trim_end: v },
-                );
-              }}
-              onPickGrain={(g) => {
-                if (g) void doAudition(g);
-              }}
-            />
-          </div>
+              only over Granular's. Sound scaping only (Georg, 2026-10-04):
+              in the tracker it was mostly empty, and the room goes to the
+              steps. Trim is still in the material's inspector. */}
+          {mode === 'soundscape' && (
+            <>
+              <div className="-mb-2 flex items-baseline gap-2">
+                <button
+                  type="button"
+                  disabled={shownId === null}
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => {
+                    if (shownId === null) return;
+                    // Editing lives in sound scaping, where the inspector is.
+                    select({ kind: 'material', id: shownId });
+                    setMode('soundscape');
+                  }}
+                  title="Show this material's octave and trim"
+                  className={`text-[11px] font-semibold uppercase tracking-wider ${
+                    selection?.kind === 'material' && selection.id === shownId
+                      ? 'text-primary'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  Material
+                </button>
+                <span className="truncate text-xs text-muted-foreground">
+                  {shownRecord
+                    ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
+                        blank
+                          ? 'Sample is off'
+                          : clockOnly
+                            ? 'Sample is off · its trim still sets how long a pass is'
+                            : readers.length > 0
+                              ? `read by ${readers.join(' and ')}`
+                              : 'not wired'
+                      }`
+                    : `Nothing is wired into ${shownFor}`}
+                </span>
+              </div>
+              <div className={clockOnly ? 'opacity-40' : ''}>
+                <Waveform
+                  peaks={blank ? [] : (shownWave?.peaks ?? [])}
+                  position={values['grain.position'] ?? 0}
+                  jitter={values['grain.jitter'] ?? 0}
+                  showGrain={shownIsGrain}
+                  playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
+                  trimStart={shownRecord?.trim_start ?? 0}
+                  trimEnd={shownRecord?.trim_end ?? 1}
+                  envelope={shownIsPlayer ? envelope : null}
+                  grains={shownIsGrain ? grains : []}
+                  newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
+                  selected={picked}
+                  totalSamples={
+                    shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0
+                  }
+                  // Stopped or frozen, the waveform is an inspector; playing, it is
+                  // still the trim control it has always been.
+                  inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
+                  onTrim={(which, v) => {
+                    if (!shownRecord) return;
+                    void changeMaterial(
+                      which === 'start'
+                        ? { ...shownRecord, trim_start: v }
+                        : { ...shownRecord, trim_end: v },
+                    );
+                  }}
+                  onPickGrain={(g) => {
+                    if (g) void doAudition(g);
+                  }}
+                />
+              </div>
+            </>
+          )}
 
           {/* The patch only: the tracker's preview may be something else. */}
           {mode === 'soundscape' && <PatchPreview preview={preview} busy={previewBusy} />}
