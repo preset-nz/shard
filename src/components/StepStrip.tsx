@@ -122,12 +122,13 @@ export function StepStrip({
         break;
     }
   };
-  // Read through a ref, so the menu listener is registered once and still
-  // sees the track as it is now.
+  // The Pattern menu's items arrive as app-kit's `command` event, carrying
+  // their id. Read through a ref, so the listener is registered once and
+  // still sees the track as it is now.
   const patternRef = useRef(pattern);
   patternRef.current = pattern;
   useEffect(() => {
-    const unlisten = listen<string>('menu', (e) => {
+    const unlisten = listen<string>('command', (e) => {
       if (e.payload.startsWith('pattern-')) {
         patternRef.current(e.payload.slice('pattern-'.length), Math.floor(cursor.current / BAR));
       }
