@@ -264,6 +264,7 @@ fn every_effect_is_in_its_chain() {
 fn fixed_nodes_stay() {
     let mut doc = new_session();
     for path in [
+        "/patches/patch",
         "/patches/patch/filter",
         "/patches/patch/grain",
         "/arrangements/arrangement/amp",
@@ -372,6 +373,11 @@ fn links_follow_the_rules_the_engine_has() {
     );
     doc.edit("Link", |tx| tx.link(patch, "patch.hold", env, 0.0, 1.0))
         .unwrap();
+    assert!(
+        doc.edit("Link", |tx| tx.link(env, "mod-env.attack", lfo, 0.0, 1.0))
+            .is_err(),
+        "a modulator's own settings are not parameters the engine can link"
+    );
 
     let filter = id(&doc, "/arrangements/arrangement/filter");
     assert!(

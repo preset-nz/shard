@@ -210,10 +210,18 @@ fn lives_under(node: &Node<'_>, under: Under) -> std::result::Result<(), String>
     }
 }
 
-/// Links onto a node: each onto a continuous value (a set of choices can't
-/// follow a modulator, as `LinkError::Stepped` says), at most one per value,
-/// and only from a modulator of the node's own patch.
+/// Links onto a node: each onto a continuous parameter (a set of choices
+/// can't follow a modulator, as `LinkError::Stepped` says, and a modulator's
+/// own settings are not parameters), at most one per value, and only from a
+/// modulator of the node's own patch.
 fn links_hold(node: &Node<'_>) -> std::result::Result<(), String> {
+    let bindings = node.bindings();
+    if bindings.is_empty() {
+        return Ok(());
+    }
+    if is_modulator(node) {
+        return Err(format!("a {} can't follow a modulator", node.type_name()));
+    }
     let patch = if node.type_name() == PATCH {
         Some(node.id())
     } else {
@@ -222,10 +230,16 @@ fn links_hold(node: &Node<'_>) -> std::result::Result<(), String> {
             .map(|p| p.id())
     };
     let mut seen: Vec<&str> = Vec::new();
-    for b in node.bindings() {
+    for b in bindings {
         let On::Value(key) = b.on else {
             return Err("a link is onto a value, not a slot".into());
         };
+        let parameter = PARAMS.iter().any(|p| p.id == key)
+            || Fx::from_name(node.type_name())
+                .is_some_and(|k| k.rows().iter().any(|r| r.id == key));
+        if !parameter {
+            return Err(format!("{key} is not a parameter a modulator can move"));
+        }
         let kind = node.node_type().and_then(|t| t.spec(key)).map(|s| s.kind);
         if kind != Some(ValueKind::Float) {
             return Err(format!(
@@ -323,8 +337,9 @@ pub fn kinds() -> Vec<KindDecl> {
             order_holds(n, MODULATORS, is_modulator)
         }),
         Role::Fixed,
-        false,
-        // One patch until multi-patch.
+        // One patch, made with the session and never removed, until
+        // multi-patch lifts both.
+        true,
         Some(1),
     );
 
