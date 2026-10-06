@@ -605,7 +605,9 @@ impl ObjectModel for Shard {
             .category(ARRANGEMENTS, Origin::Loaded)
             .category(MATERIALS, Origin::Loaded);
         for decl in kinds() {
-            let presets = matches!(decl.role, Role::Generator | Role::Effect);
+            // Every node the parameter table backs keeps presets: the
+            // generators and effects, and the patch, tape and output too.
+            let presets = matches!(decl.role, Role::Generator | Role::Effect | Role::Fixed);
             let mut kind = k.kind(decl.node_type);
             if decl.fixed {
                 kind = kind.not_deletable().not_duplicable();

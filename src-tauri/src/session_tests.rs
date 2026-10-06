@@ -499,3 +499,26 @@ fn a_modulator_edit_brings_rate_phase_and_ends_into_range() {
     let link = m.links["grain.position"];
     assert_eq!((link.lo, link.hi), (0.0, 1.0));
 }
+
+#[test]
+fn the_patch_and_its_output_keep_presets_too() {
+    let r = rig();
+    r.session.set_param("amp.gain", 0.5).unwrap();
+    r.session.save_preset("amp", "Quiet").unwrap();
+    r.session.save_preset("patch", "Plain").unwrap();
+    assert_eq!(r.session.preset_names("amp"), vec!["Quiet".to_string()]);
+    r.session.set_param("amp.gain", 1.0).unwrap();
+    r.session.apply_preset("amp", "Quiet").unwrap();
+    assert_eq!(get(&r, "amp.gain"), 0.5);
+}
+
+#[test]
+fn a_knob_on_an_effect_not_in_the_chain_moves_nothing() {
+    let r = rig();
+    assert!(r
+        .session
+        .set_param(&fx::row_id(5, "flanger.mix"), 0.5)
+        .is_ok());
+    assert!(r.session.undo().unwrap().is_none());
+    assert!(r.session.set_param("grain.nonsense", 0.5).is_err());
+}

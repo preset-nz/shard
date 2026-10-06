@@ -229,13 +229,19 @@ impl Session {
             self.feeds.bank.set_by_id(id, value);
             return Ok(());
         }
-        let (node, key, want) = self
-            .read(|d| {
-                let (node, key) = locate(d.tree(), id)?;
-                let spec = d.tree().get(node)?.node_type()?.spec(&key)?.clone();
-                Some((node, key, to_value(&spec, value)?))
-            })
-            .ok_or_else(|| format!("unknown parameter: {id}"))?;
+        let found = self.read(|d| {
+            let (node, key) = locate(d.tree(), id)?;
+            let spec = d.tree().get(node)?.node_type()?.spec(&key)?.clone();
+            Some((node, key, to_value(&spec, value)?))
+        });
+        let Some((node, key, want)) = found else {
+            // An effect no node plays: a knob still mapped to it moves
+            // nothing, as it did when only the bank heard it.
+            if fx::parse_row(id).is_some() {
+                return Ok(());
+            }
+            return Err(format!("unknown parameter: {id}"));
+        };
         let label = format!("Set {}", name_of(id));
         self.edit(&label, Some(&format!("param:{id}")), |tx| {
             tx.put(node, &key, want)
@@ -552,10 +558,20 @@ impl Session {
 
     // Presets.
 
-    /// The node a preset names, such as `grain` or `fx.3.chorus`: patch only.
+    /// The node a preset names, such as `grain`, `amp`, `patch` or
+    /// `fx.3.chorus`: patch only.
     fn preset_node(&self, node: &str) -> Result<NodeId, String> {
-        self.read(|d| locate(d.tree(), &format!("{node}.on")).map(|(n, _)| n))
-            .ok_or_else(|| format!("there is no {node} to keep presets for"))
+        self.read(|d| {
+            let patch = patch_node(d.tree())?;
+            if node == om::PATCH {
+                return Some(patch.id());
+            }
+            if node.starts_with("fx.") {
+                return locate(d.tree(), &format!("{node}.on")).map(|(n, _)| n);
+            }
+            patch.child(node).map(|n| n.id())
+        })
+        .ok_or_else(|| format!("there is no {node} to keep presets for"))
     }
 
     pub fn preset_names(&self, node: &str) -> Vec<String> {

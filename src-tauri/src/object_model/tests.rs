@@ -417,6 +417,7 @@ fn a_preset_is_a_sound_and_never_its_switch() {
         "applying a preset never switches a node in or out"
     );
     assert!(doc.has_presets("grain") && doc.has_presets("filter"));
+    assert!(doc.has_presets(PATCH) && doc.has_presets("amp"));
     assert!(!doc.has_presets(LFO) && !doc.has_presets(TRACK));
 }
 
