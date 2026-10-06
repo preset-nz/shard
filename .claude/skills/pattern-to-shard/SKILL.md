@@ -38,7 +38,8 @@ python3 .claude/skills/pattern-to-shard/ask_model.py "a bass line that is claust
 
 ```sh
 python3 .claude/skills/pattern-to-shard/pattern_to_shard.py pattern.json ~/Downloads/name.shard \
-  --root 29 --set fm.ratio=1 --set fm.index=2.4 --set filter.on=1 --set filter.cutoff=420
+  --root 29 --set fm.ratio=1 --set fm.index=2.4 --set filter.on=1 --set filter.cutoff=420 \
+  --effect drive --set drive.amount=14
 ```
 
 What it does:
@@ -46,19 +47,24 @@ What it does:
 - **FM plays it.** `material.on` 0, `fm.on` 1, `fm.freq` the root's frequency.
   Step pitch is semitones from the root, within ±24. `--root` defaults to the lowest note.
 - **Notes hold.** `patch.length` is 2 (Hold) and each step's `hold` is its duration × 4, from 1 to 16.
-- **`--set id=value`** for any patch parameter. Ids, ranges and step names are in
-  `crates/shard-dsp/src/params.rs`. FM type, filter type and the like are stepped indices.
-- **Sparse by default.** Ids left out keep their defaults, and Shard says "N left at
-  default" on open. For a clean open, pass `--defaults` a dump of every patch id. To make one,
-  add a throwaway `crates/shard-dsp/examples/` that prints
-  `P\t{id}\t{default}` for `shard_dsp::params::PARAMS`, run it, then delete it.
-- The arrangement is left empty, so it stays at its defaults.
+- **`--set id=value`** for any patch parameter, `arrangement.*` for the arrangement. Ids, ranges and step
+  names are in `crates/shard-dsp/src/params.rs`. FM type, filter type and the like are stepped indices.
+- **`--effect kind`** adds an effect to the patch's chain, in order (`drive`, `chorus`, `delay`, ...; the
+  kinds are `shard_dsp::fx::Kind`). `--set drive.amount=14` sets the first drive's row.
+- **Shard writes the file.** The script builds a sketch and runs `just shard-write`, which makes the
+  `.shard` through the app's own session (`src-tauri/src/sketch.rs`). The file is rhizome's format, what
+  the app saves. An unknown id or kind fails with its name, and nothing is written. Ids left out keep
+  their defaults.
+- The first run compiles the tests, so it takes a minute; later runs take seconds.
 
 ## Check
 
-Open the file in Shard (`open ~/Downloads/name.shard`) and press play. To check
-it without the app, a throwaway test in `src-tauri/src/patch.rs` can call
-`Document::from_json` and `patch.apply` on a fresh `ParamBank` and assert that
-`unknown` is empty and `tracker.clone().sanitised() == tracker`. Revert it afterwards.
+```sh
+just shard-check ~/Downloads/name.shard
+```
+
+It prints whether the file loads clean (nodes, unknown, refused), its level and how the drums sit
+against the track, and renders eight bars to `~/rhizomatic-preset/renders/`. Then open it in Shard
+(`open ~/Downloads/name.shard`) and press play.
 
 Save files to `~/Downloads/` unless told otherwise. Renders go to `~/rhizomatic-preset/renders/`.

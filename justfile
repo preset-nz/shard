@@ -63,6 +63,12 @@ shard-check file:
     mkdir -p ~/rhizomatic-preset/renders
     SHARD_FILE="$(cd '{{invocation_directory()}}' && realpath '{{file}}')" SHARD_RENDERS=~/rhizomatic-preset/renders cargo test -q -p shard check_a_shard_file -- --nocapture
 
+# A flat sketch (tracker, rows by id, effects by kind) made into a .shard
+# through the session; the pattern-to-shard skill writes its files this way.
+[group('eval')]
+shard-write sketch out:
+    SHARD_SKETCH="{{join(invocation_directory(), sketch)}}" SHARD_OUT="{{join(invocation_directory(), out)}}" cargo test -q -p shard write_a_sketch -- --nocapture
+
 [group('quality')]
 check:
     ./node_modules/.bin/tsc --noEmit

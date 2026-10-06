@@ -43,6 +43,9 @@ mod profile;
 pub mod session;
 #[cfg(test)]
 mod session_tests;
+// Writes a `.shard` from a flat sketch, for `just shard-write`.
+#[cfg(test)]
+mod sketch;
 mod source;
 mod tracker;
 

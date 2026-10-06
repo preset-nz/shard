@@ -11,14 +11,21 @@ else the first). Pitches are semitones from the FM operator's frequency, which i
 the root note. Durations are in quarter notes, so 0.25 is one step; they
 become step holds and the patch's Length is set to Hold.
 
-Patch values are a sparse map: an id left out keeps its default and the app
-reports it as "left at default". Pass `--defaults` a tab-separated dump of
-`P|A <id> <default>` lines to write every id instead.
+The script writes a sketch (the tracker, rows by id, effects by kind) and
+hands it to `just shard-write`, which makes the `.shard` through Shard's own
+session, so the file is always the format the app opens. An id left out keeps
+its default.
 """
 
 import argparse
 import json
+import os
+import subprocess
 import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[3]
 
 STEPS = 64
 PITCH_RANGE = 24
@@ -68,9 +75,11 @@ def main():
     ap.add_argument("--track", help="which track to take; default bass, else the first")
     ap.add_argument("--root", type=int, help="MIDI root note; default the lowest note")
     ap.add_argument("--swing", type=float, default=0.0)
+    ap.add_argument("--effect", action="append", default=[], metavar="KIND",
+                    help="an effect on the patch's chain, in order, repeatable: drive, chorus, ...")
     ap.add_argument("--set", action="append", default=[], metavar="ID=VALUE",
-                    help="a patch value, repeatable; arrangement.* ids go to the arrangement")
-    ap.add_argument("--defaults", help="tab-separated id defaults, to write every id")
+                    help="a value, repeatable; arrangement.* ids go to the arrangement, "
+                         "and an effect's rows (drive.amount) to the first --effect of that kind")
     args = ap.parse_args()
 
     pattern = json.load(open(args.pattern))
@@ -81,10 +90,7 @@ def main():
     )
 
     patch, arrangement = {}, {}
-    if args.defaults:
-        for line in open(args.defaults):
-            kind, pid, value = line.rstrip("\n").split("\t")
-            (arrangement if kind == "A" else patch)[pid] = float(value)
+    effects = [{"kind": k} for k in args.effect]
 
     # FM plays the line: the plain sample off, the operator at the root,
     # notes held for their step holds.
@@ -96,19 +102,35 @@ def main():
     })
     for kv in args.set:
         pid, value = kv.split("=", 1)
-        (arrangement if pid.startswith("arrangement.") else patch)[pid] = float(value)
+        node, _, row = pid.partition(".")
+        effect = next((e for e in effects if e["kind"] == node), None)
+        if effect is not None:
+            effect[row] = float(value)
+        elif pid.startswith("arrangement."):
+            arrangement[pid] = float(value)
+        else:
+            patch[pid] = float(value)
 
-    doc = {
-        "version": 3,
+    sketch = {
         "tracker": tracker(pattern, track, root, args.swing),
+        "patch": dict(sorted(patch.items())),
+        "effects": effects,
         "arrangement": dict(sorted(arrangement.items())),
-        "patch": {"params": dict(sorted(patch.items()))},
     }
-    with open(args.out, "w") as f:
-        json.dump(doc, f, indent=2)
-        f.write("\n")
-    print(f"{args.out}: {track}, root {root} ({midi_hz(root):.2f} Hz), "
-          f"{len(pattern['tracks'][track])} notes, {doc['tracker']['tempo']:g} bpm")
+    out = os.path.abspath(args.out)
+    with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+        json.dump(sketch, f, indent=2)
+    try:
+        run = subprocess.run(["just", "shard-write", f.name, out], cwd=REPO,
+                             capture_output=True, text=True)
+    finally:
+        os.unlink(f.name)
+    if run.returncode != 0 or not os.path.exists(out):
+        lines = (run.stdout + run.stderr).splitlines()
+        why = [lines[i + 1] for i, l in enumerate(lines[:-1]) if "panicked at" in l]
+        sys.exit("Shard refused the sketch: " + ("; ".join(why) or "\n".join(lines[-20:])))
+    print(f"{out}: {track}, root {root} ({midi_hz(root):.2f} Hz), "
+          f"{len(pattern['tracks'][track])} notes, {sketch['tracker']['tempo']:g} bpm")
 
 
 if __name__ == "__main__":
