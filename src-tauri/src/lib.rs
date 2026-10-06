@@ -721,52 +721,6 @@ fn reset_sound(state: tauri::State<'_, Audio>) -> Result<bool, String> {
     state.session.reset_sound()
 }
 
-/// What Undo and Redo would do, by name, for the UI.
-#[derive(Serialize)]
-pub struct HistoryView {
-    pub undo: Option<String>,
-    pub redo: Option<String>,
-}
-
-#[tauri::command]
-fn history_state(state: tauri::State<'_, Audio>) -> HistoryView {
-    let (undo, redo) = state.session.history();
-    HistoryView { undo, redo }
-}
-
-/// Put the names of what Undo and Redo would do in the Edit menu, greyed out
-/// where there is nothing. The UI sends them when they change.
-#[tauri::command]
-fn set_history_menu(app: tauri::AppHandle, undo: Option<String>, redo: Option<String>) {
-    // Absent when the menu could not be built; then there is nothing to name.
-    if let Some(items) = app.try_state::<menu::HistoryItems>() {
-        items.set(undo.as_deref(), redo.as_deref());
-    }
-}
-
-/// Step back one edit. Answers with the name of what was undone, or nothing
-/// when there was nothing to undo.
-#[tauri::command]
-fn undo(
-    state: tauri::State<'_, Audio>,
-    ctl: tauri::State<'_, Arc<midi::Controllers>>,
-) -> Result<Option<String>, String> {
-    let label = state.session.undo()?;
-    follow_map(&state, &ctl);
-    Ok(label)
-}
-
-/// Step forward again after an undo.
-#[tauri::command]
-fn redo(
-    state: tauri::State<'_, Audio>,
-    ctl: tauri::State<'_, Arc<midi::Controllers>>,
-) -> Result<Option<String>, String> {
-    let label = state.session.redo()?;
-    follow_map(&state, &ctl);
-    Ok(label)
-}
-
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
@@ -1769,7 +1723,6 @@ pub fn run() {
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .manage(audio)
         .manage(opened::Opened::default())
-        .on_menu_event(|app, event| menu::forward(app, event.id().as_ref()))
         .setup(|app| {
             // Controllers belong to this machine, so they live in the app's
             // config directory rather than in any patch.
@@ -1799,14 +1752,33 @@ pub fn run() {
             }));
             midi::start(Arc::clone(&shared));
             app.manage(shared);
-            // The menu bar. If it cannot be built the default one stays and
-            // the webview's key handlers carry the shortcuts.
-            if let Err(e) = menu::install(app.handle()) {
-                eprintln!("shard: could not build the menu bar: {e}");
+            // The menu bar, from app-kit and Shard's own commands. If it
+            // cannot be built the default one stays and the webview's key
+            // handlers carry the shortcuts.
+            let installed = preset_app_kit::AppKit::<tauri::Wry>::new(menu::APP_NAME)
+                .menu_config(menu::MENU_CONFIG)
+                .commands(menu::commands())
+                .install_history::<Audio>(app.handle());
+            match installed {
+                // Undo's title follows every change, whoever made it: the
+                // webview, a knob, undo itself.
+                Ok(()) => {
+                    let handle = app.handle().clone();
+                    audio
+                        .session
+                        .on_change(move || preset_app_kit::refresh_history(&handle));
+                }
+                Err(e) => eprintln!("shard: could not build the menu bar: {e}"),
             }
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            preset_app_kit::app_kit_commands,
+            preset_app_kit::app_kit_menu_state,
+            preset_app_kit::app_kit_history,
+            preset_app_kit::app_kit_undo,
+            preset_app_kit::app_kit_redo,
+            preset_app_kit::app_kit_text_menu,
             param_defs,
             get_params,
             set_param,
@@ -1816,11 +1788,7 @@ pub fn run() {
             fx_add,
             fx_remove,
             fx_move,
-            history_state,
             reset_sound,
-            set_history_menu,
-            undo,
-            redo,
             meters,
             set_playing,
             tracker,

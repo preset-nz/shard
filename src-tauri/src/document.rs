@@ -20,8 +20,15 @@ use tauri::{AppHandle, Emitter, Manager, Runtime};
 use crate::session::LoadReport;
 use crate::{follow_map, midi, Audio};
 
-/// An undo or redo changed the document; the payload is what it undid or redid.
+/// An undo or redo changed the document; the payload is a `Stepped`.
 pub const HISTORY_STEPPED: &str = "history-stepped";
+
+/// What an undo or redo did, for the webview's note: "Undid “Set Cutoff”".
+#[derive(Clone, serde::Serialize)]
+pub struct Stepped {
+    pub undid: bool,
+    pub label: String,
+}
 /// The document was replaced by a file or a new one; the payload is a
 /// `LoadReport`.
 pub const DOCUMENT_OPENED: &str = "document-opened";
@@ -34,10 +41,10 @@ impl Audio {
         follow_map(self, &ctl)
     }
 
-    fn step<R: Runtime>(&self, app: &AppHandle<R>, label: Option<String>) {
+    fn step<R: Runtime>(&self, app: &AppHandle<R>, undid: bool, label: Option<String>) {
         if let Some(label) = label {
             self.follow(app);
-            let _ = app.emit(HISTORY_STEPPED, label);
+            let _ = app.emit(HISTORY_STEPPED, Stepped { undid, label });
         }
     }
 
@@ -66,13 +73,13 @@ impl History for Audio {
 
     fn undo<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
         let label = self.session.undo()?;
-        self.step(app, label);
+        self.step(app, true, label);
         Ok(())
     }
 
     fn redo<R: Runtime>(&self, app: &AppHandle<R>) -> Result<(), String> {
         let label = self.session.redo()?;
-        self.step(app, label);
+        self.step(app, false, label);
         Ok(())
     }
 }

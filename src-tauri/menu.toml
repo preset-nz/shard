@@ -1,0 +1,13 @@
+# app-kit's built-in menu items (epic 32, story 4). Shard's own Open and Save
+# stand in for File's until app-kit's take over in slice c.
+[file]
+new = false
+open = false
+open_recent = false
+close = false
+save = false
+save_as = false
+revert = false
+
+[app]
+settings = true

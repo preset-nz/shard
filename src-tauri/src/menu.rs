@@ -1,266 +1,103 @@
-//! The native macOS menu bar (`design/native-apps.md` rule 1: the menu owns
-//! every command, with its shortcut shown beside it).
+//! Shard's own commands, for app-kit's command table (epic 32, story 4).
 //!
-//! Rust is plumbing: it builds the menu and forwards every activation to the
-//! webview as one event, `menu`, whose payload is the item's id. What each
-//! command does lives in TypeScript, in the same functions the keyboard
-//! fallback calls (`src/menu.ts`), so there is one handler per command.
+//! app-kit builds the menu bar around them: the App menu, Undo and Redo named
+//! after what they would do, Cut, Copy, Paste, the Window menu. Every
+//! activation reaches the webview as app-kit's `command` event carrying the
+//! id, and what each command does lives in TypeScript (`src/App.tsx`), in the
+//! same functions the keyboard fallback calls.
 //!
 //! **A menu accelerator is consumed by `NSMenu` before the key reaches the
-//! webview.** So a command here has its shortcut here and nowhere else, and
-//! the webview's own key handlers stay only as the fallback for when the menu
-//! could not be built. It also means a shortcut the strip used to handle
-//! itself, such as ⌘C, belongs to the Edit menu now; the tracker's bar
-//! commands have their own accelerators in the Pattern menu.
-//!
-//! Undo and Redo are custom items rather than the predefined ones, which talk
-//! to the focused text field's undo manager, not to the document's history
-//! (`history.rs`). Their titles carry the name of what they would do.
+//! webview,** so a command's shortcut is written here and nowhere else. The
+//! ids and accelerators are the ones Shard had before app-kit.
 
+use preset_app_kit::{Command, MenuName};
 use shard_dsp::fx::Kind;
-use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu, SubmenuBuilder};
-use tauri::{AppHandle, Emitter, Manager, Runtime, Wry};
-
-/// The one event every activation arrives as; the payload is the item id.
-pub const EVENT: &str = "menu";
-
-/// Bug reports go here.
-const CONTACT_EMAIL: &str = "georg@preset.nz";
 
 /// `fx-add:chorus` adds a chorus; the part after the colon is `Kind::name`.
 pub const FX_ADD_PREFIX: &str = "fx-add:";
 
-/// The two items whose titles change with the history.
-pub struct HistoryItems {
-    undo: MenuItem<Wry>,
-    redo: MenuItem<Wry>,
-}
+/// The app's name, as the App menu and About show it.
+pub const APP_NAME: &str = "Shard";
 
-impl HistoryItems {
-    /// "Undo Change Size", or plain "Undo" and greyed out when there is
-    /// nothing to undo.
-    pub fn set(&self, undo: Option<&str>, redo: Option<&str>) {
-        for (item, verb, what) in [(&self.undo, "Undo", undo), (&self.redo, "Redo", redo)] {
-            let _ = item.set_text(title(verb, what));
-            let _ = item.set_enabled(what.is_some());
-        }
+/// app-kit's switches for its built-in items. Shard's own Open and Save stay
+/// until app-kit's file items take over.
+pub const MENU_CONFIG: &str = include_str!("../menu.toml");
+
+/// Every accelerator Shard binds, by command id: written here and nowhere
+/// else, and held unique by a test.
+pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("file-open", "CmdOrCtrl+O"),
+    ("file-save", "CmdOrCtrl+S"),
+    ("file-reset-sound", "CmdOrCtrl+Shift+R"),
+    ("file-add-material", "CmdOrCtrl+Shift+O"),
+    ("view-tracker", "CmdOrCtrl+1"),
+    ("view-soundscape", "CmdOrCtrl+2"),
+    ("view-inspector", "CmdOrCtrl+I"),
+    ("fx-remove", "CmdOrCtrl+Shift+Backspace"),
+    ("fx-earlier", "CmdOrCtrl+Alt+Up"),
+    ("fx-later", "CmdOrCtrl+Alt+Down"),
+    ("pattern-copy", "CmdOrCtrl+Alt+C"),
+    ("pattern-paste", "CmdOrCtrl+Alt+V"),
+    ("pattern-repeat", "CmdOrCtrl+D"),
+    ("pattern-clear", "CmdOrCtrl+Alt+Backspace"),
+    ("pattern-up", "CmdOrCtrl+Ctrl+Up"),
+    ("pattern-down", "CmdOrCtrl+Ctrl+Down"),
+    ("pattern-octave-up", "CmdOrCtrl+Ctrl+Shift+Up"),
+    ("pattern-octave-down", "CmdOrCtrl+Ctrl+Shift+Down"),
+    ("pattern-rotate-back", "CmdOrCtrl+["),
+    ("pattern-rotate-forward", "CmdOrCtrl+]"),
+];
+
+/// A command with its accelerator from `SHORTCUTS`, if it has one.
+fn item(id: &str, label: &str) -> Command {
+    let c = Command::item(id, label);
+    match SHORTCUTS.iter().find(|(i, _)| *i == id) {
+        Some((_, accelerator)) => c.accelerator(accelerator),
+        None => c,
     }
 }
 
-/// A menu title for a command with an optional object.
-pub fn title(verb: &str, what: Option<&str>) -> String {
-    match what {
-        Some(what) => format!("{verb} {what}"),
-        None => verb.to_string(),
-    }
-}
-
-fn item<R: Runtime>(
-    app: &AppHandle<R>,
-    id: &str,
-    text: &str,
-    accelerator: Option<&str>,
-) -> tauri::Result<MenuItem<R>> {
-    MenuItem::with_id(app, id, text, true, accelerator)
-}
-
-/// Build the menu bar and install it. Called once from `setup`; if it fails
-/// the app keeps Tauri's default menu and the webview's key handlers carry
-/// the shortcuts.
-pub fn install(app: &AppHandle<Wry>) -> tauri::Result<()> {
-    let name = app.package_info().name.clone();
-    let about = AboutMetadata {
-        name: Some(name.clone()),
-        version: Some(app.package_info().version.to_string()),
-        copyright: Some("Free, pre-release build. No warranty.".into()),
-        credits: Some(format!("Bugs and feedback: {CONTACT_EMAIL}")),
-        ..Default::default()
-    };
-
-    let app_menu = Submenu::with_items(
-        app,
-        &name,
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, Some(about))?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(app, "app-settings", "Settings…", Some("CmdOrCtrl+,"))?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::services(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::quit(app, None)?,
-        ],
-    )?;
-
-    let file = Submenu::with_items(
-        app,
-        "File",
-        true,
-        &[
-            &item(app, "file-open", "Open…", Some("CmdOrCtrl+O"))?,
-            &item(app, "file-save", "Save", Some("CmdOrCtrl+S"))?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(
-                app,
-                "file-reset-sound",
-                "Reset Sound",
-                Some("CmdOrCtrl+Shift+R"),
-            )?,
-            &item(
-                app,
-                "file-add-material",
-                "Add Material…",
-                Some("CmdOrCtrl+Shift+O"),
-            )?,
-        ],
-    )?;
-
-    let undo = item(app, "edit-undo", "Undo", Some("CmdOrCtrl+Z"))?;
-    let redo = item(app, "edit-redo", "Redo", Some("CmdOrCtrl+Shift+Z"))?;
-    undo.set_enabled(false)?;
-    redo.set_enabled(false)?;
-    let edit = Submenu::with_items(
-        app,
-        "Edit",
-        true,
-        &[
-            &undo,
-            &redo,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::cut(app, None)?,
-            &PredefinedMenuItem::copy(app, None)?,
-            &PredefinedMenuItem::paste(app, None)?,
-            &PredefinedMenuItem::select_all(app, None)?,
-        ],
-    )?;
-
+/// Every command Shard adds to app-kit's.
+pub fn commands() -> Vec<Command> {
+    let file = |id, label, section| item(id, label).menu(MenuName::File).section(section);
+    let view = |id, label, section| item(id, label).menu(MenuName::View).section(section);
+    let effect = |id, label| item(id, label).domain("Effect").section(1);
+    let pattern = |id, label, section| item(id, label).domain("Pattern").section(section);
+    let mut all = vec![
+        file("file-open", "Open…", 0),
+        file("file-save", "Save", 0),
+        file("file-reset-sound", "Reset Sound", 1),
+        file("file-add-material", "Add Material…", 1),
+        view("view-tracker", "Tracker", 0),
+        view("view-soundscape", "Sound Scaping", 0),
+        view("view-inspector", "Grain Inspector", 1),
+    ];
     // The process lane's palette (`design/effect-palette.md`).
-    let mut add = SubmenuBuilder::new(app, "Add Effect");
     for kind in Kind::ALL {
-        add = add.item(&item(
-            app,
-            &format!("{FX_ADD_PREFIX}{}", kind.name()),
-            kind.label(),
-            None,
-        )?);
+        all.push(
+            item(&format!("{FX_ADD_PREFIX}{}", kind.name()), kind.label())
+                .domain("Effect")
+                .section(0)
+                .submenu("Add Effect"),
+        );
     }
-    let effects = Submenu::with_items(
-        app,
-        "Effects",
-        true,
-        &[
-            &add.build()?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(
-                app,
-                "fx-remove",
-                "Remove Effect",
-                Some("CmdOrCtrl+Shift+Backspace"),
-            )?,
-            &item(app, "fx-earlier", "Move Earlier", Some("CmdOrCtrl+Alt+Up"))?,
-            &item(app, "fx-later", "Move Later", Some("CmdOrCtrl+Alt+Down"))?,
-        ],
-    )?;
-
-    // The tracker's bar commands, on the step last focused.
-    let pattern = Submenu::with_items(
-        app,
-        "Pattern",
-        true,
-        &[
-            &item(app, "pattern-copy", "Copy Bar", Some("CmdOrCtrl+Alt+C"))?,
-            &item(app, "pattern-paste", "Paste Bar", Some("CmdOrCtrl+Alt+V"))?,
-            &item(app, "pattern-repeat", "Repeat Bar", Some("CmdOrCtrl+D"))?,
-            &item(
-                app,
-                "pattern-clear",
-                "Clear Bar",
-                Some("CmdOrCtrl+Alt+Backspace"),
-            )?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(app, "pattern-up", "Transpose Up", Some("CmdOrCtrl+Ctrl+Up"))?,
-            &item(
-                app,
-                "pattern-down",
-                "Transpose Down",
-                Some("CmdOrCtrl+Ctrl+Down"),
-            )?,
-            &item(
-                app,
-                "pattern-octave-up",
-                "Transpose Up an Octave",
-                Some("CmdOrCtrl+Ctrl+Shift+Up"),
-            )?,
-            &item(
-                app,
-                "pattern-octave-down",
-                "Transpose Down an Octave",
-                Some("CmdOrCtrl+Ctrl+Shift+Down"),
-            )?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(
-                app,
-                "pattern-rotate-back",
-                "Rotate Earlier",
-                Some("CmdOrCtrl+["),
-            )?,
-            &item(
-                app,
-                "pattern-rotate-forward",
-                "Rotate Later",
-                Some("CmdOrCtrl+]"),
-            )?,
-        ],
-    )?;
-
-    let view = Submenu::with_items(
-        app,
-        "View",
-        true,
-        &[
-            &item(app, "view-tracker", "Tracker", Some("CmdOrCtrl+1"))?,
-            &item(app, "view-soundscape", "Sound Scaping", Some("CmdOrCtrl+2"))?,
-            &PredefinedMenuItem::separator(app)?,
-            &item(
-                app,
-                "view-inspector",
-                "Grain Inspector",
-                Some("CmdOrCtrl+I"),
-            )?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::fullscreen(app, None)?,
-        ],
-    )?;
-
-    let window = Submenu::with_items(
-        app,
-        "Window",
-        true,
-        &[
-            &PredefinedMenuItem::minimize(app, None)?,
-            &PredefinedMenuItem::maximize(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::close_window(app, None)?,
-        ],
-    )?;
-
-    let menu = Menu::with_items(
-        app,
-        &[&app_menu, &file, &edit, &effects, &pattern, &view, &window],
-    )?;
-    app.set_menu(menu)?;
-    app.manage(HistoryItems { undo, redo });
-    Ok(())
-}
-
-/// Forward a menu activation to the webview.
-pub fn forward(app: &AppHandle<Wry>, id: &str) {
-    if let Err(e) = app.emit(EVENT, id) {
-        eprintln!("shard: could not forward menu item {id}: {e}");
-    }
+    all.extend([
+        effect("fx-remove", "Remove Effect"),
+        effect("fx-earlier", "Move Earlier"),
+        effect("fx-later", "Move Later"),
+        // The tracker's bar commands, on the step last focused.
+        pattern("pattern-copy", "Copy Bar", 0),
+        pattern("pattern-paste", "Paste Bar", 0),
+        pattern("pattern-repeat", "Repeat Bar", 0),
+        pattern("pattern-clear", "Clear Bar", 0),
+        pattern("pattern-up", "Transpose Up", 1),
+        pattern("pattern-down", "Transpose Down", 1),
+        pattern("pattern-octave-up", "Transpose Up an Octave", 1),
+        pattern("pattern-octave-down", "Transpose Down an Octave", 1),
+        pattern("pattern-rotate-back", "Rotate Earlier", 2),
+        pattern("pattern-rotate-forward", "Rotate Later", 2),
+    ]);
+    all
 }
 
 #[cfg(test)]
@@ -281,8 +118,44 @@ mod tests {
     }
 
     #[test]
-    fn a_title_carries_what_it_would_do() {
-        assert_eq!(title("Undo", Some("Change Size")), "Undo Change Size");
-        assert_eq!(title("Redo", None), "Redo");
+    fn the_menu_config_parses() {
+        preset_app_kit::MenuConfig::parse(MENU_CONFIG).expect("menu.toml is valid");
+    }
+
+    /// What app-kit and macOS bind in the menu bar before Shard adds anything:
+    /// Undo, Redo, Settings, Quit, Hide, Hide Others, Minimise, Close Window,
+    /// Full Screen, Cut, Copy, Paste and Select All.
+    const BUILT_IN: [&str; 13] = [
+        "CmdOrCtrl+Z",
+        "CmdOrCtrl+Shift+Z",
+        "CmdOrCtrl+,",
+        "CmdOrCtrl+Q",
+        "CmdOrCtrl+H",
+        "CmdOrCtrl+Alt+H",
+        "CmdOrCtrl+M",
+        "CmdOrCtrl+W",
+        "CmdOrCtrl+Ctrl+F",
+        "CmdOrCtrl+X",
+        "CmdOrCtrl+C",
+        "CmdOrCtrl+V",
+        "CmdOrCtrl+A",
+    ];
+
+    #[test]
+    fn no_two_commands_share_an_accelerator_or_an_id() {
+        let table = commands();
+        let ids: Vec<&str> = table.iter().map(|c| c.id()).collect();
+        for (n, id) in ids.iter().enumerate() {
+            assert!(!ids[n + 1..].contains(id), "{id} twice");
+        }
+        let mut taken: Vec<&str> = BUILT_IN.to_vec();
+        for (id, accelerator) in SHORTCUTS {
+            assert!(ids.contains(id), "{id} has a shortcut but no command");
+            assert!(
+                !taken.contains(accelerator),
+                "{id} takes {accelerator}, which is taken"
+            );
+            taken.push(accelerator);
+        }
     }
 }

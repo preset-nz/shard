@@ -1,7 +1,8 @@
+import { isTextField, redo, undo, useCommands, useCommandTable } from '@preset.nz/app-kit/core';
 import { dismissNotification, notify, SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
 import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ARRANGEMENT_PREFIX,
   addDrone,
@@ -26,7 +27,6 @@ import {
   getParams,
   getTracker,
   grainLog,
-  historyState,
   type LfoLimits,
   learnMidi,
   lfoLimits,
@@ -48,14 +48,12 @@ import {
   materials as readMaterials,
   meters as readMeters,
   modulation as readModulation,
-  redoEdit,
   removeEnvelope,
   removeLfo,
   removeMaterial,
   resetSound,
   type SourceInfo,
   savePatch,
-  setHistoryMenu,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -65,7 +63,6 @@ import {
   type Tracker,
   type TrackerEdit,
   takeOpenedFile,
-  undoEdit,
   unlinkParam,
   wireMaterial,
 } from '@/audio';
@@ -284,8 +281,6 @@ export default function App() {
     };
   }, []);
 
-  const historyMenuRef = useRef('|');
-
   // Poll. Thirty hertz is enough for a meter and for the controls to follow a
   // patch load or a preset, and it keeps the boundary quiet. Nothing here is on the
   // audio path, so a late frame costs nothing but a slightly stale number.
@@ -295,22 +290,15 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v, fresh, h, mm, a, hist] = await Promise.all([
+        const [m, v, fresh, h, mm, a] = await Promise.all([
           readMeters(),
           getParams(),
           grainLog(),
           getHeard(),
           readMappings(),
           getArrangement(),
-          historyState(),
         ]);
         if (!alive) return;
-        // The Edit menu names what Undo and Redo would do; say so when it changes.
-        const historyKey = `${hist.undo ?? ''}|${hist.redo ?? ''}`;
-        if (historyKey !== historyMenuRef.current) {
-          historyMenuRef.current = historyKey;
-          void setHistoryMenu(hist.undo, hist.redo);
-        }
         setMeter(m);
         setMidi(mm);
         // Learning answers once, through the poll. Say it once.
@@ -739,21 +727,23 @@ export default function App() {
 
   // Undo and redo. Rust steps the document back; the values arrive with the
   // next poll, and the tracker and the modulation are asked for again here.
-  const stepHistory = useCallback(async (direction: 'undo' | 'redo') => {
-    try {
-      const label = await (direction === 'undo' ? undoEdit() : redoEdit());
-      if (label === null) {
-        setNote(direction === 'undo' ? 'Nothing to undo.' : 'Nothing to redo.');
-        return;
+  // Undo and Redo are app-kit's: the Edit menu, its shortcut and the
+  // fallback below all reach Rust's history, which says what it stepped.
+  // Materials, modulation and the tracker are not polled, so read them again.
+  useEffect(() => {
+    const unlisten = listen<{ undid: boolean; label: string }>('history-stepped', async (e) => {
+      try {
+        setTrackerView(await getTracker());
+        setMod(await readModulation());
+        setPool(await readMaterials());
+        setNote(`${e.payload.undid ? 'Undid' : 'Redid'} “${e.payload.label}”.`);
+      } catch (err) {
+        setError(String(err));
       }
-      setTrackerView(await getTracker());
-      setMod(await readModulation());
-      // Materials and their wiring are part of the document, so undo reaches them.
-      setPool(await readMaterials());
-      setNote(`${direction === 'undo' ? 'Undid' : 'Redid'} “${label}”.`);
-    } catch (e) {
-      setError(String(e));
-    }
+    });
+    return () => {
+      void unlisten.then((off) => off());
+    };
   }, []);
 
   const togglePlay = useCallback(async () => {
@@ -776,10 +766,9 @@ export default function App() {
       }
       // A text field keeps its own undo; everything else steps the document.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
-        const field = e.target as HTMLElement | null;
-        if (field && /^(INPUT|TEXTAREA)$/.test(field.tagName)) return;
+        if (isTextField(e.target)) return;
         e.preventDefault();
-        void stepHistory(e.shiftKey ? 'redo' : 'undo');
+        void (e.shiftKey ? redo() : undo());
         return;
       }
       if ((e.metaKey || e.ctrlKey) && e.key === ',') {
@@ -863,17 +852,13 @@ export default function App() {
     setMode,
     moveEffect,
     removeEffect,
-    stepHistory,
   ]);
 
-  // The native menu bar (`menu.rs`). Each item arrives as one `menu` event
-  // carrying its id and runs the same function the keyboard fallback above
-  // calls. Read through a ref, so the listener is registered once. The
-  // tracker's Pattern items are the strip's own.
-  const inTextField = () => {
-    const at = document.activeElement;
-    return at instanceof HTMLInputElement || at instanceof HTMLTextAreaElement;
-  };
+  // The native menu bar: app-kit's, with Shard's commands (`menu.rs`). Each
+  // item arrives as app-kit's `command` event carrying its id and runs the
+  // same function the keyboard fallback above calls. Read through a ref, so
+  // the bindings are made once. The tracker's Pattern items are the strip's
+  // own. Undo and Redo, in a text field too, are app-kit's.
   const menuRef = useRef<(id: string) => void>(() => {});
   menuRef.current = (id) => {
     if (id.startsWith('fx-add:')) {
@@ -883,7 +868,7 @@ export default function App() {
     const sel = useSelection.getState().selection;
     const node = sel?.kind === 'node' ? nodeById(sel.id) : null;
     switch (id) {
-      case 'app-settings':
+      case 'app.settings':
         setSettingsOpen(true);
         break;
       case 'file-open':
@@ -904,16 +889,6 @@ export default function App() {
             setNote('Reset the sound to its defaults. Undo brings it back.');
           })
           .catch((e) => setError(String(e)));
-        break;
-      // The menu owns Cmd+Z, so a text field never sees it. In one, undo the
-      // text (a preset's name, the tempo), not the document.
-      case 'edit-undo':
-        if (inTextField()) document.execCommand('undo');
-        else void stepHistory('undo');
-        break;
-      case 'edit-redo':
-        if (inTextField()) document.execCommand('redo');
-        else void stepHistory('redo');
         break;
       case 'fx-remove':
         if (node?.fx) removeEffect(node);
@@ -937,12 +912,15 @@ export default function App() {
         break;
     }
   };
-  useEffect(() => {
-    const unlisten = listen<string>('menu', (e) => menuRef.current(e.payload));
-    return () => {
-      void unlisten.then((off) => off());
-    };
-  }, []);
+  const commandTable = useCommandTable();
+  const bindings = useMemo(
+    () =>
+      Object.fromEntries(
+        (commandTable ?? []).map((c) => [c.id, { run: () => menuRef.current(c.id) }]),
+      ),
+    [commandTable],
+  );
+  useCommands(bindings);
 
   // How many parameters follow each modulator, for the tree and the editors.
   const linkedCounts = new Map<number, number>();

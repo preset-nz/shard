@@ -10,6 +10,7 @@
     "tauri": "tauri"
   },
   "dependencies": {
+    "@preset.nz/app-kit": "^0.1.1",
     "@preset.nz/facets": "^0.2.0",
     "@preset.nz/ux-kit": "^0.1.0",
     "@tauri-apps/api": "^2",
