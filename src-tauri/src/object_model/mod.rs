@@ -46,7 +46,10 @@ mod compile_tests;
 #[cfg(test)]
 mod tests;
 
-pub use compile::{as_f32, compile, read_tracker, Plan};
+pub use compile::{
+    arrangement_node, as_f32, compile, instance_of, locate, patch_node, read_tracker, to_value,
+    Plan,
+};
 
 pub const EXTENSION: &str = "shard";
 
@@ -71,6 +74,8 @@ pub const CHAIN: &str = "chain";
 pub const MODULATORS: &str = "modulators";
 /// The order of the arrangement's tracks.
 pub const TRACKS: &str = "tracks";
+/// The order of the materials, as they were added.
+pub const POOL: &str = "pool";
 
 /// Played, not edited: a held button or a pedal writes them to the bank, and
 /// a document never stores them.
@@ -284,8 +289,22 @@ fn order_holds(
     Ok(())
 }
 
+/// A chain runs at most `fx::ORDER_LEN` effects, as the engine does.
+fn chain_fits(node: &Node<'_>) -> std::result::Result<(), String> {
+    if node.order(CHAIN).len() > fx::ORDER_LEN {
+        Err(format!("a chain runs at most {} effects", fx::ORDER_LEN))
+    } else {
+        Ok(())
+    }
+}
+
 fn is_effect(node: &Node<'_>) -> bool {
     Fx::from_name(node.type_name()).is_some()
+}
+
+/// Whether a node is an effect in a chain.
+pub fn is_effect_node(node: &Node<'_>) -> bool {
+    is_effect(node)
 }
 
 fn is_modulator(node: &Node<'_>) -> bool {
@@ -340,6 +359,7 @@ pub fn kinds() -> Vec<KindDecl> {
     push(
         checked(patch, Under::Category, |n| {
             order_holds(n, CHAIN, is_effect)?;
+            chain_fits(n)?;
             order_holds(n, MODULATORS, is_modulator)
         }),
         Role::Fixed,
@@ -435,6 +455,7 @@ pub fn kinds() -> Vec<KindDecl> {
     push(
         checked(arr, Under::Category, |n| {
             order_holds(n, CHAIN, is_effect)?;
+            chain_fits(n)?;
             order_holds(n, TRACKS, |c| c.type_name() == TRACK)
         }),
         Role::Structure,
@@ -443,11 +464,10 @@ pub fn kinds() -> Vec<KindDecl> {
     );
 
     // A track, with the patch's fader (one today, read from the first track,
-    // as only the first track sounds).
+    // as only the first track sounds). Whether it plays is the mode's, not
+    // the document's (Georg, 2026-10-06), so it has no switch here.
     let track = Track::default();
-    let t = NodeType::new(TRACK)
-        .in_categories(&[ARRANGEMENTS])
-        .bool("track.on", track.on);
+    let t = NodeType::new(TRACK).in_categories(&[ARRANGEMENTS]);
     let t = with_rows(t, &arrangement_rows("track")).int(
         "track.length",
         4..=STEPS as i64,
@@ -553,7 +573,16 @@ pub fn kinds() -> Vec<KindDecl> {
         // The MIDI note it sounds at, when known.
         .shaped("sample.root", Shape::optional(Shape::Int));
     push(
-        checked(t, Under::Category, none),
+        checked(t, Under::Category, |n| {
+            let listed = n
+                .parent()
+                .is_some_and(|p| p.order(POOL).iter().any(|m| m.id() == n.id()));
+            if listed {
+                Ok(())
+            } else {
+                Err(format!("{} is missing from {POOL}", n.path()))
+            }
+        }),
         Role::Structure,
         false,
         None,
@@ -639,8 +668,56 @@ pub trait ShardEdit {
     /// The arrangement, its tracks and kit written from a tracker, with its
     /// filter and output at their defaults.
     fn add_arrangement(&mut self, tracker: &Tracker) -> Result<NodeId>;
+    /// Makes the arrangement's tempo, swing, tracks and kit grid what
+    /// `tracker` says, writing only what differs. A track's switch is the
+    /// mode's and is not written.
+    fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()>;
+    /// Sets `key` to `want`, or resets it when `want` is its default, and
+    /// writes nothing when it already is.
+    fn put(&mut self, node: NodeId, key: &str, want: Value) -> Result<()>;
     /// Every material in a pool, with the node each became.
     fn add_pool(&mut self, pool: &Pool) -> Result<Vec<(u64, NodeId)>>;
+}
+
+/// A step or beat: made when it stops being blank, removed when it becomes
+/// blank again, its fields written where they differ.
+trait PutCell {
+    fn put_cell<const N: usize>(
+        &mut self,
+        owner: NodeId,
+        kind: &str,
+        index: usize,
+        blank: bool,
+        fields: [(&str, Value); N],
+    ) -> Result<()>;
+}
+
+impl PutCell for Edit<'_> {
+    fn put_cell<const N: usize>(
+        &mut self,
+        owner: NodeId,
+        kind: &str,
+        index: usize,
+        blank: bool,
+        fields: [(&str, Value); N],
+    ) -> Result<()> {
+        let name = (index + 1).to_string();
+        let cell = self.at(owner).and_then(|o| o.child(&name)).map(|c| c.id());
+        match (cell, blank) {
+            (None, true) => Ok(()),
+            (Some(c), true) => self.remove(c),
+            (cell, false) => {
+                let c = match cell {
+                    Some(c) => c,
+                    None => self.add(owner, kind, &name)?,
+                };
+                for (key, value) in fields {
+                    self.put(c, key, value)?;
+                }
+                Ok(())
+            }
+        }
+    }
 }
 
 /// A node name from a free-text one: what a path allows, the rest as `-`.
@@ -706,79 +783,91 @@ impl ShardEdit for Edit<'_> {
     }
 
     fn add_arrangement(&mut self, tracker: &Tracker) -> Result<NodeId> {
-        let blank = Tracker::default();
         let arr = self.add(
             format!("/{ARRANGEMENTS}").as_str(),
             ARRANGEMENT,
             ARRANGEMENT,
         )?;
-        if tracker.tempo != blank.tempo {
-            self.set_value(arr, "arrangement.tempo", Value::Float(tracker.tempo.into()))?;
-        }
-        if tracker.swing != blank.swing {
-            self.set_value(arr, "arrangement.swing", Value::Float(tracker.swing.into()))?;
-        }
-
-        let fresh_track = Track::default();
-        let blank_step = Step::default();
-        for t in &tracker.tracks {
-            let node = self.add_unique(arr, TRACK, TRACK)?;
-            self.append_to_order(arr, TRACKS, node)?;
-            if t.on != fresh_track.on {
-                self.set_value(node, "track.on", Value::Bool(t.on))?;
-            }
-            if t.length != fresh_track.length {
-                self.set_value(node, "track.length", int(t.length))?;
-            }
-            for (i, s) in t.steps.iter().take(STEPS).enumerate() {
-                if *s == blank_step {
-                    continue;
-                }
-                let step = self.add(node, STEP, &(i + 1).to_string())?;
-                let fields = [
-                    ("step.on", Value::Bool(s.on), s.on != blank_step.on),
-                    ("step.pitch", int(s.pitch), s.pitch != blank_step.pitch),
-                    ("step.hold", int(s.hold), s.hold != blank_step.hold),
-                    (
-                        "step.velocity",
-                        int(s.velocity),
-                        s.velocity != blank_step.velocity,
-                    ),
-                    ("step.nudge", int(s.nudge), s.nudge != blank_step.nudge),
-                ];
-                for (key, value, differs) in fields {
-                    if differs {
-                        self.set_value(step, key, value)?;
-                    }
-                }
-            }
-        }
-
-        let kit = self.add(arr, KIT, KIT)?;
-        if tracker.kit.length != Kit::default().length {
-            self.set_value(kit, "kit.length", int(tracker.kit.length))?;
-        }
-        for i in 0..STEPS {
-            let hits = [
-                ("beat.kick", tracker.kit.kick.get(i)),
-                ("beat.snare", tracker.kit.snare.get(i)),
-                ("beat.hat", tracker.kit.hat.get(i)),
-            ];
-            if hits.iter().all(|(_, h)| h.copied().unwrap_or(0) == 0) {
-                continue;
-            }
-            let beat = self.add(kit, BEAT, &(i + 1).to_string())?;
-            for (key, h) in hits {
-                let h = h.copied().unwrap_or(0);
-                if h != 0 {
-                    self.set_value(beat, key, int(h))?;
-                }
-            }
-        }
-
+        self.add(arr, KIT, KIT)?;
         self.add(arr, "filter", "filter")?;
         self.add(arr, MASTER, "amp")?;
+        self.write_tracker(arr, tracker)?;
         Ok(arr)
+    }
+
+    fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()> {
+        self.put(arr, "arrangement.tempo", Value::Float(tracker.tempo.into()))?;
+        self.put(arr, "arrangement.swing", Value::Float(tracker.swing.into()))?;
+
+        let existing: Vec<NodeId> = self
+            .at(arr)
+            .map(|a| a.order(TRACKS).iter().map(|n| n.id()).collect())
+            .unwrap_or_default();
+        let blank = Step::default();
+        for (t, track) in tracker.tracks.iter().enumerate() {
+            let node = match existing.get(t) {
+                Some(n) => *n,
+                None => {
+                    let n = self.add_unique(arr, TRACK, TRACK)?;
+                    self.append_to_order(arr, TRACKS, n)?;
+                    n
+                }
+            };
+            self.put(node, "track.length", int(track.length))?;
+            for i in 0..STEPS {
+                let s = track.steps.get(i).copied().unwrap_or(blank);
+                let fields = [
+                    ("step.on", Value::Bool(s.on)),
+                    ("step.pitch", int(s.pitch)),
+                    ("step.hold", int(s.hold)),
+                    ("step.velocity", int(s.velocity)),
+                    ("step.nudge", int(s.nudge)),
+                ];
+                self.put_cell(node, STEP, i, s == blank, fields)?;
+            }
+        }
+        for gone in existing.iter().skip(tracker.tracks.len()) {
+            self.remove(*gone)?;
+        }
+
+        let kit = self.at(arr).and_then(|a| a.child(KIT)).map(|k| k.id());
+        if let Some(kit) = kit {
+            self.put(kit, "kit.length", int(tracker.kit.length))?;
+            for i in 0..STEPS {
+                let hit = |row: &Vec<u8>| row.get(i).copied().unwrap_or(0);
+                let hits = [
+                    hit(&tracker.kit.kick),
+                    hit(&tracker.kit.snare),
+                    hit(&tracker.kit.hat),
+                ];
+                let fields = [
+                    ("beat.kick", int(hits[0])),
+                    ("beat.snare", int(hits[1])),
+                    ("beat.hat", int(hits[2])),
+                ];
+                self.put_cell(kit, BEAT, i, hits == [0; 3], fields)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn put(&mut self, node: NodeId, key: &str, want: Value) -> Result<()> {
+        let Some((now, default)) = self.at(node).map(|n| {
+            let default = n
+                .node_type()
+                .and_then(|t| t.spec(key))
+                .map(|s| s.default.clone());
+            (n.value(key), default)
+        }) else {
+            return Ok(());
+        };
+        if now.as_ref() == Some(&want) {
+            Ok(())
+        } else if default.as_ref() == Some(&want) {
+            self.reset(node, key)
+        } else {
+            self.set_value(node, key, want)
+        }
     }
 
     fn add_pool(&mut self, pool: &Pool) -> Result<Vec<(u64, NodeId)>> {
@@ -805,6 +894,7 @@ impl ShardEdit for Edit<'_> {
             if let Some(root) = m.root {
                 self.set_value(node, "sample.root", Value::Shaped(json!(root)))?;
             }
+            self.append_to_order(format!("/{MATERIALS}").as_str(), POOL, node)?;
             out.push((m.id, node));
         }
         Ok(out)

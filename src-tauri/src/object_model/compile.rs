@@ -86,6 +86,11 @@ impl Plan {
     pub fn id_of(&self, node: NodeId) -> Option<u64> {
         self.ids.get(&node).copied()
     }
+
+    /// The node a runtime id names.
+    pub fn node_of(&self, id: u64) -> Option<NodeId> {
+        self.ids.iter().find(|(_, i)| **i == id).map(|(n, _)| *n)
+    }
 }
 
 fn write(values: &[f32], bank: &ParamBank) {
@@ -226,17 +231,13 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
         new: BTreeMap::new(),
     };
 
-    let patch = tree
-        .at(format!("/{PATCHES}").as_str())
-        .and_then(|c| c.children().find(|n| n.type_name() == PATCH));
-    let arr = tree
-        .at(format!("/{ARRANGEMENTS}").as_str())
-        .and_then(|c| c.children().find(|n| n.type_name() == ARRANGEMENT));
+    let patch = patch_node(tree);
+    let arr = arrangement_node(tree);
 
     // Materials first, so a wire can name one.
     plan.pool = Pool::default();
     if let Some(materials) = tree.at(format!("/{MATERIALS}").as_str()) {
-        for s in materials.children().filter(|n| n.type_name() == SAMPLE) {
+        for s in materials.order(POOL) {
             let path = text(&s, "sample.path");
             let root = match s.value("sample.root") {
                 Some(Value::Shaped(j)) => j.as_u64().and_then(|r| u8::try_from(r).ok()),
@@ -369,7 +370,8 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
                 };
             }
             Track {
-                on: t.value("track.on") == Some(Value::Bool(true)),
+                // The mode's, not the document's: the session sets it.
+                on: false,
                 length: int(&t, "track.length") as u32,
                 steps,
             }
@@ -397,5 +399,63 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
         swing: float(&arr, "arrangement.swing"),
         tracks,
         kit,
+    }
+}
+
+pub fn patch_node(tree: &Tree) -> Option<Node<'_>> {
+    tree.at(format!("/{PATCHES}").as_str())
+        .and_then(|c| c.children().find(|n| n.type_name() == PATCH))
+}
+
+pub fn arrangement_node(tree: &Tree) -> Option<Node<'_>> {
+    tree.at(format!("/{ARRANGEMENTS}").as_str())
+        .and_then(|c| c.children().find(|n| n.type_name() == ARRANGEMENT))
+}
+
+/// Where a parameter id lives: the node and its key. Patch ids and
+/// `arrangement.` ids alike. `None` for an order row, a played row, an effect
+/// instance no node plays, or an id the tree has no home for.
+pub fn locate(tree: &Tree, id: &str) -> Option<(NodeId, String)> {
+    let (owner, bare) = match id.strip_prefix(arrangement::PREFIX) {
+        Some(bare) => (arrangement_node(tree)?, bare),
+        None => (patch_node(tree)?, id),
+    };
+    if fx::is_order_row(id) || PLAYED.contains(&bare) {
+        return None;
+    }
+    if let Some((n, template)) = fx::parse_row(id) {
+        let node = Chain::of(Some(owner)).by_instance[n]?;
+        return Some((node.id(), template.to_string()));
+    }
+    let prefix = key_prefix(bare);
+    let node = match (owner.type_name(), prefix) {
+        (PATCH, PATCH) => owner,
+        (ARRANGEMENT, TRACK) => owner.order(TRACKS).into_iter().next()?,
+        _ => owner.child(prefix)?,
+    };
+    node.node_type()?.spec(bare)?;
+    Some((node.id(), bare.to_string()))
+}
+
+/// The pool instance an effect node plays, from its place in its chain.
+pub fn instance_of(tree: &Tree, node: NodeId) -> Option<usize> {
+    let owner = tree.get(node)?.parent();
+    Chain::of(owner).instance_of(node)
+}
+
+/// A bank value as the tree holds it under `spec`: a switch as a bool, a
+/// stepped row rounded, and every number brought into range, as the bank
+/// clamps.
+pub fn to_value(spec: &rhizome_core::ValueSpec, v: f32) -> Option<Value> {
+    let v = f64::from(v);
+    if !v.is_finite() {
+        return None;
+    }
+    let (lo, hi) = spec.range.unwrap_or((f64::MIN, f64::MAX));
+    match spec.kind {
+        rhizome_core::ValueKind::Bool => Some(Value::Bool(v >= 0.5)),
+        rhizome_core::ValueKind::Int => Some(Value::Int(v.round().clamp(lo, hi) as i64)),
+        rhizome_core::ValueKind::Float => Some(Value::Float(v.clamp(lo, hi))),
+        _ => None,
     }
 }

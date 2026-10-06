@@ -169,8 +169,8 @@ fn the_arrangement_chain_compiles_under_its_prefix() {
 /// Today's tracker, written into a tree and read back, is itself.
 #[test]
 fn a_tracker_round_trips_through_the_tree() {
+    // A track's switch is the mode's, never the tree's, so it stays off here.
     let mut first = Track {
-        on: true,
         length: 32,
         ..Track::default()
     };
@@ -335,4 +335,29 @@ fn writing_a_plan_leaves_a_held_brake_held() {
             assert_eq!(bank.get_by_id(def.id), Some(def.default), "{}", def.id);
         }
     }
+}
+
+/// Writing a tracker writes only what changed: the same tracker again is no
+/// edit, and a step made blank again leaves no node behind.
+#[test]
+fn writing_a_tracker_writes_only_what_differs() {
+    let mut doc = new_session();
+    let arr = id(&doc, "/arrangements/arrangement");
+    let blank = doc.projection().tracker.clone();
+
+    let mut t = blank.clone();
+    t.tempo = 100.0;
+    t.tracks[0].steps[7].pitch = 5;
+    let (_, commit) = doc.edit("Steps", |tx| tx.write_tracker(arr, &t)).unwrap();
+    assert!(commit.is_some());
+    assert_eq!(doc.projection().tracker, t);
+
+    let (_, again) = doc.edit("Steps", |tx| tx.write_tracker(arr, &t)).unwrap();
+    assert!(again.is_none(), "the same tracker is no edit");
+
+    doc.edit("Steps", |tx| tx.write_tracker(arr, &blank))
+        .unwrap();
+    assert_eq!(doc.projection().tracker, blank);
+    let track = doc.tree().get(arr).unwrap().order(TRACKS)[0];
+    assert!(track.child("8").is_none(), "a blank step leaves no node");
 }

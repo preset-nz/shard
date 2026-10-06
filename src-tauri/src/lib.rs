@@ -39,6 +39,9 @@ mod opened;
 mod patch;
 mod presets;
 mod profile;
+pub mod session;
+#[cfg(test)]
+mod session_tests;
 mod source;
 mod tracker;
 
