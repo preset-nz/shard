@@ -497,12 +497,12 @@ impl Session {
         let key = format!("lfo:{}", lfo.id);
         self.edit("Change LFO", Some(&key), |tx| {
             tx.put(node, "lfo.label", Value::Text(name))?;
-            tx.put(node, "lfo.rate", Value::Float(rate.into()))?;
+            tx.put(node, "lfo.rate", Value::Float(om::float(rate)))?;
             tx.put(node, "lfo.shape", Value::Choice(lfo.shape.clone()))?;
             tx.put(
                 node,
                 "lfo.phase",
-                Value::Float(lfo.phase.clamp(0.0, 1.0).into()),
+                Value::Float(om::float(lfo.phase.clamp(0.0, 1.0))),
             )
         })?;
         Ok(())
@@ -510,7 +510,7 @@ impl Session {
 
     pub fn set_envelope(&self, env: modulation::EnvelopeRecord) -> Result<(), String> {
         let node = self.modulator(env.id, om::MOD_ENV)?;
-        let stage = |ms: f32| Value::Float(ms.clamp(0.0, MAX_STAGE_MS).into());
+        let stage = |ms: f32| Value::Float(om::float(ms.clamp(0.0, MAX_STAGE_MS)));
         let name = modulation::valid_name(&env.name, "an envelope")?;
         let key = format!("envelope:{}", env.id);
         self.edit("Change envelope", Some(&key), |tx| {
@@ -520,7 +520,7 @@ impl Session {
             tx.put(
                 node,
                 "mod-env.sustain",
-                Value::Float(env.sustain.clamp(0.0, 1.0).into()),
+                Value::Float(om::float(env.sustain.clamp(0.0, 1.0))),
             )?;
             tx.put(node, "mod-env.release", stage(env.release))
         })?;
@@ -773,12 +773,12 @@ impl Session {
             tx.put(
                 node,
                 "sample.start",
-                Value::Float(trim_start.clamp(0.0, 1.0).into()),
+                Value::Float(om::float(trim_start.clamp(0.0, 1.0))),
             )?;
             tx.put(
                 node,
                 "sample.end",
-                Value::Float(trim_end.clamp(0.0, 1.0).into()),
+                Value::Float(om::float(trim_end.clamp(0.0, 1.0))),
             )?;
             tx.put(node, "sample.root", Value::Shaped(root))
         })?;

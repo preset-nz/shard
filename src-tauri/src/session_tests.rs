@@ -15,16 +15,17 @@ use crate::session::{Feeds, Session};
 use crate::source;
 use crate::tracker::{self, Tracker};
 
-struct Rig {
-    session: Session,
-    bank: Arc<ParamBank>,
-    arrangement: Arc<ParamBank>,
-    steps: Arc<StepBank>,
-    mod_swap: Arc<Mutex<Option<shard_dsp::ModSet>>>,
+/// A session with no sound card, and the engine inputs it feeds.
+pub(crate) struct Rig {
+    pub(crate) session: Session,
+    pub(crate) bank: Arc<ParamBank>,
+    pub(crate) arrangement: Arc<ParamBank>,
+    pub(crate) steps: Arc<StepBank>,
+    pub(crate) mod_swap: Arc<Mutex<Option<shard_dsp::ModSet>>>,
     swap: Arc<Mutex<crate::session::SourceSlots>>,
 }
 
-fn rig() -> Rig {
+pub(crate) fn rig() -> Rig {
     let sample_rate = 48_000.0;
     let bank = Arc::new(ParamBank::new());
     let arrangement = Arc::new(ParamBank::for_table(arrangement::params()));

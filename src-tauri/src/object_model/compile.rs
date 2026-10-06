@@ -447,10 +447,10 @@ pub fn instance_of(tree: &Tree, node: NodeId) -> Option<usize> {
 /// stepped row rounded, and every number brought into range, as the bank
 /// clamps.
 pub fn to_value(spec: &rhizome_core::ValueSpec, v: f32) -> Option<Value> {
-    let v = f64::from(v);
     if !v.is_finite() {
         return None;
     }
+    let v = super::float(v);
     let (lo, hi) = spec.range.unwrap_or((f64::MIN, f64::MAX));
     match spec.kind {
         rhizome_core::ValueKind::Bool => Some(Value::Bool(v >= 0.5)),

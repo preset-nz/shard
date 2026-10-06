@@ -1,7 +1,8 @@
 //! End to end: a `.shard` document in, audio out, through the paths the app
 //! takes on open and in tracker mode, with no window and no sound card.
 //!
-//! The document is `tests/fixtures/trip-hop-acid.shard` (Georg, 2026-10-04:
+//! The document is `tests/fixtures/trip-hop-acid.shard`, in rhizome's format
+//! since epic 32 (Georg, 2026-10-04:
 //! *"a trip hop drum loop with an acidic bass"*): pattern 6b of
 //! `design/drum-programming.md` on the drum kit at 82 bpm and 56 % swing,
 //! under a two-bar FM line in F through drive and a resonant low-pass that a
@@ -12,51 +13,46 @@
 //! and closes on each note. `just e2e` also writes the render to
 //! `~/rhizomatic-preset/renders/` to listen to.
 
-use shard_dsp::{arrangement, Engine, ParamBank, StepParams};
+use std::path::Path;
 
-use crate::patch::{apply_arrangement, Document};
+use shard_dsp::{Engine, StepParams};
+
+use crate::session_tests::{rig, Rig};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;
-const FIXTURE: &str = include_str!("../tests/fixtures/trip-hop-acid.shard");
+const FIXTURE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/tests/fixtures/trip-hop-acid.shard"
+);
 
-/// The document, loaded the way `load_patch` loads it.
+/// The document, opened the way `load_patch` opens it, and the steps tracker
+/// mode plays.
 struct Loaded {
-    bank: ParamBank,
-    arrangement: ParamBank,
+    rig: Rig,
     steps: StepParams,
-    doc: Document,
+}
+
+fn open(path: &str) -> (Loaded, crate::session::LoadReport) {
+    let rig = rig();
+    let report = rig.session.open(Path::new(path)).expect("the file opens");
+    // Tracker mode is what switches the steps on.
+    let mut steps = rig.session.plan().steps();
+    steps.on = true;
+    (Loaded { rig, steps }, report)
 }
 
 fn load() -> Loaded {
-    let doc = Document::from_json(FIXTURE).expect("the fixture parses");
-    let bank = ParamBank::new();
-    let report = doc.patch.apply(&bank);
-    assert!(
-        report.unknown.is_empty(),
-        "unknown ids: {:?}",
-        report.unknown
-    );
+    let (l, report) = open(FIXTURE);
+    assert!(report.unknown.is_empty(), "unknown: {:?}", report.unknown);
     assert!(report.refused.is_empty(), "refused: {:?}", report.refused);
-    let arr = ParamBank::for_table(arrangement::params());
-    let unknown = apply_arrangement(&doc.arrangement, &arr);
-    assert!(unknown.is_empty(), "unknown arrangement ids: {unknown:?}");
-    let tracker = doc.tracker.clone().sanitised();
-    assert_eq!(tracker, doc.tracker, "the fixture is already in range");
-    // Tracker mode is what switches the steps on.
-    let mut steps = tracker.params();
-    steps.on = true;
-    Loaded {
-        bank,
-        arrangement: arr,
-        steps,
-        doc,
-    }
+    assert!(!report.sample_missing, "a material is missing");
+    l
 }
 
 /// Interleaved stereo, `bars` bars, as the audio callback renders it.
 fn render(l: &Loaded, steps: StepParams, bars: usize) -> Vec<f32> {
-    let (set, refused) = l.doc.patch.modulation.build();
+    let (set, refused) = l.rig.session.plan().mod_set();
     assert!(refused.is_empty(), "modulation refused: {refused:?}");
     let mut e = Engine::new(SR, 256);
     e.set_modulation(set);
@@ -66,8 +62,8 @@ fn render(l: &Loaded, steps: StepParams, bars: usize) -> Vec<f32> {
     let mut all = Vec::with_capacity(frames * 2 + BLOCK * 2);
     while all.len() < frames * 2 {
         e.set_steps(steps);
-        e.set_arrangement(&l.arrangement, false);
-        e.process_block(&mut out, &l.bank);
+        e.set_arrangement(&l.rig.arrangement, false);
+        e.process_block(&mut out, &l.rig.bank);
         all.extend_from_slice(&out);
     }
     all
@@ -179,12 +175,8 @@ fn the_bass_is_acid_its_filter_plucked_on_every_note() {
     let l = load();
     let mut bass = l.steps;
     bass.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
-    let mut flat = Document::from_json(FIXTURE).unwrap();
-    flat.patch.modulation.links.clear();
-    let still = Loaded {
-        doc: flat,
-        ..load()
-    };
+    let still = load();
+    still.rig.session.unlink_param("filter.cutoff").unwrap();
     let plucked = render(&l, bass, 2);
     let unplucked = render(&still, bass, 2);
     let latency = Engine::new(SR, 1).latency();
@@ -256,29 +248,15 @@ fn check_a_shard_file() {
     let Ok(path) = std::env::var("SHARD_FILE") else {
         return;
     };
-    let text = std::fs::read_to_string(&path).expect("the file reads");
-    let doc = Document::from_json(&text).expect("the file parses");
-    let bank = ParamBank::new();
-    let report = doc.patch.apply(&bank);
-    let arr = ParamBank::for_table(arrangement::params());
-    let arr_unknown = apply_arrangement(&doc.arrangement, &arr);
-    let tracker = doc.tracker.clone().sanitised();
+    let (l, report) = open(&path);
     println!(
-        "loads: {} unknown, {} refused, {} missing, {} unknown in the arrangement; tracker in range: {}",
+        "loads: {} nodes, {} unknown, {} refused, material missing: {}",
+        report.applied,
         report.unknown.len(),
         report.refused.len(),
-        report.missing.len(),
-        arr_unknown.len(),
-        tracker == doc.tracker
+        report.sample_missing
     );
-    let mut steps = tracker.params();
-    steps.on = true;
-    let l = Loaded {
-        bank,
-        arrangement: arr,
-        steps,
-        doc,
-    };
+    let steps = l.steps;
     let mut track = steps;
     track.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
     let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();

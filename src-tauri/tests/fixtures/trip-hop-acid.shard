@@ -1,711 +1,542 @@
 {
-  "version": 3,
-  "tracker": {
-    "tempo": 82.0,
-    "swing": 0.12,
-    "tracks": [
-      {
-        "on": true,
-        "length": 32,
-        "steps": [
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 2,
-            "velocity": 120,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 80,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 12,
-            "hold": 1,
-            "velocity": 105,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 75,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 3,
-            "hold": 1,
-            "velocity": 95,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 2,
-            "velocity": 115,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 15,
-            "hold": 1,
-            "velocity": 85,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 10,
-            "hold": 1,
-            "velocity": 95,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 2,
-            "velocity": 120,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 12,
-            "hold": 1,
-            "velocity": 90,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 75,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 3,
-            "hold": 1,
-            "velocity": 100,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 5,
-            "hold": 1,
-            "velocity": 80,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 7,
-            "hold": 2,
-            "velocity": 115,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 12,
-            "hold": 1,
-            "velocity": 90,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 10,
-            "hold": 1,
-            "velocity": 85,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 3,
-            "hold": 1,
-            "velocity": 70,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          }
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "01M48DSQ1TPH85Q6XNANJJ46R5",
+      "type": "root"
+    },
+    {
+      "path": "/arrangements",
+      "id": "01M48DSQ1TZ1570SNXZMWXR293",
+      "type": "category"
+    },
+    {
+      "path": "/arrangements/arrangement",
+      "id": "01M48DSQ1T0Y3DG908WA5VQP3V",
+      "type": "arrangement",
+      "values": {
+        "arrangement.swing": 0.12,
+        "arrangement.tempo": 82.0
+      },
+      "orders": {
+        "tracks": [
+          "01M48DSQ1T7CF6PEYFBW1FG736"
         ]
       }
-    ],
-    "kit": {
-      "length": 32,
-      "kick": [
-        110,
-        0,
-        0,
-        0,
-        0,
-        0,
-        80,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        110,
-        0,
-        110,
-        0,
-        0,
-        0,
-        0,
-        0,
-        80,
-        0,
-        0,
-        0,
-        0,
-        70,
-        0,
-        0,
-        100,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      "snare": [
-        0,
-        0,
-        35,
-        0,
-        0,
-        0,
-        0,
-        0,
-        110,
-        0,
-        35,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        35,
-        0,
-        0,
-        0,
-        0,
-        0,
-        110,
-        0,
-        35,
-        0,
-        0,
-        0,
-        0,
-        40,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      "hat": [
-        80,
-        0,
-        35,
-        0,
-        80,
-        0,
-        35,
-        0,
-        80,
-        0,
-        35,
-        0,
-        80,
-        0,
-        35,
-        0,
-        80,
-        0,
-        35,
-        0,
-        80,
-        0,
-        35,
-        0,
-        80,
-        0,
-        35,
-        0,
-        105,
-        0,
-        35,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
+    },
+    {
+      "path": "/arrangements/arrangement/amp",
+      "id": "01M48DSQ1TBZED5T6DCT5JKP1V",
+      "type": "master"
+    },
+    {
+      "path": "/arrangements/arrangement/filter",
+      "id": "01M48DSQ1T9Y0WX28KB269ENBR",
+      "type": "filter"
+    },
+    {
+      "path": "/arrangements/arrangement/kit",
+      "id": "01M48DSQ1TC9BMGZ5J4MZKT2WH",
+      "type": "kit",
+      "values": {
+        "kit.length": 32,
+        "kit.on": true
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/1",
+      "id": "01M48DSQ1T1A5BDA9Q0XXRX5TK",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80,
+        "beat.kick": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/11",
+      "id": "01M48DSQ1TKPKMB2CBEYDZY71M",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.snare": 35
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/13",
+      "id": "01M48DSQ1TM2SR4C7YRC6ARZNV",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/15",
+      "id": "01M48DSQ1TT69H05DNNG5PWFRH",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.kick": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/17",
+      "id": "01M48DSQ1VZDCD2FKFH8Z6958J",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80,
+        "beat.kick": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/19",
+      "id": "01M48DSQ1V71M43HSPS5FWAHH5",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.snare": 35
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/21",
+      "id": "01M48DSQ1VH1AQ84MXNJ809Z9C",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/23",
+      "id": "01M48DSQ1VKJHC9DKD0Y1X6E8R",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.kick": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/25",
+      "id": "01M48DSQ1VQ9B53C9B0069YEC6",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80,
+        "beat.snare": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/27",
+      "id": "01M48DSQ1VF23F7TWHMAXZQA9T",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.snare": 35
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/28",
+      "id": "01M48DSQ1V5ZQ34F7NZ0B8WSGP",
+      "type": "beat",
+      "values": {
+        "beat.kick": 70
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/29",
+      "id": "01M48DSQ1VCTQCMQX3F7J7M2B0",
+      "type": "beat",
+      "values": {
+        "beat.hat": 105
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/3",
+      "id": "01M48DSQ1T8AMXRCDT09QCX2YT",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.snare": 35
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/31",
+      "id": "01M48DSQ1VH07W4RM7V9PACZ1Y",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.kick": 100
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/32",
+      "id": "01M48DSQ1VKDNCRS57FA2E1MCB",
+      "type": "beat",
+      "values": {
+        "beat.snare": 40
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/5",
+      "id": "01M48DSQ1TYEPP7GZWGFGERJ5C",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/7",
+      "id": "01M48DSQ1T4WZV3XMFNZ5VSN1J",
+      "type": "beat",
+      "values": {
+        "beat.hat": 35,
+        "beat.kick": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/9",
+      "id": "01M48DSQ1TER20D9R5Z9VHW83Z",
+      "type": "beat",
+      "values": {
+        "beat.hat": 80,
+        "beat.snare": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track",
+      "id": "01M48DSQ1T7CF6PEYFBW1FG736",
+      "type": "track",
+      "values": {
+        "track.gain": 0.8,
+        "track.length": 32
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/1",
+      "id": "01M48DSQ1TFPBJNQGQE4M7F1XB",
+      "type": "step",
+      "values": {
+        "step.hold": 2,
+        "step.on": true,
+        "step.velocity": 120
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/11",
+      "id": "01M48DSQ1TAR04YWEA1VM0FK4A",
+      "type": "step",
+      "values": {
+        "step.hold": 2,
+        "step.on": true,
+        "step.velocity": 115
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/13",
+      "id": "01M48DSQ1T841R7Q1BB9AR0JQ3",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 15,
+        "step.velocity": 85
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/15",
+      "id": "01M48DSQ1T277ACXT3AJ9TRP88",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 10,
+        "step.velocity": 95
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/17",
+      "id": "01M48DSQ1TPG5723PK8NZASHG1",
+      "type": "step",
+      "values": {
+        "step.hold": 2,
+        "step.on": true,
+        "step.velocity": 120
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/20",
+      "id": "01M48DSQ1TTQ773Z7M0N64TJ2J",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 12,
+        "step.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/21",
+      "id": "01M48DSQ1T042YRN456DGKYQ95",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 75
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/23",
+      "id": "01M48DSQ1T8BZ4ZBRHC308V1GY",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 3,
+        "step.velocity": 100
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/24",
+      "id": "01M48DSQ1T8YDAS5CZH4Y2Z0ZH",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 5,
+        "step.velocity": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/27",
+      "id": "01M48DSQ1TTRDKECQW1CE08HX1",
+      "type": "step",
+      "values": {
+        "step.hold": 2,
+        "step.on": true,
+        "step.pitch": 7,
+        "step.velocity": 115
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/29",
+      "id": "01M48DSQ1TD4FCYTR9N2Y8NX82",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 12,
+        "step.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/31",
+      "id": "01M48DSQ1T5M3ABNYMES9YVDAW",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 10,
+        "step.velocity": 85
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/32",
+      "id": "01M48DSQ1TA0XZ9YYXVWK6HACN",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 3,
+        "step.velocity": 70
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/4",
+      "id": "01M48DSQ1TSNAX1R6N1NZ2G967",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/5",
+      "id": "01M48DSQ1TNDH3MSVZFXZHB1R5",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 12,
+        "step.velocity": 105
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/7",
+      "id": "01M48DSQ1TD475BXNHH20AM79D",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 75
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/8",
+      "id": "01M48DSQ1TWP1GBJKTP3VDNK92",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 3,
+        "step.velocity": 95
+      }
+    },
+    {
+      "path": "/materials",
+      "id": "01M48DSQ1T0ERP2KJRZQJG47ZA",
+      "type": "category",
+      "orders": {
+        "pool": [
+          "01M48DSQ1T651DKBFEF615FGD6"
+        ]
+      }
+    },
+    {
+      "path": "/materials/Built-in-drone",
+      "id": "01M48DSQ1T651DKBFEF615FGD6",
+      "type": "sample",
+      "values": {
+        "sample.label": "Built-in drone"
+      }
+    },
+    {
+      "path": "/patches",
+      "id": "01M48DSQ1TJF3VX5H148T4KD9E",
+      "type": "category"
+    },
+    {
+      "path": "/patches/patch",
+      "id": "01M48DSQ1TT8RRJAS5BQ88A9VC",
+      "type": "patch",
+      "values": {
+        "patch.length": 2
+      },
+      "orders": {
+        "chain": [
+          "01M48DSQ1V85MCPQKN106HBJT6"
+        ],
+        "modulators": [
+          "01M48DSQ260AJXX1ATC93JQ6C1"
+        ]
+      }
+    },
+    {
+      "path": "/patches/patch/amp",
+      "id": "01M48DSQ1T2G50AG3TN36E70K4",
+      "type": "amp",
+      "values": {
+        "amp.gain": 0.28
+      }
+    },
+    {
+      "path": "/patches/patch/drive",
+      "id": "01M48DSQ1V85MCPQKN106HBJT6",
+      "type": "drive",
+      "values": {
+        "drive.amount": 14.0,
+        "drive.mix": 0.4
+      }
+    },
+    {
+      "path": "/patches/patch/env",
+      "id": "01M48DSQ1TSSA29V5522MN5KZB",
+      "type": "env",
+      "values": {
+        "env.decay": 220.0,
+        "env.release": 60.0,
+        "env.sustain": 0.35
+      }
+    },
+    {
+      "path": "/patches/patch/filter",
+      "id": "01M48DSQ1TEB775XHFW57GKMCR",
+      "type": "filter",
+      "values": {
+        "filter.cutoff": 420.0,
+        "filter.on": true,
+        "filter.resonance": 0.7
+      },
+      "bindings": [
+        {
+          "on": {
+            "value": "filter.cutoff"
+          },
+          "source": "01M48DSQ260AJXX1ATC93JQ6C1",
+          "values": {
+            "hi": 0.64,
+            "lo": 0.36
+          }
+        }
       ]
+    },
+    {
+      "path": "/patches/patch/fm",
+      "id": "01M48DSQ1TKCWGKYQEH4RRH86A",
+      "type": "fm",
+      "values": {
+        "fm.feedback": 0.3,
+        "fm.freq": 87.307,
+        "fm.gain": 0.8,
+        "fm.index": 2.6,
+        "fm.on": true,
+        "fm.ratio": 1.0
+      }
+    },
+    {
+      "path": "/patches/patch/grain",
+      "id": "01M48DSQ1TH5Q5NV6Y1XBXA7D9",
+      "type": "grain",
+      "refs": {
+        "grain.source": {
+          "node": "01M48DSQ1T651DKBFEF615FGD6",
+          "path": "/materials/Built-in-drone"
+        }
+      }
+    },
+    {
+      "path": "/patches/patch/material",
+      "id": "01M48DSQ1TJC66V1MR2TFDENQ8",
+      "type": "material",
+      "values": {
+        "material.on": false
+      },
+      "refs": {
+        "material.source": {
+          "node": "01M48DSQ1T651DKBFEF615FGD6",
+          "path": "/materials/Built-in-drone"
+        }
+      }
+    },
+    {
+      "path": "/patches/patch/mod-env",
+      "id": "01M48DSQ260AJXX1ATC93JQ6C1",
+      "type": "mod-env",
+      "values": {
+        "mod-env.attack": 2.0,
+        "mod-env.decay": 180.0,
+        "mod-env.label": "Filter pluck",
+        "mod-env.release": 80.0,
+        "mod-env.sustain": 0.1
+      }
+    },
+    {
+      "path": "/patches/patch/tape",
+      "id": "01M48DSQ1TFJAEBSZSYD87VG5H",
+      "type": "tape"
+    },
+    {
+      "path": "/presets",
+      "id": "01M48DSQ1TPMKGDVZTXJ9HAYN6",
+      "type": "category"
     }
-  },
-  "arrangement": {
-    "arrangement.kit.gain": 1.0,
-    "arrangement.track.gain": 0.8,
-    "arrangement.kit.on": 1.0
-  },
-  "patch": {
-    "params": {
-      "env.decay": 220.0,
-      "env.release": 60.0,
-      "env.sustain": 0.35,
-      "filter.cutoff": 420.0,
-      "filter.on": 1.0,
-      "filter.resonance": 0.7,
-      "filter.type": 0.0,
-      "fm.feedback": 0.3,
-      "fm.freq": 87.307,
-      "fm.gain": 0.8,
-      "fm.index": 2.6,
-      "fm.on": 1.0,
-      "fm.ratio": 1.0,
-      "material.on": 0.0,
-      "patch.length": 2.0,
-      "fx.0.drive.on": 1.0,
-      "fx.0.drive.mix": 0.4,
-      "fx.0.drive.amount": 14.0,
-      "fx.order.0": 1.0,
-      "amp.gain": 0.28
-    },
-    "envelopes": [
-      {
-        "id": 1,
-        "name": "Filter pluck",
-        "attack": 2.0,
-        "decay": 180.0,
-        "sustain": 0.1,
-        "release": 80.0
-      }
-    ],
-    "links": {
-      "filter.cutoff": {
-        "source": 1,
-        "lo": 0.36,
-        "hi": 0.64
-      }
-    },
-    "next_modulator_id": 2
-  }
+  ]
 }

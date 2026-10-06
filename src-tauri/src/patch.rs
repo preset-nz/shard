@@ -421,3 +421,154 @@ mod tests {
         assert_eq!(bank.get_by_id("arrangement.fx.1.crush.on"), Some(1.0));
     }
 }
+
+/// Slice c of epic 32, run once: rewrites each old JSON file named in
+/// `SHARD_CONVERT` (colon-separated) in place, in rhizome's format, by
+/// replaying it through the session's own verbs. Deleted with this module.
+#[test]
+#[ignore]
+fn convert_old_files() {
+    use shard_dsp::fx;
+    let Ok(paths) = std::env::var("SHARD_CONVERT") else {
+        return;
+    };
+    for path in paths.split(':').filter(|p| !p.is_empty()) {
+        let text = std::fs::read_to_string(path).expect("the file reads");
+        let doc = Document::from_json(&text).expect("the file parses");
+        assert!(doc.pool.materials.is_empty(), "{path}: has materials");
+        assert!(doc.patch.presets.is_null(), "{path}: has presets");
+        assert!(doc.patch.controller_map.is_none(), "{path}: has a map");
+        let r = crate::session_tests::rig();
+        let s = &r.session;
+        s.set_tracker(doc.tracker.clone()).unwrap();
+        for (layer, prefix, values) in [
+            ("patch", "", &doc.patch.params),
+            (
+                "arrangement",
+                shard_dsp::arrangement::PREFIX,
+                &doc.arrangement,
+            ),
+        ] {
+            // The chain first, in order, each old instance mapped to the copy
+            // the session gives it.
+            let mut order = [0.0; fx::ORDER_LEN];
+            for (p, v) in order.iter_mut().enumerate() {
+                *v = values
+                    .get(&format!("{prefix}{}", fx::order_id(p)))
+                    .copied()
+                    .unwrap_or(0.0);
+            }
+            let mut copies = BTreeMap::new();
+            for &n in fx::Order::sanitise(order).as_slice() {
+                let kind = fx::kind_of(n as usize);
+                let m = s.fx_add(layer, kind.name()).unwrap();
+                copies.insert(n as usize, m);
+            }
+            for (id, &v) in values {
+                if fx::is_order_row(id) {
+                    continue;
+                }
+                let id = match fx::parse_row(id) {
+                    Some((n, template)) => match copies.get(&n) {
+                        Some(&m) => format!("{prefix}{}", fx::row_id(m, template)),
+                        // An effect not in the chain: nothing plays it.
+                        None => continue,
+                    },
+                    None => id.clone(),
+                };
+                s.set_param(&id, v)
+                    .unwrap_or_else(|e| panic!("{path}: {e}"));
+            }
+        }
+        let m = &doc.patch.modulation;
+        let mut ids = BTreeMap::new();
+        let newest = |s: &crate::session::Session| {
+            let (m, _) = s.modulation();
+            m.lfos
+                .iter()
+                .map(|l| l.id)
+                .chain(m.envelopes.iter().map(|e| e.id))
+                .max()
+                .unwrap()
+        };
+        for lfo in &m.lfos {
+            s.add_lfo().unwrap();
+            let id = newest(s);
+            ids.insert(lfo.id, id);
+            let mut lfo = lfo.clone();
+            lfo.id = id;
+            s.set_lfo(lfo).unwrap();
+        }
+        for env in &m.envelopes {
+            s.add_envelope().unwrap();
+            let id = newest(s);
+            ids.insert(env.id, id);
+            let mut env = env.clone();
+            env.id = id;
+            s.set_envelope(env).unwrap();
+        }
+        for (target, link) in &m.links {
+            s.link_param(target, ids[&link.source], link.lo, link.hi)
+                .unwrap();
+        }
+        s.save(std::path::Path::new(path)).unwrap();
+        println!("converted {path}");
+    }
+}
+
+/// Slice c's proof: each `old=new` pair in `SHARD_COMPARE` renders the same
+/// four bars through the old loader and through the session. Deleted with
+/// this module.
+#[test]
+#[ignore]
+fn converted_files_sound_the_same() {
+    use shard_dsp::{arrangement, Engine, ModSet, StepParams};
+    fn render(bank: &ParamBank, arr: &ParamBank, steps: StepParams, set: ModSet) -> Vec<f32> {
+        let mut e = Engine::new(48_000.0, 256);
+        e.set_modulation(set);
+        e.set_playing(true);
+        let frames = (4.0 * 48_000.0 * 60.0 / steps.tempo_bpm * 4.0) as usize;
+        let mut out = vec![0.0; 512];
+        let mut all = Vec::new();
+        while all.len() < frames * 2 {
+            e.set_steps(steps);
+            e.set_arrangement(arr, false);
+            e.process_block(&mut out, bank);
+            all.extend_from_slice(&out);
+        }
+        all
+    }
+    let Ok(pairs) = std::env::var("SHARD_COMPARE") else {
+        return;
+    };
+    for pair in pairs.split(':').filter(|p| !p.is_empty()) {
+        let (old, new) = pair.split_once('=').unwrap();
+        let doc = Document::from_json(&std::fs::read_to_string(old).unwrap()).unwrap();
+        let bank = ParamBank::new();
+        doc.patch.apply(&bank);
+        let arr = ParamBank::for_table(arrangement::params());
+        apply_arrangement(&doc.arrangement, &arr);
+        let mut steps = doc.tracker.clone().sanitised().params();
+        steps.on = true;
+        let (set, _) = doc.patch.modulation.build();
+        let before = render(&bank, &arr, steps, set);
+
+        let r = crate::session_tests::rig();
+        let report = r.session.open(std::path::Path::new(new)).unwrap();
+        assert!(report.unknown.is_empty(), "{new}: {:?}", report.unknown);
+        let plan = r.session.plan();
+        let mut steps = plan.steps();
+        steps.on = true;
+        let after = render(&r.bank, &r.arrangement, steps, plan.mod_set().0);
+
+        assert_eq!(before.len(), after.len());
+        let worst = before
+            .iter()
+            .zip(&after)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        let peak = before.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        println!("{new}: worst difference {worst:e}, peak {peak}");
+        assert!(worst <= 1e-6, "{new}: differs by {worst}");
+    }
+}

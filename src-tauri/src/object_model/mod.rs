@@ -46,6 +46,14 @@ mod compile_tests;
 #[cfg(test)]
 mod tests;
 
+/// An `f32` as the `f64` its shortest decimal names, so a file says `0.4`
+/// rather than `0.4000000059604645`. It reads back as the same `f32`. Every
+/// float the tree holds, ranges and defaults included, goes through it, so a
+/// value set to its default compares equal to it.
+pub fn float(v: f32) -> f64 {
+    v.to_string().parse().unwrap_or(f64::from(v))
+}
+
 pub use compile::{
     arrangement_node, as_f32, compile, instance_of, locate, patch_node, read_tracker, to_value,
     Plan,
@@ -170,11 +178,7 @@ pub fn spec(def: &ParamDef) -> ValueSpec {
         Taper::Stepped(_) => {
             ValueSpec::int(def.id, def.min as i64..=def.max as i64, def.default as i64)
         }
-        _ => ValueSpec::float(
-            def.id,
-            f64::from(def.min)..=f64::from(def.max),
-            f64::from(def.default),
-        ),
+        _ => ValueSpec::float(def.id, float(def.min)..=float(def.max), float(def.default)),
     }
 }
 
@@ -407,8 +411,8 @@ pub fn kinds() -> Vec<KindDecl> {
         .text("lfo.label", "")
         .float(
             "lfo.rate",
-            f64::from(MIN_RATE_HZ)..=f64::from(MAX_RATE_HZ),
-            f64::from(NEW_RATE_HZ),
+            float(MIN_RATE_HZ)..=float(MAX_RATE_HZ),
+            float(NEW_RATE_HZ),
         )
         .choice("lfo.shape", &LfoShape::NAMES, NEW_SHAPE)
         .float("lfo.phase", 0.0..=1.0, 0.0)
@@ -421,14 +425,13 @@ pub fn kinds() -> Vec<KindDecl> {
     );
 
     let e = new_envelope(0);
-    let stage =
-        |key: &str, ms: f32| ValueSpec::float(key, 0.0..=f64::from(MAX_STAGE_MS), f64::from(ms));
+    let stage = |key: &str, ms: f32| ValueSpec::float(key, 0.0..=float(MAX_STAGE_MS), float(ms));
     let env = NodeType::new(MOD_ENV)
         .in_categories(&[PATCHES])
         .text("mod-env.label", "")
         .value(stage("mod-env.attack", e.attack))
         .value(stage("mod-env.decay", e.decay))
-        .float("mod-env.sustain", 0.0..=1.0, f64::from(e.sustain))
+        .float("mod-env.sustain", 0.0..=1.0, float(e.sustain))
         .value(stage("mod-env.release", e.release))
         .bindable(link_values());
     push(
@@ -444,13 +447,13 @@ pub fn kinds() -> Vec<KindDecl> {
         .in_categories(&[ARRANGEMENTS])
         .float(
             "arrangement.tempo",
-            f64::from(TEMPO_MIN)..=f64::from(TEMPO_MAX),
-            f64::from(blank.tempo),
+            float(TEMPO_MIN)..=float(TEMPO_MAX),
+            float(blank.tempo),
         )
         .float(
             "arrangement.swing",
-            0.0..=f64::from(SWING_MAX),
-            f64::from(blank.swing),
+            0.0..=float(SWING_MAX),
+            float(blank.swing),
         );
     push(
         checked(arr, Under::Category, |n| {
@@ -778,8 +781,8 @@ impl ShardEdit for Edit<'_> {
             On::Value(key.to_string()),
             source,
             [
-                ("lo", Value::Float(f64::from(lo))),
-                ("hi", Value::Float(f64::from(hi))),
+                ("lo", Value::Float(float(lo))),
+                ("hi", Value::Float(float(hi))),
             ],
         )
     }
@@ -798,8 +801,8 @@ impl ShardEdit for Edit<'_> {
     }
 
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()> {
-        self.put(arr, "arrangement.tempo", Value::Float(tracker.tempo.into()))?;
-        self.put(arr, "arrangement.swing", Value::Float(tracker.swing.into()))?;
+        self.put(arr, "arrangement.tempo", Value::Float(float(tracker.tempo)))?;
+        self.put(arr, "arrangement.swing", Value::Float(float(tracker.swing)))?;
 
         let existing: Vec<NodeId> = self
             .at(arr)
@@ -888,10 +891,10 @@ impl ShardEdit for Edit<'_> {
                 self.set_value(node, "sample.octave", int(m.octave as i64))?;
             }
             if m.trim_start != 0.0 {
-                self.set_value(node, "sample.start", Value::Float(m.trim_start.into()))?;
+                self.set_value(node, "sample.start", Value::Float(float(m.trim_start)))?;
             }
             if m.trim_end != 1.0 {
-                self.set_value(node, "sample.end", Value::Float(m.trim_end.into()))?;
+                self.set_value(node, "sample.end", Value::Float(float(m.trim_end)))?;
             }
             if let Some(root) = m.root {
                 self.set_value(node, "sample.root", Value::Shaped(json!(root)))?;
