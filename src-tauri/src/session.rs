@@ -19,8 +19,9 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use rhizome_core::{Edit, NodeId, On, Ref, Value};
 use rhizome_pom::{Document, FileStore, PresetRef};
@@ -61,7 +62,7 @@ pub struct Feeds {
 
 /// What a load could not take as written. Surfaced rather than logged, because
 /// a half-applied document and a clean one must not look the same.
-#[derive(Serialize, Default, Debug)]
+#[derive(Serialize, Default, Debug, Clone)]
 pub struct LoadReport {
     pub applied: usize,
     /// What the file held that this build could not take.
@@ -98,6 +99,11 @@ pub struct Session {
     feeding: Mutex<[Option<Option<String>>; 2]>,
     feeds: Feeds,
     sample_rate: f32,
+    /// Which `Untitled-N` this is, while it has no file.
+    untitled: AtomicU32,
+    /// Told after every edit, undo, redo, open, new and save, with every lock
+    /// released: the menu's Undo title and the window's unsaved mark follow.
+    changed: OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -129,9 +135,23 @@ impl Session {
             feeding: Mutex::new([None, None]),
             feeds,
             sample_rate,
+            untitled: AtomicU32::new(1),
+            changed: OnceLock::new(),
         };
         session.sync(&lock(&session.doc), true);
         Ok(session)
+    }
+
+    /// Sets what is told after every change. Once; a second call is ignored.
+    pub fn on_change(&self, f: impl Fn() + Send + Sync + 'static) {
+        let _ = self.changed.set(Box::new(f));
+    }
+
+    /// Tells whoever listens. Never call it holding a lock of this session's.
+    fn changed(&self) {
+        if let Some(f) = self.changed.get() {
+            f();
+        }
     }
 
     /// Hands the engine what changed since the last hand-over, or everything.
@@ -206,6 +226,10 @@ impl Session {
         let (value, commit) = result.map_err(err)?;
         if commit.is_some() {
             self.sync(&doc, false);
+        }
+        drop(doc);
+        if commit.is_some() {
+            self.changed();
         }
         Ok((value, commit.is_some()))
     }
@@ -361,6 +385,10 @@ impl Session {
         if commit.is_some() {
             self.sync(&doc, false);
         }
+        drop(doc);
+        if commit.is_some() {
+            self.changed();
+        }
         Ok(commit.map(|c| bare(&c.label, "Undo ")))
     }
 
@@ -370,7 +398,23 @@ impl Session {
         if commit.is_some() {
             self.sync(&doc, false);
         }
+        drop(doc);
+        if commit.is_some() {
+            self.changed();
+        }
         Ok(commit.map(|c| bare(&c.label, "Redo ")))
+    }
+
+    /// Every step Undo can take, oldest first, and every step Redo can,
+    /// next first. For the Edit menu and a history list.
+    pub fn history_labels(&self) -> (Vec<String>, Vec<String>) {
+        self.read(|d| {
+            let tree = d.tree();
+            (
+                tree.undo_labels().map(str::to_string).collect(),
+                tree.redo_labels().map(str::to_string).collect(),
+            )
+        })
     }
 
     /// What Undo and Redo would do, by name.
@@ -589,15 +633,15 @@ impl Session {
 
     pub fn save_preset(&self, node: &str, name: &str) -> Result<(), String> {
         let n = self.preset_node(node)?;
-        let mut doc = lock(&self.doc);
-        doc.save_preset(n, name).map_err(err)?;
+        lock(&self.doc).save_preset(n, name).map_err(err)?;
+        self.changed();
         Ok(())
     }
 
     pub fn update_preset(&self, node: &str, name: &str) -> Result<(), String> {
         let n = self.preset_node(node)?;
-        let mut doc = lock(&self.doc);
-        doc.update_preset(n, name).map_err(err)?;
+        lock(&self.doc).update_preset(n, name).map_err(err)?;
+        self.changed();
         Ok(())
     }
 
@@ -619,6 +663,10 @@ impl Session {
             .into_iter()
             .filter(|r| r.id.starts_with(&prefix))
             .collect();
+        drop(doc);
+        if commit.is_some() {
+            self.changed();
+        }
         Ok(ApplyReport {
             applied: report.applied,
             unknown: report.skipped,
@@ -810,9 +858,39 @@ impl Session {
 
     // Files.
 
-    /// Writes the session to `path` in rhizome's format.
+    /// Writes the session to `path` in rhizome's format, and remembers it.
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        lock(&self.doc).save_as(path).map_err(err)
+        let saved = lock(&self.doc).save_as(path).map_err(err);
+        self.changed();
+        saved
+    }
+
+    /// The file the session was opened from or last saved to.
+    pub fn path(&self) -> Option<PathBuf> {
+        self.read(|d| d.path().map(Path::to_path_buf))
+    }
+
+    pub fn is_unsaved(&self) -> bool {
+        self.read(|d| d.is_unsaved())
+    }
+
+    /// Which `Untitled-N` the session is while it has no file.
+    pub fn untitled_number(&self) -> u32 {
+        self.untitled.load(Ordering::Relaxed)
+    }
+
+    /// Replaces the session with a new one at its defaults, `Untitled-{n}`,
+    /// with an empty history. Decoded materials stay cached.
+    pub fn new_document(&self, untitled: u32) -> Result<(), String> {
+        let fresh = Document::<Shard>::new(FileStore).map_err(err)?;
+        {
+            let mut doc = lock(&self.doc);
+            *doc = fresh;
+            self.untitled.store(untitled, Ordering::Relaxed);
+            self.sync(&doc, true);
+        }
+        self.changed();
+        Ok(())
     }
 
     /// Replaces the session with the file at `path`. Its materials are decoded
@@ -843,9 +921,12 @@ impl Session {
                 report.sample_missing = true;
             }
         }
-        let mut current = lock(&self.doc);
-        *current = doc;
-        self.sync(&current, true);
+        {
+            let mut current = lock(&self.doc);
+            *current = doc;
+            self.sync(&current, true);
+        }
+        self.changed();
         Ok(report)
     }
 }

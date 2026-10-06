@@ -26,6 +26,7 @@ use shard_dsp::steps::StepBank;
 use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, ReadingBank};
 
 mod controllers;
+mod document;
 #[cfg(test)]
 mod e2e;
 mod mapping;

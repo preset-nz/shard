@@ -25,6 +25,8 @@ serde_json = "1"
 # temporary [patch.crates-io] rhizome-* = { path = "..." }, never committed.
 rhizome-core = "0.1.4"
 rhizome-pom = "0.1.4"
+# Menus, undo titles, files and relaunch, shared with the family (epic 32, story 4).
+preset-app-kit = "0.1.1"
 shard-dsp.workspace = true
 cpal.workspace = true
 hound.workspace = true

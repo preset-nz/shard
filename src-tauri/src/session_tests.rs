@@ -530,3 +530,96 @@ fn a_knob_on_an_effect_not_in_the_chain_moves_nothing() {
     assert!(r.session.undo().unwrap().is_none());
     assert!(r.session.set_param("grain.nonsense", 0.5).is_err());
 }
+
+#[test]
+fn the_history_reads_as_the_edit_menu_says_it() {
+    let r = rig();
+    r.session.set_param("filter.cutoff", 800.0).unwrap();
+    r.session.set_param("grain.size", 80.0).unwrap();
+    let (undo, redo) = r.session.history_labels();
+    assert_eq!(undo, ["Set Cutoff", "Set Size"], "oldest first");
+    assert!(redo.is_empty());
+    r.session.undo().unwrap();
+    // rhizome calls the undo commit "Undo Set Size"; Redo names the edit.
+    assert_eq!(r.session.history().1.as_deref(), Some("Set Size"));
+    assert_eq!(r.session.history_labels().1, ["Set Size"]);
+}
+
+#[test]
+fn every_change_is_told_with_the_session_free_to_read() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let r = rig();
+    let session = Arc::new(r.session);
+    let told = Arc::new(AtomicUsize::new(0));
+    let (weak, count) = (Arc::downgrade(&session), Arc::clone(&told));
+    // Reading the session here would deadlock if any of its locks were held.
+    session.on_change(move || {
+        let s = weak.upgrade().unwrap();
+        let _ = (s.is_unsaved(), s.history());
+        count.fetch_add(1, Ordering::SeqCst);
+    });
+    let dir = std::env::temp_dir().join(format!("shard-told-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("told.shard");
+
+    session.set_param("filter.cutoff", 800.0).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 1, "an edit");
+    session.set_param("filter.cutoff", 800.0).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 1, "no change, nothing told");
+    session.undo().unwrap();
+    session.redo().unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 3, "undo and redo");
+    session.save(&path).unwrap();
+    session.open(&path).unwrap();
+    session.new_document(2).unwrap();
+    assert_eq!(told.load(Ordering::SeqCst), 6, "save, open and new");
+    session.save_preset("grain", "Small").unwrap();
+    session.apply_preset("grain", "Small").unwrap();
+    assert!(told.load(Ordering::SeqCst) >= 7, "presets");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn a_new_document_starts_over_untitled_with_no_history() {
+    let r = rig();
+    let dir = std::env::temp_dir().join(format!("shard-new-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("before.shard");
+    r.session.set_param("filter.cutoff", 800.0).unwrap();
+    r.session.fx_add("patch", "chorus").unwrap();
+    r.session.save(&path).unwrap();
+    assert_eq!(r.session.path().as_deref(), Some(path.as_path()));
+    assert_eq!(r.session.untitled_number(), 1);
+
+    r.session.new_document(2).unwrap();
+    assert_eq!(r.session.path(), None);
+    assert_eq!(r.session.untitled_number(), 2);
+    assert!(!r.session.is_unsaved());
+    assert_eq!(r.session.history(), (None, None));
+    let default = shard_dsp::params::PARAMS
+        .iter()
+        .find(|p| p.id == "filter.cutoff")
+        .unwrap()
+        .default;
+    assert_eq!(
+        get(&r, "filter.cutoff"),
+        default,
+        "the engine hears the new one"
+    );
+    assert!(fx::order_of(&r.bank).is_empty(), "and its empty chain");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn undoing_back_to_what_was_saved_clears_the_unsaved_mark() {
+    let r = rig();
+    let dir = std::env::temp_dir().join(format!("shard-mark-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    r.session.save(&dir.join("mark.shard")).unwrap();
+    assert!(!r.session.is_unsaved());
+    r.session.set_param("filter.cutoff", 800.0).unwrap();
+    assert!(r.session.is_unsaved());
+    r.session.undo().unwrap();
+    assert!(!r.session.is_unsaved());
+    std::fs::remove_dir_all(&dir).ok();
+}
