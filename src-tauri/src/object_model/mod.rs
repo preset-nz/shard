@@ -23,7 +23,8 @@
 //! Brake and reverse are not in the tree. They are played, not edited.
 
 use rhizome_core::{
-    Edit, Node, NodeId, NodeType, On, Origin, Ref, Result, Shape, Value, ValueKind, ValueSpec,
+    Changeset, Edit, Node, NodeId, NodeType, On, Origin, Ref, Result, Shape, Tree, Value,
+    ValueKind, ValueSpec,
 };
 use rhizome_pom::{Kinds, NodeValues, ObjectModel};
 use serde_json::json;
@@ -39,8 +40,13 @@ use crate::materials::Pool;
 use crate::modulation::{new_envelope, MAX_STAGE_MS, NEW_RATE_HZ, NEW_SHAPE};
 use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX, TEMPO_MAX, TEMPO_MIN};
 
+mod compile;
+#[cfg(test)]
+mod compile_tests;
 #[cfg(test)]
 mod tests;
+
+pub use compile::{as_f32, compile, read_tracker, Plan};
 
 pub const EXTENSION: &str = "shard";
 
@@ -562,7 +568,7 @@ pub struct Shard;
 impl ObjectModel for Shard {
     const NAME: &'static str = "Shard";
     const EXTENSION: &'static str = EXTENSION;
-    type Projection = ();
+    type Projection = Plan;
     type Context = ();
 
     fn kinds(k: &mut Kinds, _: &()) {
@@ -588,6 +594,12 @@ impl ObjectModel for Shard {
                 );
             }
         }
+    }
+
+    /// Rebuilt whole after every change: a session is small, and compiling
+    /// it is cheap beside a block of audio.
+    fn project(tree: &Tree, into: &mut Plan, _: Option<&Changeset>) {
+        compile(tree, into);
     }
 
     /// A new session: the built-in drone in both generators, one patch at
