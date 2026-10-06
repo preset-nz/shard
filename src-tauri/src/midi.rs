@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use midir::{Ignore, MidiInput, MidiInputConnection, MidiOutput, MidiOutputConnection};
@@ -62,6 +62,9 @@ impl Calibrate {
     }
 }
 
+/// Writes one parameter into the session.
+pub type Writer = Box<dyn Fn(&str, f32) + Send + Sync>;
+
 /// Shared with the Tauri commands. Lock order: `registry`, `pickup`,
 /// `learn`, `calibrate`, `activity`.
 pub struct Controllers {
@@ -80,7 +83,8 @@ pub struct Controllers {
     /// Saving would write an empty registry over devices, controls and maps
     /// that are probably all still there, so saving is refused instead.
     keep_file: AtomicBool,
-    /// The hand's values. A caught knob writes here, like the UI does.
+    /// The hand's values, read for pickup. A caught knob writes through
+    /// `write`, into the session, like the UI does.
     pub bank: Arc<ParamBank>,
     /// The arrangement's values, for a knob mapped to an `arrangement.` id.
     pub arrangement: Arc<ParamBank>,
@@ -89,6 +93,9 @@ pub struct Controllers {
     /// drawn from the second one.
     pub play_request: Arc<AtomicBool>,
     pub playing: Arc<AtomicBool>,
+    /// Writes one parameter into the session, as `set_param` does. Set once
+    /// the session exists; called with every controller lock released.
+    pub write: OnceLock<Writer>,
 }
 
 impl Controllers {
@@ -162,6 +169,7 @@ impl Controllers {
             path,
             trouble: Mutex::new(trouble),
             keep_file: AtomicBool::new(keep_file),
+            write: OnceLock::new(),
             bank,
             arrangement,
             play_request,
@@ -426,6 +434,7 @@ fn handle(shared: &Controllers, m: &Message) {
     drop(cal);
 
     // Learning takes the message rather than playing it.
+    let mut wrote = None;
     let mut learn = shared.learn.lock().expect("learn poisoned");
     if let Some(target) = learn.waiting.take() {
         let result = registry.learn(ev.control, target);
@@ -442,7 +451,12 @@ fn handle(shared: &Controllers, m: &Message) {
         learn.say(result);
     } else {
         drop(learn);
-        play(shared, &registry, ev.control, ev.value);
+        wrote = play(shared, &registry, ev.control, ev.value);
+    }
+    // The session is written with no controller lock held.
+    drop(registry);
+    if let (Some((id, v)), Some(write)) = (wrote, shared.write.get()) {
+        write(&id, v);
     }
 
     shared
@@ -452,22 +466,20 @@ fn handle(shared: &Controllers, m: &Message) {
         .note(&ev, Instant::now());
 }
 
-/// Resolve one control movement through the active map and apply it.
-fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
-    let Some(map) = registry.active_map() else {
-        return;
-    };
-    let Some(target) = map.mappings.get(&control) else {
-        return;
-    };
-    let Some((role, mode)) = registry.control(control).map(|c| (c.role, c.mode)) else {
-        return;
-    };
+/// Resolve one control movement through the active map: the parameter and
+/// the value to write, once pickup lets it through.
+fn play(
+    shared: &Controllers,
+    registry: &Registry,
+    control: u64,
+    value: u8,
+) -> Option<(String, f32)> {
+    let map = registry.active_map()?;
+    let target = map.mappings.get(&control)?;
+    let (role, mode) = registry.control(control).map(|c| (c.role, c.mode))?;
     match (target, role) {
         (Target::Param(id), Role::Knob) => {
-            let Some((bank, index)) = shared.locate(id) else {
-                return;
-            };
+            let (bank, index) = shared.locate(id)?;
             let def = &bank.defs()[index];
             let base = bank.get(index);
             // `None` for a pot, which arms; `Some(delta)` for an endless
@@ -478,12 +490,13 @@ fn play(shared: &Controllers, registry: &Registry, control: u64, value: u8) {
                 .lock()
                 .expect("pickup poisoned")
                 .turn(control, value, delta, def, base);
-            if let Turn::Write(v) = turn {
-                bank.set(index, v);
+            match turn {
+                Turn::Write(v) => Some((id.clone(), v)),
+                _ => None,
             }
         }
         // Pads reach nothing until story 3.
-        (Target::Param(_), Role::Pad) => {}
+        (Target::Param(_), Role::Pad) => None,
     }
 }
 

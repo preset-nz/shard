@@ -28,7 +28,6 @@ use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, Read
 mod controllers;
 #[cfg(test)]
 mod e2e;
-mod history;
 mod mapping;
 mod materials;
 mod menu;
@@ -36,8 +35,10 @@ mod midi;
 mod modulation;
 pub mod object_model;
 mod opened;
+// The old JSON document, read only by the end-to-end test until its
+// fixture moves to rhizome's format.
+#[cfg(test)]
 mod patch;
-mod presets;
 mod profile;
 pub mod session;
 #[cfg(test)]
@@ -52,9 +53,7 @@ mod tracker;
 #[global_allocator]
 static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 
-/// One source buffer per generator, by `Generator::index`: a new material
-/// waiting for the audio thread, or an old one it handed back.
-type SourceSlots = [Option<Vec<f32>>; 2];
+use session::SourceSlots;
 
 /// Shared between the UI thread and the audio thread.
 /// The live engine's grain pool. The preview renders with the same, or the
@@ -62,11 +61,12 @@ type SourceSlots = [Option<Vec<f32>>; 2];
 const LIVE_MAX_GRAINS: usize = 256;
 
 pub struct Audio {
+    /// The open session: the document, and the engine kept in step with it.
+    /// Every edit goes through here (`session.rs`).
+    session: Arc<session::Session>,
     bank: Arc<ParamBank>,
     /// The arrangement's values: its chain over the patch, the patch's
-    /// fader and the limiter. Saved above the patch, so opening a document
-    /// brings its own; a patch-only load, when one exists, leaves them alone.
-    /// Read by the audio thread once a block.
+    /// fader and the limiter. Read by the audio thread once a block.
     arrangement: Arc<ParamBank>,
     /// Every parameter as the engine last heard it, LFOs included. Written by
     /// the audio thread once a block; the bank above stays the hand's.
@@ -96,43 +96,10 @@ pub struct Audio {
     playhead: Arc<AtomicU32>,
     /// Set by the UI, read by the audio thread at the top of each block.
     play_request: Arc<AtomicBool>,
-    /// The tracker as the engine plays it, read once a block. Written only by
-    /// `apply_tracker`, together with the document below.
-    steps: Arc<StepBank>,
-    /// The level above the patch: tempo, swing and tracks. Saved in the same
-    /// `.shard` file, above the patch.
-    tracker: Mutex<tracker::Tracker>,
-    /// The material pool, and what each generator is wired to. Taken before
-    /// `decoded`, which is taken before `feeding`.
-    materials: Mutex<materials::Pool>,
-    /// Every material's audio by id, decoded once and kept, so wiring a
-    /// material is a copy rather than a decode. Resident: a three-minute file
-    /// is about 33 MB.
-    decoded: Mutex<std::collections::HashMap<u64, Arc<source::Loaded>>>,
-    /// The built-in drone's audio, which the drone material reads.
-    drone: Arc<source::Loaded>,
-    /// The material each generator was last sent, by `Generator::index`, or
-    /// none for silence. So a wiring change sends only what changed.
-    feeding: Mutex<[Option<u64>; 2]>,
-    /// How each generator reads its material, read by the audio thread once a
-    /// block. Written only by `send_pool` and `send_readings`.
-    readings: Arc<ReadingBank>,
-    /// Node presets for the open patch. Saved with it and replaced when
-    /// another patch loads; never touched by the audio thread.
-    presets: Mutex<presets::Presets>,
-    /// The open patch's LFOs and links. Every edit rebuilds a `ModSet` from
-    /// this and hands it across through `mod_swap`.
-    modulation: Mutex<modulation::Modulation>,
-    /// What Undo and Redo can step back to (`history.rs`).
-    history: Mutex<history::History>,
-    /// A new source for each generator that has one waiting.
-    swap: Arc<Mutex<SourceSlots>>,
     /// Source buffers the audio thread swapped out and handed back, waiting
     /// for `meters` to free them here rather than on the audio thread.
     retired: Arc<Mutex<SourceSlots>>,
-    /// A modulation set waiting for the audio thread, and the one it replaced,
-    /// handed back the same way as a source buffer.
-    mod_swap: Arc<Mutex<Option<ModSet>>>,
+    /// A modulation set the audio thread replaced, handed back the same way.
     mod_retired: Arc<Mutex<Option<ModSet>>>,
     /// The slowest block since `meters` last asked.
     timer: Arc<BlockTimer>,
@@ -263,49 +230,21 @@ fn set_arrangement_param(
     id: String,
     value: f32,
 ) -> Result<(), String> {
-    state.record_param(&state.arrangement, &id, value);
-    if state.arrangement.set_by_id(&id, value) {
-        Ok(())
-    } else {
-        Err(format!("unknown arrangement parameter: {id}"))
-    }
-}
-
-/// The bank of one level: `patch` or `arrangement`.
-fn layer_bank<'a>(state: &'a Audio, layer: &str) -> Result<&'a ParamBank, String> {
-    match layer {
-        "patch" => Ok(&state.bank),
-        "arrangement" => Ok(&state.arrangement),
-        other => Err(format!("there is no level called {other}")),
-    }
+    state.session.set_param(&id, value)
 }
 
 /// Puts the first free copy of an effect at the end of a level's chain,
 /// switched on (`design/effect-palette.md`). Answers with its instance number.
 #[tauri::command]
 fn fx_add(state: tauri::State<'_, Audio>, layer: String, kind: String) -> Result<usize, String> {
-    let kind = shard_dsp::fx::Kind::from_name(&kind)
-        .ok_or_else(|| format!("there is no effect called {kind}"))?;
-    let bank = layer_bank(&state, &layer)?;
-    let began = state.record_edit(None, &format!("Add {}", kind.label()));
-    shard_dsp::fx::add_to_chain(bank, kind).map_err(|e| {
-        state.cancel_edit(began);
-        String::from(e)
-    })
+    state.session.fx_add(&layer, &kind)
 }
 
-/// Takes an effect out of a level's chain. Its settings stay.
+/// Takes an effect out of a level's chain. Undo brings it back with its
+/// settings.
 #[tauri::command]
 fn fx_remove(state: tauri::State<'_, Audio>, layer: String, n: usize) -> Result<(), String> {
-    let bank = layer_bank(&state, &layer)?;
-    let label = shard_dsp::fx::POOL
-        .get(n)
-        .map_or("effect", |(k, _)| k.label());
-    let began = state.record_edit(None, &format!("Remove {label}"));
-    shard_dsp::fx::remove_from_chain(bank, n).map_err(|e| {
-        state.cancel_edit(began);
-        String::from(e)
-    })
+    state.session.fx_remove(&layer, n)
 }
 
 /// Moves an effect one place earlier (`by` below zero) or later.
@@ -316,19 +255,7 @@ fn fx_move(
     n: usize,
     by: i32,
 ) -> Result<bool, String> {
-    let bank = layer_bank(&state, &layer)?;
-    let label = shard_dsp::fx::POOL
-        .get(n)
-        .map_or("effect", |(k, _)| k.label());
-    let began = state.record_edit(None, &format!("Move {label}"));
-    match shard_dsp::fx::move_in_chain(bank, n, by) {
-        Ok(true) => Ok(true),
-        // At an end, or not in the chain: nothing changed.
-        other => {
-            state.cancel_edit(began);
-            other.map_err(String::from)
-        }
-    }
+    state.session.fx_move(&layer, n, by)
 }
 
 fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
@@ -378,12 +305,7 @@ fn get_heard(state: tauri::State<'_, Audio>) -> Vec<f32> {
 
 #[tauri::command]
 fn set_param(state: tauri::State<'_, Audio>, id: String, value: f32) -> Result<(), String> {
-    state.record_param(&state.bank, &id, value);
-    if state.bank.set_by_id(&id, value) {
-        Ok(())
-    } else {
-        Err(format!("unknown parameter: {id}"))
-    }
+    state.session.set_param(&id, value)
 }
 
 #[tauri::command]
@@ -537,26 +459,11 @@ async fn patch_preview(state: tauri::State<'_, Audio>) -> Result<PatchPreview, S
     for i in 0..arr.defs().len() {
         arr.set(i, state.arrangement.get(i));
     }
-    let (materials, readings) = {
-        let pool = state.materials.lock().expect("materials poisoned");
-        let decoded = state.decoded.lock().expect("decoded poisoned");
-        let material = |g: Generator| {
-            pool.wires
-                .get(g)
-                .and_then(|id| decoded.get(&id))
-                .map(Arc::clone)
-        };
-        (
-            Generator::ALL.map(material),
-            Generator::ALL.map(|g| Audio::reading_of(&pool, &decoded, g)),
-        )
-    };
-    let mods = state
-        .modulation
-        .lock()
-        .expect("modulation poisoned")
-        .build()
-        .0;
+    let pool = state.session.pool();
+    let materials =
+        Generator::ALL.map(|g| pool.wires.get(g).and_then(|id| state.session.loaded(id)));
+    let readings = Generator::ALL.map(|g| Audio::reading_of(&state.session, &pool, g));
+    let mods = state.session.plan().mod_set().0;
 
     tauri::async_runtime::spawn_blocking(move || {
         let empty: &[f32] = &[];
@@ -626,39 +533,10 @@ fn fold_preview(samples: &[f32], sr: f32, capped: bool) -> PatchPreview {
     }
 }
 
-/// Write the document to a `.shard` file. A few kilobytes of readable JSON:
-/// the tracker, and under it the patch, with parameter values by id, LFOs and
-/// links, presets, and where the sample was.
+/// Write the session to a `.shard` file, in rhizome's format.
 #[tauri::command]
-fn save_patch(
-    state: tauri::State<'_, Audio>,
-    ctl: tauri::State<'_, Arc<midi::Controllers>>,
-    path: String,
-) -> Result<(), String> {
-    let pool = state.materials.lock().expect("materials poisoned").clone();
-    let mut p = patch::Patch::capture(&state.bank, pool.wires);
-    p.presets = state.presets.lock().expect("presets poisoned").clone();
-    p.modulation = state
-        .modulation
-        .lock()
-        .expect("modulation poisoned")
-        .clone();
-    // The patch records the map it was played with, so loading it brings
-    // the same knobs back.
-    p.controller_map = ctl
-        .registry
-        .lock()
-        .expect("registry poisoned")
-        .active_map()
-        .map(|m| mapping::MapRef {
-            id: m.id,
-            name: m.name.clone(),
-        });
-    let tracker = state.tracker.lock().expect("tracker poisoned").clone();
-    let mut doc = patch::Document::new(tracker, p);
-    doc.pool = pool;
-    doc.arrangement = patch::capture_arrangement(&state.arrangement);
-    std::fs::write(&path, doc.to_json()?).map_err(|e| format!("{path}: {e}"))
+fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String> {
+    state.session.save(std::path::Path::new(&path))
 }
 
 /// A document macOS opened before the frontend was listening, if any. Also
@@ -668,150 +546,72 @@ fn take_opened_file(opened: tauri::State<'_, opened::Opened>) -> Option<String> 
     opened.take()
 }
 
-/// Read a `.shard` file back. Reloads the sample it names when that file is
-/// still there, and says so plainly when it is not rather than loading half
-/// the patch and looking fine.
+/// Open a `.shard` file. Its materials are decoded before anything changes,
+/// and a missing one is said plainly rather than loading half the session and
+/// looking fine. A file in the old JSON format is refused.
 ///
-/// Async, so decoding its materials happens off the main thread and never
-/// freezes the window.
+/// Async, so decoding happens off the main thread and never freezes the
+/// window.
 #[tauri::command(async)]
 fn load_patch(
     state: tauri::State<'_, Audio>,
     ctl: tauri::State<'_, Arc<midi::Controllers>>,
     path: String,
-) -> Result<patch::LoadReport, String> {
-    let text = std::fs::read_to_string(&path).map_err(|e| format!("{path}: {e}"))?;
-    let doc = patch::Document::from_json(&text)?;
-    // Every material is decoded now, once, before anything is applied, so a
-    // slow decode never shows a half-loaded document and switching later is
-    // instant. A file that has gone is simply absent here.
-    let decoded: std::collections::HashMap<u64, Arc<source::Loaded>> = doc
-        .pool
-        .materials
-        .iter()
-        .filter_map(|m| state.load_record(m).ok().map(|l| (m.id, l)))
-        .collect();
-    // The tracker and the arrangement's chain come with the document, above
-    // the patch.
-    apply_tracker(&state, doc.tracker.clone());
-    let p = &doc.patch;
-    let mut report = p.apply(&state.bank);
-    report.unknown.extend(patch::apply_arrangement(
-        &doc.arrangement,
-        &state.arrangement,
-    ));
-    // A patch names its map. One this Mac does not have leaves the active
-    // map alone and is reported, like an unknown id.
-    if let Some(want) = &p.controller_map {
-        let mut registry = ctl.registry.lock().expect("registry poisoned");
-        if registry.set_active(want.id) {
-            ctl.pickup.lock().expect("pickup poisoned").rearm_all();
-            if let Err(e) = ctl.save(&registry) {
-                eprintln!("shard: could not save controllers: {e}");
-            }
-        } else {
-            report.map_missing = Some(want.name.clone());
-        }
-    }
-    // Presets belong to the patch, so the loaded patch's set replaces the old.
-    *state.presets.lock().expect("presets poisoned") = p.presets.clone();
-    // So do LFOs and links. Anything the engine cannot use stays in the
-    // document and is reported.
-    report.refused = state.send_modulation(&p.modulation);
-    *state.modulation.lock().expect("modulation poisoned") = p.modulation.clone();
-
-    // The document's pool and the patch's wires replace the old ones. A wired
-    // material whose file has gone keeps its wire, its octave and its trim, so
-    // saving again keeps them. Not an error: its generator is silent, and the
-    // UI says which file is missing.
-    let mut pool = doc.pool.clone();
-    pool.set_wires(p.wires);
-    if let Some(m) = pool.wired().find(|m| !decoded.contains_key(&m.id)) {
-        // Only a WAV can go missing; the drone has no file.
-        report.sample_path = m.path.clone();
-        report.sample_missing = true;
-    }
-    *state.materials.lock().expect("materials poisoned") = pool;
-    *state.decoded.lock().expect("decoded poisoned") = decoded;
-    state.send_pool();
-    // Nothing before this document can be undone into it.
-    state.history.lock().expect("history poisoned").clear();
-
+) -> Result<session::LoadReport, String> {
+    let mut report = state.session.open(std::path::Path::new(&path))?;
+    report.map_missing = follow_map(&state, &ctl);
     Ok(report)
+}
+
+/// Makes the map the patch names the active one, so opening a patch or
+/// undoing a map choice brings the same knobs back. Answers the name of a map
+/// this Mac does not have, which leaves the active map alone. Called with the
+/// session's lock released.
+fn follow_map(state: &Audio, ctl: &midi::Controllers) -> Option<String> {
+    let want = state.session.controller_map()?;
+    let mut registry = ctl.registry.lock().expect("registry poisoned");
+    if registry.active_map().is_some_and(|m| m.id == want.id) {
+        return None;
+    }
+    if !registry.set_active(want.id) {
+        return Some(want.name);
+    }
+    ctl.pickup.lock().expect("pickup poisoned").rearm_all();
+    if let Err(e) = ctl.save(&registry) {
+        eprintln!("shard: could not save controllers: {e}");
+    }
+    None
 }
 
 /// The preset names saved for one node, such as `grain`, in the open patch.
 #[tauri::command]
 fn preset_names(state: tauri::State<'_, Audio>, node: String) -> Vec<String> {
-    state.presets.lock().expect("presets poisoned").names(&node)
+    state.session.preset_names(&node)
 }
-
-// The preset commands take the presets lock, then the modulation lock, always
-// in that order.
 
 /// Store a node's current values and links as a new preset. Refuses a name in
 /// use, so a preset is never overwritten by accident; that is what
 /// `update_preset` is for.
 #[tauri::command]
 fn save_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
-    // History is taken before presets, never while holding them.
-    let began = state.record_edit(None, "Save a preset");
-    let result = {
-        let mut presets = state.presets.lock().expect("presets poisoned");
-        let doc = state.modulation.lock().expect("modulation poisoned");
-        presets.save(&state.bank, &doc.links, &node, &name)
-    };
-    if result.is_err() {
-        state.cancel_edit(began);
-    }
-    result
+    state.session.save_preset(&node, &name)
 }
 
 /// Overwrite an existing preset with the node's current values and links.
 #[tauri::command]
 fn update_preset(state: tauri::State<'_, Audio>, node: String, name: String) -> Result<(), String> {
-    let began = state.record_edit(None, "Update a preset");
-    let result = {
-        let mut presets = state.presets.lock().expect("presets poisoned");
-        let doc = state.modulation.lock().expect("modulation poisoned");
-        presets.update(&state.bank, &doc.links, &node, &name)
-    };
-    if result.is_err() {
-        state.cancel_edit(began);
-    }
-    result
+    state.session.update_preset(&node, &name)
 }
 
-/// Write a preset's values into the bank and its links into the patch.
-/// Smoothed parameters glide to their new values; the section's switch is
-/// left as it is.
+/// Apply a preset: the node's values and links. Smoothed parameters glide to
+/// their new values; the section's switch is left as it is.
 #[tauri::command]
 fn apply_preset(
     state: tauri::State<'_, Audio>,
     node: String,
     name: String,
-) -> Result<presets::ApplyReport, String> {
-    let began = state.record_edit(None, &format!("Apply the preset “{name}”"));
-    let result = {
-        let presets = state.presets.lock().expect("presets poisoned");
-        let mut doc = state.modulation.lock().expect("modulation poisoned");
-        presets
-            .apply(&state.bank, &mut doc.links, &node, &name)
-            .map(|mut report| {
-                // Only this node's refusals: anything else refused was already
-                // reported when it arrived.
-                report.refused = state
-                    .send_modulation(&doc)
-                    .into_iter()
-                    .filter(|r| presets::belongs(&node, &r.id))
-                    .collect();
-                report
-            })
-    };
-    if result.is_err() {
-        state.cancel_edit(began);
-    }
-    result
+) -> Result<session::ApplyReport, String> {
+    state.session.apply_preset(&node, &name)
 }
 
 /// What an LFO can be set to, so the UI offers exactly what this build reads.
@@ -835,29 +635,29 @@ fn lfo_limits() -> LfoLimits {
     }
 }
 
-// The modulation commands take only the modulation lock.
-
-/// The open patch's LFOs and links. Builds the set to find what is refused,
-/// but sends nothing: the audio thread already has it.
+/// The open patch's LFOs and links, and what in them the engine refuses.
 #[tauri::command]
 fn modulation(state: tauri::State<'_, Audio>) -> ModulationView {
-    let doc = state.modulation.lock().expect("modulation poisoned");
-    ModulationView::of(&doc, doc.build().1)
+    modulation_view(&state)
+}
+
+fn modulation_view(state: &Audio) -> ModulationView {
+    let (doc, refused) = state.session.modulation();
+    ModulationView::of(&doc, refused)
 }
 
 /// Add an LFO. It is last in the answer's `lfos`.
 #[tauri::command]
 fn add_lfo(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
-    state.edit_modulation(None, "Add LFO", |doc| {
-        doc.add_lfo();
-        Ok(())
-    })
+    state.session.add_lfo()?;
+    Ok(modulation_view(&state))
 }
 
-/// Remove an LFO. Parameters that followed it stay linked, and are reported.
+/// Remove an LFO, and the links that followed it.
 #[tauri::command]
 fn remove_lfo(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
-    state.edit_modulation(None, "Remove LFO", |doc| doc.remove_lfo(id))
+    state.session.remove_lfo(id)?;
+    Ok(modulation_view(&state))
 }
 
 /// Change an LFO's name, rate, shape and phase. Running LFOs keep their place.
@@ -866,24 +666,22 @@ fn set_lfo(
     state: tauri::State<'_, Audio>,
     lfo: modulation::LfoRecord,
 ) -> Result<ModulationView, String> {
-    let key = format!("lfo:{}", lfo.id);
-    state.edit_modulation(Some(&key), "Change LFO", |doc| doc.set_lfo(lfo))
+    state.session.set_lfo(lfo)?;
+    Ok(modulation_view(&state))
 }
 
 /// Add a modulation envelope. It is last in the answer's `envelopes`.
 #[tauri::command]
 fn add_envelope(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
-    state.edit_modulation(None, "Add envelope", |doc| {
-        doc.add_envelope();
-        Ok(())
-    })
+    state.session.add_envelope()?;
+    Ok(modulation_view(&state))
 }
 
-/// Remove a modulation envelope. Parameters that followed it stay linked, and
-/// are reported.
+/// Remove a modulation envelope, and the links that followed it.
 #[tauri::command]
 fn remove_envelope(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
-    state.edit_modulation(None, "Remove envelope", |doc| doc.remove_envelope(id))
+    state.session.remove_envelope(id)?;
+    Ok(modulation_view(&state))
 }
 
 /// Change a modulation envelope's name and stages.
@@ -892,10 +690,8 @@ fn set_envelope(
     state: tauri::State<'_, Audio>,
     envelope: modulation::EnvelopeRecord,
 ) -> Result<ModulationView, String> {
-    let key = format!("envelope:{}", envelope.id);
-    state.edit_modulation(Some(&key), "Change envelope", |doc| {
-        doc.set_envelope(envelope)
-    })
+    state.session.set_envelope(envelope)?;
+    Ok(modulation_view(&state))
 }
 
 /// Make a parameter follow an LFO or envelope, or change the range it
@@ -908,31 +704,34 @@ fn link_param(
     lo: f32,
     hi: f32,
 ) -> Result<ModulationView, String> {
-    let key = format!("link:{id}");
-    state.edit_modulation(Some(&key), "Link a parameter", |doc| {
-        doc.link(&id, source, lo, hi)
-    })
+    state.session.link_param(&id, source, lo, hi)?;
+    Ok(modulation_view(&state))
 }
 
 /// Stop a parameter following anything.
 #[tauri::command]
 fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<ModulationView, String> {
-    state.edit_modulation(None, "Unlink a parameter", |doc| {
-        doc.unlink(&id);
-        Ok(())
-    })
+    state.session.unlink_param(&id)?;
+    Ok(modulation_view(&state))
 }
 
 /// Put every patch parameter back to its default. One step of Undo.
 #[tauri::command]
-fn reset_sound(state: tauri::State<'_, Audio>) -> bool {
-    state.reset_sound()
+fn reset_sound(state: tauri::State<'_, Audio>) -> Result<bool, String> {
+    state.session.reset_sound()
 }
 
 /// What Undo and Redo would do, by name, for the UI.
+#[derive(Serialize)]
+pub struct HistoryView {
+    pub undo: Option<String>,
+    pub redo: Option<String>,
+}
+
 #[tauri::command]
-fn history_state(state: tauri::State<'_, Audio>) -> history::HistoryView {
-    state.history.lock().expect("history poisoned").view()
+fn history_state(state: tauri::State<'_, Audio>) -> HistoryView {
+    let (undo, redo) = state.session.history();
+    HistoryView { undo, redo }
 }
 
 /// Put the names of what Undo and Redo would do in the Edit menu, greyed out
@@ -948,14 +747,24 @@ fn set_history_menu(app: tauri::AppHandle, undo: Option<String>, redo: Option<St
 /// Step back one edit. Answers with the name of what was undone, or nothing
 /// when there was nothing to undo.
 #[tauri::command]
-fn undo(state: tauri::State<'_, Audio>) -> Option<String> {
-    state.undo_one()
+fn undo(
+    state: tauri::State<'_, Audio>,
+    ctl: tauri::State<'_, Arc<midi::Controllers>>,
+) -> Result<Option<String>, String> {
+    let label = state.session.undo()?;
+    follow_map(&state, &ctl);
+    Ok(label)
 }
 
 /// Step forward again after an undo.
 #[tauri::command]
-fn redo(state: tauri::State<'_, Audio>) -> Option<String> {
-    state.redo_one()
+fn redo(
+    state: tauri::State<'_, Audio>,
+    ctl: tauri::State<'_, Arc<midi::Controllers>>,
+) -> Result<Option<String>, String> {
+    let label = state.session.redo()?;
+    follow_map(&state, &ctl);
+    Ok(label)
 }
 
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
@@ -964,39 +773,32 @@ fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
     state.play_request.store(playing, Ordering::Relaxed);
 }
 
-/// The tracker, as saved and as the engine plays it.
+/// The tracker, as saved and as the engine plays it. The first track is on
+/// in tracker mode.
 #[tauri::command]
 fn tracker(state: tauri::State<'_, Audio>) -> tracker::Tracker {
-    state.tracker.lock().expect("tracker poisoned").clone()
+    state.session.tracker()
 }
 
-/// Replace the tracker whole. Answers with what the engine now plays, which
-/// differs from what was sent only where a value was out of range.
+/// Replace the tracker whole. The first track's switch is the mode and not an
+/// edit. Answers with what the engine now plays, which differs from what was
+/// sent only where a value was out of range.
 #[tauri::command]
-fn set_tracker(state: tauri::State<'_, Audio>, tracker: tracker::Tracker) -> tracker::Tracker {
-    // Not an edit if it comes out as it already is. The track's own switch
-    // does not count: the mode flips it, and a mode is not an edit.
-    let current = state.tracker.lock().expect("tracker poisoned").clone();
-    if current.is_edited_by(&tracker) {
-        state.record_edit(Some("tracker"), "Edit the steps");
-    }
-    apply_tracker(&state, tracker)
+fn set_tracker(
+    state: tauri::State<'_, Audio>,
+    tracker: tracker::Tracker,
+) -> Result<tracker::Tracker, String> {
+    state.session.set_tracker(tracker)
 }
 
 /// A whole-pattern edit: clear, paste or repeat a bar, rotate, transpose
 /// (`tracker::Edit`). One step of Undo, and none when it changes nothing.
 #[tauri::command]
-fn edit_tracker(state: tauri::State<'_, Audio>, edit: tracker::Edit) -> tracker::Tracker {
-    state.edit_tracker(&edit)
-}
-
-/// The one way the tracker changes: brought into range, handed to the audio
-/// thread, and kept as the document.
-fn apply_tracker(state: &Audio, next: tracker::Tracker) -> tracker::Tracker {
-    let next = next.sanitised();
-    state.steps.store(&next.params());
-    *state.tracker.lock().expect("tracker poisoned") = next.clone();
-    next
+fn edit_tracker(
+    state: tauri::State<'_, Audio>,
+    edit: tracker::Edit,
+) -> Result<tracker::Tracker, String> {
+    state.session.edit_tracker(&edit)
 }
 
 /// A material's waveform for drawing. Refused for a material whose file could
@@ -1004,11 +806,8 @@ fn apply_tracker(state: &Audio, next: tracker::Tracker) -> tracker::Tracker {
 #[tauri::command]
 fn material_wave(state: tauri::State<'_, Audio>, id: u64) -> Result<SourceInfo, String> {
     let loaded = state
-        .decoded
-        .lock()
-        .expect("decoded poisoned")
-        .get(&id)
-        .cloned()
+        .session
+        .loaded(id)
         .ok_or_else(|| format!("material {id} could not be read"))?;
     Ok(SourceInfo {
         name: loaded.name.clone(),
@@ -1066,66 +865,36 @@ impl MaterialsView {
     }
 }
 
-// The material commands take the materials lock, then the decoded lock. Each
-// decodes before it changes anything, so a file that will not load leaves the
-// pool and the sound as they were. The ones that can decode are async: they
-// run off the main thread, so a long decode never freezes the window.
+// The material commands that can decode are async: they run off the main
+// thread, so a long decode never freezes the window. Each decodes before it
+// changes anything, so a file that will not load leaves the session as it was.
 
 #[tauri::command]
 fn materials(state: tauri::State<'_, Audio>) -> MaterialsView {
-    MaterialsView::of(&state.materials.lock().expect("materials poisoned"))
+    MaterialsView::of(&state.session.pool())
 }
 
 /// Add a WAV to the pool, whole and at its own pitch. A generator with no
 /// material yet reads it, so the first file added is heard at once.
 #[tauri::command(async)]
 fn add_material(state: tauri::State<'_, Audio>, path: String) -> Result<MaterialsView, String> {
-    let loaded = Arc::new(source::load(&path, state.sample_rate)?);
-    let view = {
-        let mut pool = state.materials.lock().expect("materials poisoned");
-        let id = pool.add(&loaded.name, &path);
-        state
-            .decoded
-            .lock()
-            .expect("decoded poisoned")
-            .insert(id, loaded);
-        pool.wire_unwired(id);
-        MaterialsView::of(&pool)
-    };
-    state.send_pool();
-    Ok(view)
+    state.session.add_material(&path)?;
+    Ok(MaterialsView::of(&state.session.pool()))
 }
 
 /// Add the built-in drone back to the pool, after it was removed. Like a WAV,
 /// a generator with no material yet reads it.
 #[tauri::command]
-fn add_drone(state: tauri::State<'_, Audio>) -> MaterialsView {
-    let view = {
-        let mut pool = state.materials.lock().expect("materials poisoned");
-        let id = pool.add_drone();
-        state
-            .decoded
-            .lock()
-            .expect("decoded poisoned")
-            .insert(id, Arc::clone(&state.drone));
-        pool.wire_unwired(id);
-        MaterialsView::of(&pool)
-    };
-    state.send_pool();
-    view
+fn add_drone(state: tauri::State<'_, Audio>) -> Result<MaterialsView, String> {
+    state.session.add_drone()?;
+    Ok(MaterialsView::of(&state.session.pool()))
 }
 
 /// Remove a material. A generator that read it goes silent.
 #[tauri::command]
 fn remove_material(state: tauri::State<'_, Audio>, id: u64) -> Result<MaterialsView, String> {
-    let view = {
-        let mut pool = state.materials.lock().expect("materials poisoned");
-        pool.remove(id)?;
-        state.decoded.lock().expect("decoded poisoned").remove(&id);
-        MaterialsView::of(&pool)
-    };
-    state.send_pool();
-    Ok(view)
+    state.session.remove_material(id)?;
+    Ok(MaterialsView::of(&state.session.pool()))
 }
 
 /// Wire a material into a generator, `material` (Sample) or `grain`
@@ -1137,25 +906,12 @@ fn wire_material(
     node: String,
     material: Option<u64>,
 ) -> Result<MaterialsView, String> {
-    let generator =
-        materials::generator_of(&node).ok_or_else(|| format!("{node} does not read a material"))?;
-    let view = {
-        let mut pool = state.materials.lock().expect("materials poisoned");
-        if let Some(id) = material {
-            let m = pool
-                .get(id)
-                .ok_or_else(|| format!("there is no material {id}"))?;
-            state.decode(m)?;
-        }
-        pool.wire(generator, material)?;
-        MaterialsView::of(&pool)
-    };
-    state.send_pool();
-    Ok(view)
+    state.session.wire_material(&node, material)?;
+    Ok(MaterialsView::of(&state.session.pool()))
 }
 
-/// Set a material's octave, trim and root note. Every generator reading it follows at
-/// the next block.
+/// Set a material's octave, trim and root note. Every generator reading it
+/// follows at the next block.
 #[tauri::command]
 fn set_material(
     state: tauri::State<'_, Audio>,
@@ -1165,14 +921,10 @@ fn set_material(
     trim_end: f32,
     root: Option<u8>,
 ) -> Result<MaterialsView, String> {
-    let view = {
-        let mut pool = state.materials.lock().expect("materials poisoned");
-        pool.set_values(id, octave, trim_start, trim_end)?;
-        pool.set_root(id, root)?;
-        MaterialsView::of(&pool)
-    };
-    state.send_readings();
-    Ok(view)
+    state
+        .session
+        .set_material(id, octave, trim_start, trim_end, root)?;
+    Ok(MaterialsView::of(&state.session.pool()))
 }
 
 /// Open the device and start the stream.
@@ -1606,8 +1358,26 @@ fn forget_midi(state: tauri::State<'_, Arc<midi::Controllers>>, id: String) -> R
     edit_controllers(&state, |r| r.unlearn(&mapping::Target::Param(id)))
 }
 
+/// Records the active map in the patch, so opening it brings the same knobs
+/// back. Called with every controller lock released.
+fn record_active_map(audio: &Audio, ctl: &midi::Controllers) {
+    let active = ctl
+        .registry
+        .lock()
+        .expect("registry poisoned")
+        .active_map()
+        .map(|m| mapping::MapRef {
+            id: m.id,
+            name: m.name.clone(),
+        });
+    if let Err(e) = audio.session.set_controller_map(active.as_ref()) {
+        eprintln!("shard: could not record the controller map: {e}");
+    }
+}
+
 #[tauri::command]
 fn set_active_map(
+    audio: tauri::State<'_, Audio>,
     state: tauri::State<'_, Arc<midi::Controllers>>,
     id: u64,
 ) -> Result<MappingsView, String> {
@@ -1619,11 +1389,13 @@ fn set_active_map(
         }
     })?;
     state.pickup.lock().expect("pickup poisoned").rearm_all();
+    record_active_map(&audio, &state);
     Ok(MappingsView::of(&state))
 }
 
 #[tauri::command]
 fn add_map(
+    audio: tauri::State<'_, Audio>,
     state: tauri::State<'_, Arc<midi::Controllers>>,
     name: String,
 ) -> Result<MappingsView, String> {
@@ -1633,6 +1405,7 @@ fn add_map(
         Ok(())
     })?;
     state.pickup.lock().expect("pickup poisoned").rearm_all();
+    record_active_map(&audio, &state);
     Ok(MappingsView::of(&state))
 }
 
@@ -1647,242 +1420,31 @@ fn rename_map(
 }
 
 impl Audio {
-    /// Everything an edit can change that Undo restores.
-    fn snapshot(&self) -> history::Snapshot {
-        let values = |bank: &ParamBank| (0..bank.defs().len()).map(|i| bank.get(i)).collect();
-        history::Snapshot {
-            patch: values(&self.bank),
-            arrangement: values(&self.arrangement),
-            tracker: self.tracker.lock().expect("tracker poisoned").clone(),
-            modulation: self.modulation.lock().expect("modulation poisoned").clone(),
-            presets: self.presets.lock().expect("presets poisoned").clone(),
-        }
-    }
-
-    /// Put a snapshot back: the values, the tracker, the LFOs and links, and
-    /// the presets. The bank clamps what it is given.
-    fn restore(&self, snap: &history::Snapshot) {
-        for (i, v) in snap.patch.iter().enumerate() {
-            self.bank.set(i, *v);
-        }
-        for (i, v) in snap.arrangement.iter().enumerate() {
-            self.arrangement.set(i, *v);
-        }
-        // Whether the track plays follows the mode, which is not in a
-        // snapshot: keep it as it is.
-        let mut tracker = snap.tracker.clone();
-        let now = self.tracker.lock().expect("tracker poisoned").clone();
-        for (t, n) in tracker.tracks.iter_mut().zip(&now.tracks) {
-            t.on = n.on;
-        }
-        apply_tracker(self, tracker);
-        self.send_modulation(&snap.modulation);
-        *self.modulation.lock().expect("modulation poisoned") = snap.modulation.clone();
-        *self.presets.lock().expect("presets poisoned") = snap.presets.clone();
-    }
-
-    /// An edit is about to happen: keep the state from before it, as one step
-    /// of Undo. Edits with the same `key` in quick succession are one gesture.
-    /// Answers whether a step began, for `cancel_edit` if the edit is refused.
-    /// Call before taking any other lock.
-    fn record_edit(&self, key: Option<&str>, label: &str) -> bool {
-        let mut history = self.history.lock().expect("history poisoned");
-        history.record(key, label, std::time::Instant::now(), || self.snapshot())
-    }
-
-    /// A person set one parameter. Not recorded when it would change nothing,
-    /// and not for the held gestures (brake and reverse), which are playing the
-    /// instrument rather than editing the document.
-    fn record_param(&self, bank: &ParamBank, id: &str, value: f32) {
-        if id == "tape.brake" || id == "tape.reverse" {
-            return;
-        }
-        let Some(i) = bank.index(id) else { return };
-        if (bank.get(i) - value).abs() < 1.0e-6 {
-            return;
-        }
-        let name = bank.defs()[i].name;
-        let key = format!("param:{id}");
-        self.record_edit(Some(&key), &format!("Change {name}"));
-    }
-
-    /// Apply a whole-pattern edit as one step of Undo; none if it changes
-    /// nothing.
-    fn edit_tracker(&self, edit: &tracker::Edit) -> tracker::Tracker {
-        let current = self.tracker.lock().expect("tracker poisoned").clone();
-        let next = current.clone().apply(edit);
-        if next == current {
-            return current;
-        }
-        self.record_edit(None, tracker::Tracker::label_of(edit));
-        apply_tracker(self, next)
-    }
-
-    /// Every patch parameter back to its default, as one step of Undo; none if
-    /// they all are already. The sound only (roadmap row 2): the material and
-    /// its trim, the tracker, the arrangement and the LFOs and links are left
-    /// alone. The effect chain is among the parameters, so it empties.
-    fn reset_sound(&self) -> bool {
-        let defs = self.bank.defs();
-        if defs
-            .iter()
-            .enumerate()
-            .all(|(i, p)| (self.bank.get(i) - p.default).abs() < 1.0e-6)
-        {
-            return false;
-        }
-        self.record_edit(None, "Reset the sound");
-        for (i, p) in defs.iter().enumerate() {
-            self.bank.set(i, p.default);
-        }
-        true
-    }
-
-    /// Step back one edit; the name of what was undone.
-    fn undo_one(&self) -> Option<String> {
-        let current = self.snapshot();
-        let undone = self.history.lock().expect("history poisoned").undo(current);
-        undone.map(|(snap, label)| {
-            self.restore(&snap);
-            label
-        })
-    }
-
-    /// Step forward again; the name of what was redone.
-    fn redo_one(&self) -> Option<String> {
-        let current = self.snapshot();
-        let redone = self.history.lock().expect("history poisoned").redo(current);
-        redone.map(|(snap, label)| {
-            self.restore(&snap);
-            label
-        })
-    }
-
-    /// The edit was refused and changed nothing.
-    fn cancel_edit(&self, began: bool) {
-        if began {
-            self.history.lock().expect("history poisoned").cancel();
-        }
-    }
-
-    /// Build the engine's modulation set from `doc` here, on the command
-    /// thread, and leave it for the audio thread to take at a block boundary.
-    /// A set still waiting from an earlier edit is replaced and freed here.
-    fn send_modulation(&self, doc: &modulation::Modulation) -> Vec<modulation::Refused> {
-        let (set, refused) = doc.build();
-        *self.mod_swap.lock().expect("modulation swap poisoned") = Some(set);
-        refused
-    }
-
-    /// Apply one edit to the open patch's LFOs and links, hand the rebuilt set
-    /// to the audio thread, and answer with what the UI should now draw. A
-    /// refused edit has changed nothing, so nothing is sent.
-    fn edit_modulation(
-        &self,
-        key: Option<&str>,
-        label: &str,
-        edit: impl FnOnce(&mut modulation::Modulation) -> Result<(), String>,
-    ) -> Result<ModulationView, String> {
-        let began = self.record_edit(key, label);
-        let mut doc = self.modulation.lock().expect("modulation poisoned");
-        if let Err(e) = edit(&mut doc) {
-            drop(doc);
-            self.cancel_edit(began);
-            return Err(e);
-        }
-        let refused = self.send_modulation(&doc);
-        Ok(ModulationView::of(&doc, refused))
-    }
-
-    /// Hand the pool to the audio thread: every generator's reading, and a new
-    /// source only for a generator whose material changed. The audio thread
-    /// takes a source at a block boundary; it never decodes and never
-    /// allocates. Nothing wired, or a material whose file could not be read,
-    /// is silent.
-    fn send_pool(&self) {
-        let pool = self.materials.lock().expect("materials poisoned");
-        let decoded = self.decoded.lock().expect("decoded poisoned");
-        let mut feeding = self.feeding.lock().expect("feeding poisoned");
-        for g in Generator::ALL {
-            let want = pool.wires.get(g).filter(|id| decoded.contains_key(id));
-            if feeding[g.index()] != want {
-                // Silence is an empty buffer, which allocates nothing.
-                let samples = want
-                    .and_then(|id| decoded.get(&id))
-                    .map(|l| l.samples.clone())
-                    .unwrap_or_default();
-                self.swap.lock().expect("swap poisoned")[g.index()] = Some(samples);
-                feeding[g.index()] = want;
-            }
-        }
-        self.store_readings(&pool, &decoded);
-    }
-
-    /// Hand every generator's reading to the audio thread, and nothing else.
-    fn send_readings(&self) {
-        let pool = self.materials.lock().expect("materials poisoned");
-        let decoded = self.decoded.lock().expect("decoded poisoned");
-        self.store_readings(&pool, &decoded);
-    }
-
-    fn store_readings(
-        &self,
-        pool: &materials::Pool,
-        decoded: &std::collections::HashMap<u64, Arc<source::Loaded>>,
-    ) {
-        let [player, grain] = Generator::ALL.map(|g| Self::reading_of(pool, decoded, g));
-        self.readings.store(player, grain);
-    }
-
     /// How a generator reads: through its material's octave and trim, or at
     /// the defaults when it has no readable material and so reads nothing.
     fn reading_of(
+        session: &session::Session,
         pool: &materials::Pool,
-        decoded: &std::collections::HashMap<u64, Arc<source::Loaded>>,
         g: Generator,
     ) -> shard_dsp::Reading {
         pool.wires
             .get(g)
-            .filter(|id| decoded.contains_key(id))
+            .filter(|id| session.loaded(*id).is_some())
             .and_then(|id| pool.get(id))
             .map(|m| m.reading())
             .unwrap_or_default()
     }
 
-    /// A material's audio: from the cache, or decoded now and kept. Only a
-    /// material whose file was missing when it was first asked for gets here
-    /// uncached.
-    fn decode(&self, m: &materials::MaterialRecord) -> Result<Arc<source::Loaded>, String> {
-        if let Some(loaded) = self.decoded.lock().expect("decoded poisoned").get(&m.id) {
-            return Ok(Arc::clone(loaded));
-        }
-        let loaded = self.load_record(m)?;
-        self.decoded
-            .lock()
-            .expect("decoded poisoned")
-            .insert(m.id, Arc::clone(&loaded));
-        Ok(loaded)
-    }
-
-    /// A material's audio, read now: its WAV decoded, or the drone shared.
-    fn load_record(&self, m: &materials::MaterialRecord) -> Result<Arc<source::Loaded>, String> {
-        match &m.path {
-            Some(path) => Ok(Arc::new(source::load(path, self.sample_rate)?)),
-            None => Ok(Arc::clone(&self.drone)),
-        }
-    }
-
     /// Plain playback's trimmed window in sample indices, worked out as the
     /// engine does, so a drawn envelope matches the one heard.
     fn trim_indices(&self) -> (usize, usize) {
-        let pool = self.materials.lock().expect("materials poisoned");
-        let decoded = self.decoded.lock().expect("decoded poisoned");
+        let pool = self.session.pool();
         let len = pool
             .wires
             .get(Generator::Player)
-            .and_then(|id| decoded.get(&id))
+            .and_then(|id| self.session.loaded(id))
             .map_or(0, |l| l.samples.len());
-        Self::reading_of(&pool, &decoded, Generator::Player).window(len)
+        Self::reading_of(&self.session, &pool, Generator::Player).window(len)
     }
 }
 
@@ -2146,14 +1708,25 @@ fn build_audio() -> Result<Audio, String> {
         .recv()
         .map_err(|_| "the audio thread died during startup".to_string())??;
 
-    // A new document plays the built-in drone through both generators, and
+    // A new session plays the built-in drone through both generators, and
     // lists it, so nothing sounds that the pool does not show (Georg,
     // 2026-09-15). The engine above starts on the same drone.
     let drone = Arc::new(source::startup_drone(sample_rate));
-    let pool = materials::Pool::with_drone();
-    let drone_id = pool.wires.material.expect("a new pool wires the drone");
+    let session = session::Session::new(
+        session::Feeds {
+            bank: Arc::clone(&bank),
+            arrangement: Arc::clone(&arrangement),
+            steps,
+            mod_swap,
+            swap,
+            readings,
+        },
+        drone,
+        sample_rate,
+    )?;
 
     Ok(Audio {
+        session: Arc::new(session),
         bank,
         arrangement,
         heard,
@@ -2169,20 +1742,7 @@ fn build_audio() -> Result<Audio, String> {
         reversing,
         playhead,
         play_request,
-        steps,
-        tracker: Mutex::new(tracker::Tracker::default()),
-        materials: Mutex::new(pool),
-        decoded: Mutex::new([(drone_id, Arc::clone(&drone))].into()),
-        drone,
-        // The engine starts with the drone in both generators, as the pool does.
-        feeding: Mutex::new([Some(drone_id); 2]),
-        readings,
-        presets: Mutex::new(presets::Presets::default()),
-        modulation: Mutex::new(modulation::Modulation::default()),
-        history: Mutex::new(history::History::default()),
-        swap,
         retired,
-        mod_swap,
         mod_retired,
         timer,
         reported_allocs: AtomicU64::new(0),
@@ -2230,6 +1790,13 @@ pub fn run() {
                 play_request,
                 playing,
             ));
+            // A caught knob writes into the session, as the UI does.
+            let session = Arc::clone(&audio.session);
+            let _ = shared.write.set(Box::new(move |id, v| {
+                if let Err(e) = session.set_param(id, v) {
+                    eprintln!("shard: a controller could not set {id}: {e}");
+                }
+            }));
             midi::start(Arc::clone(&shared));
             app.manage(shared);
             // The menu bar. If it cannot be built the default one stays and
@@ -2413,14 +1980,14 @@ mod tests {
             );
         }
 
-        let report = serde_json::to_value(presets::ApplyReport::default())
+        let report = serde_json::to_value(session::ApplyReport::default())
             .expect("ApplyReport is serialisable");
         for key in ["applied", "unknown", "refused"] {
             assert!(report.get(key).is_some(), "ApplyReport lost `{key}`");
         }
 
-        let load =
-            serde_json::to_value(patch::LoadReport::default()).expect("LoadReport is serialisable");
+        let load = serde_json::to_value(session::LoadReport::default())
+            .expect("LoadReport is serialisable");
         for key in [
             "applied",
             "unknown",
@@ -2433,9 +2000,7 @@ mod tests {
             assert!(load.get(key).is_some(), "LoadReport lost `{key}`");
         }
 
-        let mut pool = materials::Pool::default();
-        let id = pool.add("x.wav", "/nowhere/x.wav");
-        pool.wire(Generator::Grain, Some(id)).unwrap();
+        let pool = materials::Pool::with_drone();
         let view = serde_json::to_value(MaterialsView::of(&pool)).expect("MaterialsView");
         for key in ["materials", "wires"] {
             assert!(view.get(key).is_some(), "MaterialsView lost `{key}`");
@@ -2467,10 +2032,26 @@ mod tests {
             assert!(refused.get(key).is_some(), "Refused lost `{key}`");
         }
 
-        let mut doc = modulation::Modulation::default();
-        let id = doc.add_lfo().id;
-        doc.link("grain.size", id, 0.25, 0.75).unwrap();
-        doc.add_envelope();
+        let doc = modulation::Modulation {
+            lfos: vec![modulation::LfoRecord {
+                id: 1,
+                name: "LFO 1".into(),
+                rate: 1.0,
+                shape: "sine".into(),
+                phase: 0.0,
+            }],
+            envelopes: vec![modulation::new_envelope(2)],
+            links: [(
+                "grain.size".to_string(),
+                modulation::LinkRecord {
+                    source: 1,
+                    lo: 0.25,
+                    hi: 0.75,
+                },
+            )]
+            .into(),
+            next_modulator_id: 3,
+        };
         let view = serde_json::to_value(ModulationView::of(&doc, Vec::new()))
             .expect("ModulationView is serialisable");
         for key in ["lfos", "envelopes", "links", "refused"] {
@@ -2613,252 +2194,5 @@ mod tests {
         let p = fold_preview(&stereo, 48_000.0, false);
         assert_eq!(p.zoom_min.len(), PREVIEW_ZOOM_COLUMNS);
         assert!(p.seconds > 0.0 && !p.capped);
-    }
-
-    /// An `Audio` with no sound device behind it: the same state the commands
-    /// edit, and nothing playing it.
-    fn headless() -> Audio {
-        let sample_rate = 48_000.0;
-        let drone = Arc::new(source::startup_drone(sample_rate));
-        let pool = materials::Pool::with_drone();
-        let drone_id = pool.wires.material.expect("a new pool wires the drone");
-        Audio {
-            bank: Arc::new(ParamBank::new()),
-            arrangement: Arc::new(ParamBank::for_table(arrangement::params())),
-            heard: Arc::new(ParamBank::new()),
-            peak: Arc::new(AtomicU32::new(0)),
-            reduction: Arc::new(AtomicU32::new(1.0f32.to_bits())),
-            grains: Arc::new(AtomicU32::new(0)),
-            playing: Arc::new(AtomicBool::new(false)),
-            step: Arc::new(AtomicU32::new(0)),
-            kit_step: Arc::new(AtomicU32::new(0)),
-            grain_log: Engine::new(sample_rate, 8).grain_log(),
-            audition: Arc::new(Mutex::new(None)),
-            auditioning: Arc::new(AtomicBool::new(false)),
-            reversing: Arc::new(AtomicBool::new(false)),
-            playhead: Arc::new(AtomicU32::new(0)),
-            play_request: Arc::new(AtomicBool::new(false)),
-            steps: Arc::new(StepBank::new(tracker::Tracker::default().params())),
-            tracker: Mutex::new(tracker::Tracker::default()),
-            materials: Mutex::new(pool),
-            decoded: Mutex::new([(drone_id, Arc::clone(&drone))].into()),
-            drone,
-            feeding: Mutex::new([Some(drone_id); 2]),
-            readings: Arc::new(ReadingBank::new()),
-            presets: Mutex::new(presets::Presets::default()),
-            modulation: Mutex::new(modulation::Modulation::default()),
-            history: Mutex::new(history::History::default()),
-            swap: Arc::new(Mutex::new([None, None])),
-            retired: Arc::new(Mutex::new([None, None])),
-            mod_swap: Arc::new(Mutex::new(None)),
-            mod_retired: Arc::new(Mutex::new(None)),
-            timer: Arc::new(BlockTimer::new()),
-            reported_allocs: AtomicU64::new(0),
-            sample_rate,
-        }
-    }
-
-    /// What the `set_param` command does, without the Tauri wrapper.
-    fn edit(a: &Audio, id: &str, v: f32) {
-        a.record_param(&a.bank, id, v);
-        assert!(a.bank.set_by_id(id, v), "{id}");
-    }
-
-    #[test]
-    fn undo_puts_a_parameter_back_and_redo_changes_it_again() {
-        let a = headless();
-        let was = a.bank.get_by_id("grain.size").unwrap();
-        edit(&a, "grain.size", 123.0);
-        assert_eq!(a.bank.get_by_id("grain.size"), Some(123.0));
-        assert_eq!(a.undo_one().as_deref(), Some("Change Size"));
-        assert_eq!(a.bank.get_by_id("grain.size"), Some(was));
-        assert_eq!(a.redo_one().as_deref(), Some("Change Size"));
-        assert_eq!(a.bank.get_by_id("grain.size"), Some(123.0));
-        assert!(a.redo_one().is_none());
-    }
-
-    #[test]
-    fn dragging_a_slider_is_one_undo() {
-        let a = headless();
-        let was = a.bank.get_by_id("grain.size").unwrap();
-        for v in 50..150 {
-            edit(&a, "grain.size", v as f32);
-        }
-        assert_eq!(a.undo_one().as_deref(), Some("Change Size"));
-        assert_eq!(a.bank.get_by_id("grain.size"), Some(was));
-        assert!(a.undo_one().is_none(), "the drag was a single step");
-    }
-
-    #[test]
-    fn setting_a_value_to_what_it_already_is_is_not_an_edit() {
-        let a = headless();
-        let now = a.bank.get_by_id("grain.size").unwrap();
-        edit(&a, "grain.size", now);
-        assert!(a.undo_one().is_none());
-    }
-
-    #[test]
-    fn held_gestures_are_not_edits() {
-        let a = headless();
-        edit(&a, "tape.brake", 1.0);
-        edit(&a, "tape.reverse", 1.0);
-        assert!(a.undo_one().is_none());
-    }
-
-    #[test]
-    fn adding_and_removing_an_effect_undo_cleanly_and_keep_its_settings() {
-        use shard_dsp::fx::{self, Kind};
-        let a = headless();
-        a.record_edit(None, "Add Delay");
-        let n = fx::add_to_chain(&a.bank, Kind::Delay).unwrap();
-        edit(&a, &format!("fx.{n}.delay.time"), 777.0);
-        a.record_edit(None, "Remove Delay");
-        fx::remove_from_chain(&a.bank, n).unwrap();
-        assert!(fx::order_of(&a.bank).is_empty());
-
-        assert_eq!(a.undo_one().as_deref(), Some("Remove Delay"));
-        assert!(fx::order_of(&a.bank).contains(n), "back in the chain");
-        assert_eq!(a.bank.get_by_id(&format!("fx.{n}.delay.time")), Some(777.0));
-        assert_eq!(a.undo_one().as_deref(), Some("Change Time"));
-        assert_ne!(a.bank.get_by_id(&format!("fx.{n}.delay.time")), Some(777.0));
-        assert_eq!(a.undo_one().as_deref(), Some("Add Delay"));
-        assert!(fx::order_of(&a.bank).is_empty());
-    }
-
-    #[test]
-    fn the_arrangement_is_undone_with_the_patch() {
-        let a = headless();
-        a.record_param(&a.arrangement, "arrangement.track.gain", 0.25);
-        a.arrangement.set_by_id("arrangement.track.gain", 0.25);
-        edit(&a, "grain.size", 99.0);
-        a.undo_one();
-        a.undo_one();
-        assert_eq!(a.arrangement.get_by_id("arrangement.track.gain"), Some(1.0));
-    }
-
-    #[test]
-    fn undo_restores_the_tracker_the_engine_plays() {
-        let a = headless();
-        let mut t = a.tracker.lock().unwrap().clone();
-        t.tempo = 90.0;
-        a.record_edit(Some("tracker"), "Edit the steps");
-        apply_tracker(&a, t);
-        assert_eq!(a.tracker.lock().unwrap().tempo, 90.0);
-        a.undo_one();
-        assert_eq!(
-            a.tracker.lock().unwrap().tempo,
-            tracker::Tracker::default().tempo
-        );
-        assert_eq!(a.steps.load().tempo_bpm, tracker::Tracker::default().tempo);
-    }
-
-    #[test]
-    fn undo_restores_lfos_and_a_refused_edit_leaves_no_step() {
-        let a = headless();
-        a.edit_modulation(None, "Add LFO", |doc| {
-            doc.add_lfo();
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(a.modulation.lock().unwrap().lfos.len(), 1);
-        // A refused edit changes nothing and is not a step.
-        let refused = a.edit_modulation(None, "Remove LFO", |doc| doc.remove_lfo(999_999));
-        assert!(refused.is_err());
-        assert_eq!(a.undo_one().as_deref(), Some("Add LFO"));
-        assert!(a.modulation.lock().unwrap().lfos.is_empty());
-        assert!(a.undo_one().is_none());
-    }
-
-    #[test]
-    fn a_new_edit_after_undo_drops_redo() {
-        let a = headless();
-        edit(&a, "grain.size", 10.0);
-        a.undo_one();
-        a.record_edit(None, "Something else");
-        assert!(a.redo_one().is_none());
-    }
-
-    #[test]
-    fn a_pattern_edit_is_one_undo_and_one_that_changes_nothing_is_none() {
-        let a = headless();
-        // The default track has steps on every fourth; clearing bar one is a change.
-        let before = a.tracker.lock().unwrap().clone();
-        a.edit_tracker(&tracker::Edit::ClearBar { bar: 0 });
-        assert!(!a.tracker.lock().unwrap().tracks[0].steps[0].on);
-        assert_eq!(a.steps.load().pattern & 0xFFFF, 0, "the engine hears it");
-        assert_eq!(a.undo_one().as_deref(), Some("Clear a bar"));
-        assert_eq!(*a.tracker.lock().unwrap(), before);
-        assert_eq!(a.steps.load().pattern & 0xFFFF, 0x1111);
-
-        // A bar that is already empty, or does not exist, leaves no step.
-        a.edit_tracker(&tracker::Edit::ClearBar { bar: 3 });
-        a.edit_tracker(&tracker::Edit::ClearBar { bar: 9 });
-        assert!(a.undo_one().is_none());
-    }
-
-    #[test]
-    fn switching_the_mode_is_not_an_edit_and_undo_does_not_flip_it() {
-        let a = headless();
-        // What the mode switch does: turn the track on through `set_tracker`.
-        let mut on = a.tracker.lock().unwrap().clone();
-        on.tracks[0].on = true;
-        let current = a.tracker.lock().unwrap().clone();
-        assert!(
-            !current.is_edited_by(&on),
-            "only the switch differs, so no step is recorded"
-        );
-        apply_tracker(&a, on);
-
-        // A real edit, then undo: the steps go back and the track stays on.
-        a.edit_tracker(&tracker::Edit::ClearBar { bar: 0 });
-        a.undo_one();
-        assert!(
-            a.tracker.lock().unwrap().tracks[0].on,
-            "undo left the mode alone"
-        );
-        assert!(
-            a.tracker.lock().unwrap().tracks[0].steps[0].on,
-            "and restored the steps"
-        );
-    }
-
-    #[test]
-    fn resetting_the_sound_restores_defaults_in_one_undoable_step() {
-        use shard_dsp::fx::{self, Kind};
-        let a = headless();
-        edit(&a, "grain.size", 123.0);
-        let n = fx::add_to_chain(&a.bank, Kind::Delay).unwrap();
-        a.bank.set_by_id(&fx::row_id(n, "delay.time"), 777.0);
-        // Things the reset must leave alone.
-        a.arrangement.set_by_id("arrangement.track.gain", 0.25);
-        let mut t = a.tracker.lock().unwrap().clone();
-        t.tempo = 90.0;
-        apply_tracker(&a, t);
-
-        assert!(a.reset_sound());
-        for (i, p) in a.bank.defs().iter().enumerate() {
-            assert_eq!(a.bank.get(i), p.default, "{}", p.id);
-        }
-        assert!(
-            fx::order_of(&a.bank).is_empty(),
-            "the chain empties with it"
-        );
-        assert_eq!(
-            a.arrangement.get_by_id("arrangement.track.gain"),
-            Some(0.25)
-        );
-        assert_eq!(a.tracker.lock().unwrap().tempo, 90.0);
-
-        assert_eq!(a.undo_one().as_deref(), Some("Reset the sound"));
-        assert_eq!(a.bank.get_by_id("grain.size"), Some(123.0));
-        assert!(fx::order_of(&a.bank).contains(n), "the chain is back");
-        assert_eq!(a.bank.get_by_id(&fx::row_id(n, "delay.time")), Some(777.0));
-    }
-
-    #[test]
-    fn resetting_a_sound_that_is_already_default_is_not_an_edit() {
-        let a = headless();
-        assert!(!a.reset_sound());
-        assert!(a.undo_one().is_none());
     }
 }

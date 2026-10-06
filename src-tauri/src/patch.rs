@@ -34,7 +34,6 @@ use shard_dsp::ParamBank;
 use crate::mapping::MapRef;
 use crate::materials::{Pool, Wires};
 use crate::modulation::{Modulation, Refused};
-use crate::presets::Presets;
 use crate::tracker::Tracker;
 
 /// Bumped only for a change old builds cannot read. Adding parameters does
@@ -68,10 +67,10 @@ pub struct Patch {
     /// Octave and trim rest on the materials, not here.
     #[serde(default, skip_serializing_if = "Wires::is_empty")]
     pub wires: Wires,
-    /// Node presets, by node and then by name. Document data, so they travel
-    /// with the patch. See `presets.rs`.
-    #[serde(default, skip_serializing_if = "Presets::is_empty")]
-    pub presets: Presets,
+    /// Node presets, by node and then by name, kept as written: nothing reads
+    /// the old format's presets any more.
+    #[serde(default, skip_serializing_if = "serde_json::Value::is_null")]
+    pub presets: serde_json::Value,
     /// The controller map this patch plays with, by stable id. App-wide
     /// data referred to, never copied in. Absent leaves the active map alone.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,7 +160,7 @@ impl Patch {
                 .map(|(i, p)| (p.id.to_string(), bank.get(i)))
                 .collect(),
             wires,
-            presets: Presets::default(),
+            presets: serde_json::Value::Null,
             controller_map: None,
             modulation: Modulation::default(),
         }
@@ -284,44 +283,6 @@ mod tests {
         let text = r#"{"version":999,"patch":{"params":{}}}"#;
         let err = Document::from_json(text).unwrap_err();
         assert!(err.contains("999"), "unhelpful error: {err}");
-    }
-
-    #[test]
-    fn the_pool_and_the_patchs_wires_survive_the_round_trip() {
-        let bank = ParamBank::new();
-        let mut pool = Pool::default();
-        let x = pool.add("x.wav", "/tmp/x.wav");
-        let y = pool.add("y.wav", "/tmp/y.wav");
-        let wires = Wires {
-            material: Some(x),
-            grain: Some(y),
-        };
-        let mut doc = Document::new(Tracker::default(), Patch::capture(&bank, wires));
-        doc.pool = pool.clone();
-        let text = doc.to_json().unwrap();
-        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert!(
-            json["materials"].is_array(),
-            "the pool sits beside the tracker: {text}"
-        );
-        assert_eq!(json["patch"]["wires"]["grain"], y, "wires sit in the patch");
-        let back = Document::from_json(&text).unwrap();
-        assert_eq!(back.pool, pool);
-        assert_eq!(back.patch.wires, wires);
-    }
-
-    #[test]
-    fn presets_travel_with_the_patch() {
-        let bank = ParamBank::new();
-        let mut patch = Patch::capture(&bank, Wires::default());
-        patch
-            .presets
-            .save(&bank, &Default::default(), "grain", "cloud")
-            .unwrap();
-        let saved = patch.presets.clone();
-        let back = round_trip(patch);
-        assert_eq!(back.patch.presets, saved);
-        assert_eq!(back.patch.presets.names("grain"), vec!["cloud"]);
     }
 
     #[test]

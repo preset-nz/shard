@@ -254,17 +254,6 @@ pub enum Edit {
 pub const BAR: usize = 16;
 
 impl Tracker {
-    /// Whether `proposed` would change anything but which tracks are switched
-    /// on. The mode flips a track's switch, and a mode is not an edit, so this
-    /// is what decides whether a `set_tracker` is a step of Undo.
-    pub fn is_edited_by(&self, proposed: &Tracker) -> bool {
-        let mut probe = proposed.clone().sanitised();
-        for (p, c) in probe.tracks.iter_mut().zip(&self.tracks) {
-            p.on = c.on;
-        }
-        probe != *self
-    }
-
     /// What the edit is called in Undo.
     pub fn label_of(edit: &Edit) -> &'static str {
         match edit {

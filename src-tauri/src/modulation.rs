@@ -19,9 +19,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shard_dsp::modulation::{MAX_RATE_HZ, MIN_RATE_HZ};
-use shard_dsp::params::index_of;
-use shard_dsp::{EnvSpec, LfoSpec, LinkError, ModSet, Shape, Taper, PARAMS};
+use shard_dsp::{EnvSpec, LfoSpec, ModSet, Shape};
 
 /// Long enough for anything typed into the tree, short enough to stay a label.
 const MAX_NAME: usize = 60;
@@ -189,158 +187,10 @@ impl Modulation {
         }
         (set, refused)
     }
-
-    /// An id no LFO or envelope has had.
-    fn fresh_id(&mut self) -> u64 {
-        // Never below an id already in either list, which a hand-edited patch
-        // can carry past its counter.
-        let floor = self
-            .lfos
-            .iter()
-            .map(|l| l.id)
-            .chain(self.envelopes.iter().map(|e| e.id))
-            .map(|id| id.saturating_add(1))
-            .max()
-            .unwrap_or(1);
-        let id = self.next_modulator_id.max(floor);
-        self.next_modulator_id = id.saturating_add(1);
-        id
-    }
-
-    fn has_source(&self, id: u64) -> bool {
-        self.lfos.iter().any(|l| l.id == id) || self.envelopes.iter().any(|e| e.id == id)
-    }
-
-    /// Add an envelope with a fresh id and return it.
-    pub fn add_envelope(&mut self) -> EnvelopeRecord {
-        let env = new_envelope(self.fresh_id());
-        self.envelopes.push(env.clone());
-        env
-    }
-
-    /// Remove an envelope. Its links stay and are reported, as an LFO's do.
-    pub fn remove_envelope(&mut self, id: u64) -> Result<(), String> {
-        let before = self.envelopes.len();
-        self.envelopes.retain(|e| e.id != id);
-        if self.envelopes.len() == before {
-            return Err(LinkError::UnknownSource(id).to_string());
-        }
-        Ok(())
-    }
-
-    /// Replace an envelope's name and stages, matched by `edit.id`. Stages
-    /// are brought into range; the name must already be valid.
-    pub fn set_envelope(&mut self, edit: EnvelopeRecord) -> Result<(), String> {
-        let stages = [edit.attack, edit.decay, edit.sustain, edit.release];
-        if !stages.iter().all(|v| v.is_finite()) {
-            return Err("an envelope's stages must be numbers".into());
-        }
-        let name = valid_name(&edit.name, "an envelope")?;
-        let env = self
-            .envelopes
-            .iter_mut()
-            .find(|e| e.id == edit.id)
-            .ok_or(LinkError::UnknownSource(edit.id).to_string())?;
-        let ms = |v: f32| v.clamp(0.0, MAX_STAGE_MS);
-        *env = EnvelopeRecord {
-            id: edit.id,
-            name,
-            attack: ms(edit.attack),
-            decay: ms(edit.decay),
-            sustain: edit.sustain.clamp(0.0, 1.0),
-            release: ms(edit.release),
-        };
-        Ok(())
-    }
-
-    /// Add an LFO with a fresh id and return it.
-    pub fn add_lfo(&mut self) -> LfoRecord {
-        let id = self.fresh_id();
-        let lfo = LfoRecord {
-            id,
-            name: format!("LFO {id}"),
-            rate: NEW_RATE_HZ,
-            shape: NEW_SHAPE.into(),
-            phase: 0.0,
-        };
-        self.lfos.push(lfo.clone());
-        lfo
-    }
-
-    /// Remove an LFO. Links that follow it stay in the document, leave their
-    /// parameters at the hand's value, and are reported until they are
-    /// unlinked, so nothing linked disappears without a word.
-    pub fn remove_lfo(&mut self, id: u64) -> Result<(), String> {
-        let before = self.lfos.len();
-        self.lfos.retain(|l| l.id != id);
-        if self.lfos.len() == before {
-            return Err(LinkError::UnknownSource(id).to_string());
-        }
-        Ok(())
-    }
-
-    /// Replace an LFO's name, rate, shape and phase, matched by `edit.id`.
-    /// Rate and phase are brought into range; the rest must already be valid.
-    pub fn set_lfo(&mut self, edit: LfoRecord) -> Result<(), String> {
-        if Shape::from_name(&edit.shape).is_none() {
-            return Err(format!("there is no LFO shape called “{}”", edit.shape));
-        }
-        if !edit.rate.is_finite() || !edit.phase.is_finite() {
-            return Err("an LFO's rate and phase must be numbers".into());
-        }
-        let name = valid_name(&edit.name, "an LFO")?;
-        let lfo = self
-            .lfos
-            .iter_mut()
-            .find(|l| l.id == edit.id)
-            .ok_or(LinkError::UnknownSource(edit.id).to_string())?;
-        *lfo = LfoRecord {
-            id: edit.id,
-            name,
-            rate: edit.rate.clamp(MIN_RATE_HZ, MAX_RATE_HZ),
-            shape: edit.shape,
-            // Clamped rather than wrapped, so a phase control dragged to its
-            // end stays there. The engine treats 1 as 0.
-            phase: edit.phase.clamp(0.0, 1.0),
-        };
-        Ok(())
-    }
-
-    /// Make `param` follow the LFO or envelope `source` between `lo` and `hi`,
-    /// replacing any link it had. The ends are clamped to 0 to 1, the
-    /// parameter's own range.
-    pub fn link(&mut self, param: &str, source: u64, lo: f32, hi: f32) -> Result<(), String> {
-        let slot =
-            index_of(param).ok_or_else(|| LinkError::UnknownParameter(param.into()).to_string())?;
-        if matches!(PARAMS[slot].taper, Taper::Stepped(_)) {
-            return Err(LinkError::Stepped(PARAMS[slot].id).to_string());
-        }
-        if !self.has_source(source) {
-            return Err(LinkError::UnknownSource(source).to_string());
-        }
-        if !lo.is_finite() || !hi.is_finite() {
-            return Err("a link's ends must be numbers".into());
-        }
-        self.links.insert(
-            param.to_string(),
-            LinkRecord {
-                source,
-                lo: lo.clamp(0.0, 1.0),
-                hi: hi.clamp(0.0, 1.0),
-            },
-        );
-        Ok(())
-    }
-
-    /// Stop `param` following anything. Unlinking an unlinked parameter is not
-    /// an error: the result is what was asked for.
-    pub fn unlink(&mut self, param: &str) {
-        self.links.remove(param);
-    }
 }
 
 /// A trimmed name, or why it will not do. `what` is "an LFO" or similar.
-fn valid_name(name: &str, what: &str) -> Result<String, String> {
+pub(crate) fn valid_name(name: &str, what: &str) -> Result<String, String> {
     let name = name.trim();
     if name.is_empty() {
         return Err(format!("{what} needs a name"));
@@ -457,43 +307,6 @@ mod tests {
     }
 
     #[test]
-    fn an_lfo_id_is_never_handed_out_twice() {
-        let mut doc = Modulation::default();
-        assert_eq!(doc.add_lfo().id, 1);
-        assert_eq!(doc.add_lfo().id, 2);
-        doc.remove_lfo(2).unwrap();
-        assert_eq!(doc.add_lfo().id, 3, "reused the removed id");
-
-        // The counter is saved, so a reload does not forget it either.
-        doc.remove_lfo(3).unwrap();
-        let mut back: Modulation =
-            serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
-        assert_eq!(back.add_lfo().id, 4, "reused an id after a reload");
-
-        // A hand-edited patch can carry ids past its counter.
-        let mut edited = Modulation {
-            lfos: vec![lfo(7, "sine")],
-            next_modulator_id: 2,
-            ..Default::default()
-        };
-        assert_eq!(edited.add_lfo().id, 8);
-    }
-
-    #[test]
-    fn lfos_and_envelopes_never_share_an_id() {
-        let mut doc = Modulation::default();
-        assert_eq!(doc.add_lfo().id, 1);
-        assert_eq!(doc.add_envelope().id, 2);
-        assert_eq!(doc.add_lfo().id, 3);
-        // A hand-edited envelope past the counter lifts the LFOs' ids too.
-        doc.envelopes.push(EnvelopeRecord {
-            id: 9,
-            ..new_envelope(9)
-        });
-        assert_eq!(doc.add_lfo().id, 10);
-    }
-
-    #[test]
     fn an_envelope_sharing_an_id_is_refused_not_dropped() {
         let mut doc = Modulation {
             lfos: vec![lfo(1, "sine")],
@@ -505,48 +318,8 @@ mod tests {
         assert_eq!(ids, vec!["envelope:1", "envelope:2"]);
         assert_eq!(doc.envelopes.len(), 3, "the document keeps them");
         // A link to the shared id follows the LFO, which is the one that built.
-        doc.link("grain.size", 1, 0.0, 1.0).unwrap();
+        doc.links.insert("grain.size".into(), link(1, 1.0));
         assert!(doc.build().1.iter().all(|r| r.id != "grain.size"));
-    }
-
-    #[test]
-    fn removing_an_envelope_keeps_its_links_and_reports_them() {
-        let mut doc = Modulation::default();
-        let id = doc.add_envelope().id;
-        doc.link("filter.cutoff", id, 0.1, 0.9).unwrap();
-        assert!(doc.build().1.is_empty());
-        doc.remove_envelope(id).unwrap();
-        assert!(doc.links.contains_key("filter.cutoff"));
-        let (_, refused) = doc.build();
-        assert_eq!(refused.len(), 1, "{refused:?}");
-        assert_eq!(refused[0].id, "filter.cutoff");
-        assert!(doc.remove_envelope(id).is_err());
-    }
-
-    #[test]
-    fn an_envelope_edit_brings_its_stages_into_range() {
-        let mut doc = Modulation::default();
-        let id = doc.add_envelope().id;
-        doc.set_envelope(EnvelopeRecord {
-            id,
-            name: "  filter  ".into(),
-            attack: -5.0,
-            decay: 1e9,
-            sustain: 2.0,
-            release: 40.0,
-        })
-        .unwrap();
-        let e = &doc.envelopes[0];
-        assert_eq!(e.name, "filter");
-        assert_eq!((e.attack, e.decay, e.sustain), (0.0, MAX_STAGE_MS, 1.0));
-        let before = doc.clone();
-        assert!(doc
-            .set_envelope(EnvelopeRecord {
-                attack: f32::NAN,
-                ..doc.envelopes[0].clone()
-            })
-            .is_err());
-        assert_eq!(doc, before, "a refused edit changed the document");
     }
 
     #[test]
@@ -560,140 +333,23 @@ mod tests {
     }
 
     #[test]
-    fn a_new_lfo_wanders_slowly_and_is_usable() {
-        let mut doc = Modulation::default();
-        let new = doc.add_lfo();
-        assert_eq!(new.shape, "smooth-random");
-        assert_eq!(new.name, "LFO 1");
-        let (_, refused) = doc.build();
-        assert!(refused.is_empty(), "{refused:?}");
-    }
-
-    #[test]
-    fn removing_an_lfo_keeps_its_links_and_reports_them() {
-        let mut doc = Modulation::default();
-        let id = doc.add_lfo().id;
-        doc.link("grain.size", id, 0.5, 1.0).unwrap();
-        doc.remove_lfo(id).unwrap();
-
-        assert_eq!(doc.links.get("grain.size"), Some(&link(id, 0.5)));
-        let (mut set, refused) = doc.build();
-        assert_eq!(refused.len(), 1, "{refused:?}");
-        assert_eq!(refused[0].id, "grain.size");
-        let slot = index_of("grain.size").unwrap();
-        set.advance(BLOCK, SR);
-        assert_eq!(set.apply(slot, 100.0), 100.0);
-
-        doc.unlink("grain.size");
-        assert!(doc.links.is_empty());
-        assert!(doc.build().1.is_empty());
-        assert!(doc.remove_lfo(id).is_err(), "removed the same LFO twice");
-    }
-
-    #[test]
-    fn a_refused_edit_changes_nothing() {
-        let mut doc = Modulation::default();
-        let id = doc.add_lfo().id;
-        doc.link("grain.size", id, 0.0, 0.5).unwrap();
-        let before = doc.clone();
-
-        let good = doc.lfos[0].clone();
-        for bad in [
-            LfoRecord {
-                shape: "wobble".into(),
-                ..good.clone()
-            },
-            LfoRecord {
-                name: "   ".into(),
-                ..good.clone()
-            },
-            LfoRecord {
-                name: "x".repeat(MAX_NAME + 1),
-                ..good.clone()
-            },
-            LfoRecord {
-                rate: f32::NAN,
-                ..good.clone()
-            },
-            LfoRecord {
-                id: 99,
-                ..good.clone()
-            },
-        ] {
-            assert!(doc.set_lfo(bad.clone()).is_err(), "accepted {bad:?}");
-        }
-        assert!(
-            doc.link("grain.window", id, 0.0, 0.5).is_err(),
-            "linked a stepped parameter"
-        );
-        assert!(doc.link("grain.nonsense", id, 0.0, 0.5).is_err());
-        assert!(doc.link("grain.position", 99, 0.0, 0.5).is_err());
-        assert!(doc.link("grain.position", id, 0.0, f32::INFINITY).is_err());
-        assert!(doc.remove_lfo(99).is_err());
-
-        assert_eq!(doc, before);
-    }
-
-    #[test]
-    fn an_edit_brings_rate_phase_and_ends_into_range() {
-        let mut doc = Modulation::default();
-        let id = doc.add_lfo().id;
-        doc.set_lfo(LfoRecord {
-            id,
-            name: "  wander  ".into(),
-            rate: 1_000.0,
-            shape: "sine".into(),
-            phase: 1.5,
-        })
-        .unwrap();
-        assert_eq!(
-            doc.lfos[0],
-            LfoRecord {
-                id,
-                name: "wander".into(),
-                rate: MAX_RATE_HZ,
-                shape: "sine".into(),
-                phase: 1.0,
-            }
-        );
-
-        doc.link("grain.position", id, -3.0, 7.0).unwrap();
-        assert_eq!(
-            doc.links["grain.position"],
-            LinkRecord {
-                source: id,
-                lo: 0.0,
-                hi: 1.0
-            }
-        );
-        // Linking again replaces, rather than adding a second source.
-        doc.link("grain.position", id, 0.75, 1.0).unwrap();
-        assert_eq!(doc.links.len(), 1);
-        assert_eq!(doc.links["grain.position"], link(id, 0.25));
-    }
-
-    #[test]
     fn changing_an_lfo_does_not_restart_it() {
-        let mut doc = Modulation::default();
-        let id = doc.add_lfo().id;
-        doc.set_lfo(LfoRecord {
-            rate: 1.0,
-            shape: "sine".into(),
-            ..doc.lfos[0].clone()
-        })
-        .unwrap();
+        let id = 1;
+        let mut doc = Modulation {
+            lfos: vec![LfoRecord {
+                rate: 1.0,
+                ..lfo(id, "sine")
+            }],
+            ..Default::default()
+        };
         let (mut old, _) = doc.build();
         for _ in 0..40 {
             old.advance(BLOCK, SR);
         }
 
         // A rate and a shape change both rebuild the set.
-        doc.set_lfo(LfoRecord {
-            rate: 2.0,
-            shape: "triangle".into(),
-            ..doc.lfos[0].clone()
-        })
-        .unwrap();
+        doc.lfos[0].rate = 2.0;
+        doc.lfos[0].shape = "triangle".into();
         let (mut carried, _) = doc.build();
         carried.inherit(&old);
         let (mut restarted, _) = doc.build();

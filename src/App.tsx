@@ -748,6 +748,8 @@ export default function App() {
       }
       setTrackerView(await getTracker());
       setMod(await readModulation());
+      // Materials and their wiring are part of the document, so undo reaches them.
+      setPool(await readMaterials());
       setNote(`${direction === 'undo' ? 'Undid' : 'Redid'} “${label}”.`);
     } catch (e) {
       setError(String(e));
@@ -894,9 +896,14 @@ export default function App() {
         void pickFiles();
         break;
       case 'file-reset-sound':
-        void resetSound().then((changed) => {
-          if (changed) setNote('Reset the sound to its defaults. Undo brings it back.');
-        });
+        void resetSound()
+          .then(async (changed) => {
+            if (!changed) return;
+            // Removing the chain's effects takes their links with them.
+            setMod(await readModulation());
+            setNote('Reset the sound to its defaults. Undo brings it back.');
+          })
+          .catch((e) => setError(String(e)));
         break;
       // The menu owns Cmd+Z, so a text field never sees it. In one, undo the
       // text (a preset's name, the tempo), not the document.

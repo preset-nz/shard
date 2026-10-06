@@ -487,9 +487,10 @@ impl Session {
             shard_dsp::modulation::MIN_RATE_HZ,
             shard_dsp::modulation::MAX_RATE_HZ,
         );
+        let name = modulation::valid_name(&lfo.name, "an LFO")?;
         let key = format!("lfo:{}", lfo.id);
         self.edit("Change LFO", Some(&key), |tx| {
-            tx.put(node, "lfo.label", Value::Text(lfo.name.clone()))?;
+            tx.put(node, "lfo.label", Value::Text(name))?;
             tx.put(node, "lfo.rate", Value::Float(rate.into()))?;
             tx.put(node, "lfo.shape", Value::Choice(lfo.shape.clone()))?;
             tx.put(
@@ -504,9 +505,10 @@ impl Session {
     pub fn set_envelope(&self, env: modulation::EnvelopeRecord) -> Result<(), String> {
         let node = self.modulator(env.id, om::MOD_ENV)?;
         let stage = |ms: f32| Value::Float(ms.clamp(0.0, MAX_STAGE_MS).into());
+        let name = modulation::valid_name(&env.name, "an envelope")?;
         let key = format!("envelope:{}", env.id);
         self.edit("Change envelope", Some(&key), |tx| {
-            tx.put(node, "mod-env.label", Value::Text(env.name.clone()))?;
+            tx.put(node, "mod-env.label", Value::Text(name))?;
             tx.put(node, "mod-env.attack", stage(env.attack))?;
             tx.put(node, "mod-env.decay", stage(env.decay))?;
             tx.put(

@@ -438,3 +438,64 @@ fn a_file_in_the_old_format_is_refused() {
     assert!(r.session.open(&path).is_err());
     assert_eq!(get(&r, "grain.size"), before, "nothing changed");
 }
+
+#[test]
+fn a_refused_modulator_edit_changes_nothing() {
+    let r = rig();
+    r.session.add_lfo().unwrap();
+    let before = r.session.modulation().0;
+    let lfo = before.lfos[0].clone();
+    let bad = [
+        crate::modulation::LfoRecord {
+            shape: "wobble".into(),
+            ..lfo.clone()
+        },
+        crate::modulation::LfoRecord {
+            name: "  ".into(),
+            ..lfo.clone()
+        },
+        crate::modulation::LfoRecord {
+            rate: f32::NAN,
+            ..lfo.clone()
+        },
+    ];
+    for b in bad {
+        assert!(r.session.set_lfo(b.clone()).is_err(), "accepted {b:?}");
+    }
+    assert!(r
+        .session
+        .link_param("grain.window", lfo.id, 0.0, 0.5)
+        .is_err());
+    assert!(r
+        .session
+        .link_param("grain.nonsense", lfo.id, 0.0, 0.5)
+        .is_err());
+    assert!(r
+        .session
+        .link_param("grain.position", 99_999, 0.0, 0.5)
+        .is_err());
+    assert_eq!(r.session.modulation().0, before);
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Add LFO"));
+}
+
+#[test]
+fn a_modulator_edit_brings_rate_phase_and_ends_into_range() {
+    let r = rig();
+    r.session.add_lfo().unwrap();
+    let lfo = r.session.modulation().0.lfos[0].clone();
+    r.session
+        .set_lfo(crate::modulation::LfoRecord {
+            rate: 1.0e6,
+            phase: -2.0,
+            ..lfo.clone()
+        })
+        .unwrap();
+    r.session
+        .link_param("grain.position", lfo.id, -3.0, 7.0)
+        .unwrap();
+    let m = r.session.modulation().0;
+    assert_eq!(m.lfos[0].rate, shard_dsp::modulation::MAX_RATE_HZ);
+    assert_eq!(m.lfos[0].phase, 0.0);
+    let link = m.links["grain.position"];
+    assert_eq!((link.lo, link.hi), (0.0, 1.0));
+}
