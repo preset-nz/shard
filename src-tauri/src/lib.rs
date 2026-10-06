@@ -1731,12 +1731,24 @@ pub fn run() {
                 .install::<Audio>(app.handle());
             match installed {
                 // Undo's title follows every change, whoever made it: the
-                // webview, a knob, undo itself.
+                // webview, a knob, undo itself. Posted to the main thread,
+                // because a menu setter called from any other blocks until the
+                // main thread runs it, and a knob turned during a drag would
+                // deadlock on app-kit's menu lock. A burst of drag ticks
+                // becomes one refresh.
                 Ok(()) => {
                     let handle = app.handle().clone();
-                    audio
-                        .session
-                        .on_change(move || preset_app_kit::refresh_history(&handle));
+                    let pending = Arc::new(AtomicBool::new(false));
+                    audio.session.on_change(move || {
+                        if pending.swap(true, Ordering::SeqCst) {
+                            return;
+                        }
+                        let (h, p) = (handle.clone(), Arc::clone(&pending));
+                        let _ = handle.run_on_main_thread(move || {
+                            p.store(false, Ordering::SeqCst);
+                            preset_app_kit::refresh_history(&h);
+                        });
+                    });
                 }
                 Err(e) => eprintln!("shard: could not build the menu bar: {e}"),
             }
