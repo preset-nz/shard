@@ -67,6 +67,8 @@ shard-check file:
 check:
     ./node_modules/.bin/tsc --noEmit
     ./node_modules/.bin/biome check .
+    # A production build: tsc misses a bare side-effect import that no longer resolves.
+    ./node_modules/.bin/vite build --logLevel warn
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
