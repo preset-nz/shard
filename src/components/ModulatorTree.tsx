@@ -83,7 +83,7 @@ export function ModulatorTree({
               </span>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
-              <ContextMenuItem onSelect={() => onRemove(m)}>Remove {m.name}</ContextMenuItem>
+              <ContextMenuItem onClick={() => onRemove(m)}>Remove {m.name}</ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
         );

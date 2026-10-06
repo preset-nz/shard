@@ -299,7 +299,7 @@ function DeviceGroup({
           </span>
         </ContextMenuTrigger>
         <ContextMenuContent>
-          <ContextMenuItem disabled={surface} onSelect={() => apply(forgetDevice(d.port))}>
+          <ContextMenuItem disabled={surface} onClick={() => apply(forgetDevice(d.port))}>
             Forget device and its controls
           </ContextMenuItem>
         </ContextMenuContent>
@@ -441,7 +441,7 @@ function ChannelGroup({
           <ContextMenuContent>
             <ContextMenuItem
               disabled={c.role !== 'knob'}
-              onSelect={() => apply(calibrateControl(c.id))}
+              onClick={() => apply(calibrateControl(c.id))}
             >
               Work out what this is
             </ContextMenuItem>
@@ -451,7 +451,7 @@ function ChannelGroup({
               </ContextMenuSubTrigger>
               <ContextMenuSubContent>
                 {modes.map((m) => (
-                  <ContextMenuItem key={m} onSelect={() => apply(setControlMode(c.id, m))}>
+                  <ContextMenuItem key={m} onClick={() => apply(setControlMode(c.id, m))}>
                     {m === 'absolute' ? 'pot (absolute)' : m}
                     {c.mode === m ? ' ✓' : ''}
                   </ContextMenuItem>
@@ -459,7 +459,7 @@ function ChannelGroup({
               </ContextMenuSubContent>
             </ContextMenuSub>
             <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => apply(forgetControl(c.id))}>
+            <ContextMenuItem onClick={() => apply(forgetControl(c.id))}>
               Forget control
             </ContextMenuItem>
           </ContextMenuContent>

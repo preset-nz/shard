@@ -123,14 +123,14 @@ export function NodePresets({
             </ContextMenuSubTrigger>
             <ContextMenuSubContent>
               {names.map((n) => (
-                <ContextMenuItem key={n} onSelect={() => void apply(n)}>
+                <ContextMenuItem key={n} onClick={() => void apply(n)}>
                   {n}
                 </ContextMenuItem>
               ))}
             </ContextMenuSubContent>
           </ContextMenuSub>
           <ContextMenuItem
-            onSelect={() => {
+            onClick={() => {
               setName('');
               setProblem(null);
               setNaming(true);
@@ -144,7 +144,7 @@ export function NodePresets({
             </ContextMenuSubTrigger>
             <ContextMenuSubContent>
               {names.map((n) => (
-                <ContextMenuItem key={n} onSelect={() => void update(n)}>
+                <ContextMenuItem key={n} onClick={() => void update(n)}>
                   {n}
                 </ContextMenuItem>
               ))}

@@ -52,7 +52,7 @@ export function AddMenu<K extends string>({
           <DropdownMenuItem
             key={c.kind}
             disabled={c.disabled !== undefined}
-            onSelect={() => onAdd(c.kind)}
+            onClick={() => onAdd(c.kind)}
             className="text-xs"
           >
             <span className="flex-1">{c.label}</span>

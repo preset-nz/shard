@@ -71,7 +71,7 @@ export function GeneratorTree({
             <span className="flex-1 truncate">{node.label}</span>
           </ContextMenuTrigger>
           <ContextMenuContent className="w-48">
-            <ContextMenuItem onSelect={() => onRemove(node)}>Remove {node.label}</ContextMenuItem>
+            <ContextMenuItem onClick={() => onRemove(node)}>Remove {node.label}</ContextMenuItem>
           </ContextMenuContent>
         </ContextMenu>
       ))}

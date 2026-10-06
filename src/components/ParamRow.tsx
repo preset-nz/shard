@@ -215,7 +215,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
             {modulators.map((m) => (
               <ContextMenuItem
                 key={m.id}
-                onSelect={() =>
+                onClick={() =>
                   source
                     ? c.onLink(def.id, m.id, link.lo, link.hi)
                     : c.onLink(def.id, m.id, ...around(t))
@@ -227,7 +227,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
             ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
-        <ContextMenuItem disabled={!link} onSelect={() => c.onUnlink(def.id)}>
+        <ContextMenuItem disabled={!link} onClick={() => c.onUnlink(def.id)}>
           Unlink
         </ContextMenuItem>
         {arrangement && (
@@ -256,7 +256,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
                   </ContextMenuLabel>
                 </ContextMenuGroup>
                 {knobs.map((k) => (
-                  <ContextMenuItem key={k.id} onSelect={() => c.onMapMidi(def.id, k.id)}>
+                  <ContextMenuItem key={k.id} onClick={() => c.onMapMidi(def.id, k.id)}>
                     {k.name}
                     {k.relative ? ' ∞' : ''}
                     {mapped?.control === k.id ? ' ✓' : ''}
@@ -272,8 +272,8 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
               </ContextMenuGroup>
             )}
             <ContextMenuSeparator />
-            <ContextMenuItem onSelect={() => c.onLearn(def.id)}>Learn by touch</ContextMenuItem>
-            <ContextMenuItem disabled={!mapped} onSelect={() => c.onForgetMidi(def.id)}>
+            <ContextMenuItem onClick={() => c.onLearn(def.id)}>Learn by touch</ContextMenuItem>
+            <ContextMenuItem disabled={!mapped} onClick={() => c.onForgetMidi(def.id)}>
               None
             </ContextMenuItem>
           </ContextMenuSubContent>

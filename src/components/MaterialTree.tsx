@@ -96,7 +96,7 @@ export function MaterialTree({
               ))}
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
-              <ContextMenuItem onSelect={() => onRemove(m.id)}>Remove {m.name}</ContextMenuItem>
+              <ContextMenuItem onClick={() => onRemove(m.id)}>Remove {m.name}</ContextMenuItem>
             </ContextMenuContent>
           </ContextMenu>
         );
