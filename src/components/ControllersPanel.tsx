@@ -116,6 +116,7 @@ export function ControllersPanel({
       {midi.active ? (
         <>
           <Select
+            items={Object.fromEntries(midi.maps.map((m) => [String(m.id), m.name]))}
             value={String(midi.active.id)}
             onValueChange={(id) => void setActiveMap(Number(id)).catch(fail)}
           >

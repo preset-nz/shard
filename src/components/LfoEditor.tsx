@@ -110,7 +110,11 @@ export function LfoEditor({
   const shapeSelect = (
     <div className="space-y-1">
       <span className="text-xs">Shape</span>
-      <Select value={lfo.shape} onValueChange={(shape) => shape && onChange({ ...lfo, shape })}>
+      <Select
+        items={Object.fromEntries(limits.shapes.map((s) => [s, shapeLabel(s)]))}
+        value={lfo.shape}
+        onValueChange={(shape) => shape && onChange({ ...lfo, shape })}
+      >
         <SelectTrigger className="h-7 w-full text-xs">
           <SelectValue />
         </SelectTrigger>

@@ -9,7 +9,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 
-/** Radix refuses an empty value, so nothing wired gets a name of its own. */
+/** An empty value reads as unset, so nothing wired gets a name of its own. */
 const NONE = 'none';
 
 /**
@@ -30,8 +30,16 @@ export function MaterialPicker({
   className?: string;
 }) {
   const wired = node === 'grain' ? pool.wires.grain : pool.wires.material;
+  // Base UI shows the raw value in the trigger unless it is given the labels.
+  const items = {
+    [NONE]: 'Nothing (silent)',
+    ...Object.fromEntries(
+      pool.materials.map((m) => [String(m.id), m.missing ? `${m.name} (missing)` : m.name]),
+    ),
+  };
   return (
     <Select
+      items={items}
       value={wired === null ? NONE : String(wired)}
       onValueChange={(v) => onWire(node, v === NONE ? null : Number(v))}
     >

@@ -53,6 +53,7 @@ export function MaterialEditor({
 
       <Row label="Octave">
         <Select
+          items={Object.fromEntries(OCTAVES.map((o) => [String(o), `${o > 0 ? `+${o}` : o} oct`]))}
           value={String(material.octave)}
           onValueChange={(v) => onChange({ ...material, octave: Number(v) })}
         >
@@ -70,6 +71,10 @@ export function MaterialEditor({
       </Row>
       <Row label="Root">
         <Select
+          items={{
+            none: 'Unknown',
+            ...Object.fromEntries(ROOT_NOTES.map((n) => [String(n), noteName(n)])),
+          }}
           value={material.root === null ? 'none' : String(material.root)}
           onValueChange={(v) => onChange({ ...material, root: v === 'none' ? null : Number(v) })}
         >
