@@ -1,6 +1,7 @@
+import { dismissNotification, notify, SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
 import { listen } from '@tauri-apps/api/event';
 import { open, save } from '@tauri-apps/plugin-dialog';
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ARRANGEMENT_PREFIX,
   addDrone,
@@ -169,13 +170,11 @@ export default function App() {
   // interval down and rebuild it on every freeze.
   const frozenRef = useRef(false);
   frozenRef.current = frozen;
-  const [error, setError] = useState<string | null>(null);
   /** The patch's rows, then the arrangement's. `patchRowsRef` says where one ends. */
   const defsRef = useRef<ParamInfo[] | null>(null);
   const patchRowsRef = useRef(0);
   const [envelope, setEnvelope] = useState<number[] | null>(null);
   const [patchName, setPatchName] = useState<string | null>(null);
-  const [note, setNote] = useState<string | null>(null);
   /** The open patch's LFOs and links, as Rust last answered with them. */
   const [mod, setMod] = useState<ModulationView>({
     lfos: [],
@@ -982,469 +981,444 @@ export default function App() {
   };
 
   return (
-    <div className="flex h-screen flex-col bg-background text-foreground">
-      <header className="flex items-center gap-3 border-b border-border px-4 py-2">
-        <button
-          type="button"
-          onClick={togglePlay}
-          className={`rounded px-3 py-1 text-xs font-medium ${
-            meter.playing
-              ? 'bg-primary text-primary-foreground'
-              : 'border border-border hover:bg-accent'
-          }`}
-        >
-          {meter.playing ? 'Stop' : 'Play'}
-        </button>
+    <SnackbarProvider>
+      <div className="flex h-screen flex-col bg-background text-foreground">
+        <header className="flex items-center gap-3 border-b border-border px-4 py-2">
+          <button
+            type="button"
+            onClick={togglePlay}
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              meter.playing
+                ? 'bg-primary text-primary-foreground'
+                : 'border border-border hover:bg-accent'
+            }`}
+          >
+            {meter.playing ? 'Stop' : 'Play'}
+          </button>
 
-        <button
-          type="button"
-          title="Hold to press a finger against the reel — the tape slows, drops in pitch and garbles. Tape time sets how long it takes. (B)"
-          onPointerDown={(e) => {
-            // Capture, so letting go outside the button still releases the
-            // brake. Without it the tape stays stopped and looks broken.
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setBrake(true);
-          }}
-          onPointerUp={() => setBrake(false)}
-          onPointerCancel={() => setBrake(false)}
-          className={`rounded px-3 py-1 text-xs font-medium ${
-            (values['tape.brake'] ?? 0) > 0.01
-              ? 'bg-primary text-primary-foreground'
-              : 'border border-border hover:bg-accent'
-          }`}
-        >
-          Brake
-        </button>
+          <button
+            type="button"
+            title="Hold to press a finger against the reel — the tape slows, drops in pitch and garbles. Tape time sets how long it takes. (B)"
+            onPointerDown={(e) => {
+              // Capture, so letting go outside the button still releases the
+              // brake. Without it the tape stays stopped and looks broken.
+              e.currentTarget.setPointerCapture(e.pointerId);
+              setBrake(true);
+            }}
+            onPointerUp={() => setBrake(false)}
+            onPointerCancel={() => setBrake(false)}
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              (values['tape.brake'] ?? 0) > 0.01
+                ? 'bg-primary text-primary-foreground'
+                : 'border border-border hover:bg-accent'
+            }`}
+          >
+            Brake
+          </button>
 
-        <button
-          type="button"
-          title="Tap for a flick backwards, hold to stay there. Shares the brake's slew, so it slows to a stop and climbs back the other way. Flick sets how long a tap lasts. (R)"
-          onPointerDown={(e) => {
-            e.currentTarget.setPointerCapture(e.pointerId);
-            setReverse(true);
-          }}
-          onPointerUp={() => setReverse(false)}
-          onPointerCancel={() => setReverse(false)}
-          // Lit from the engine's resolved state, not from the button: a tap's
-          // flick outlives the finger, and the light should say so.
-          className={`rounded px-3 py-1 text-xs font-medium ${
-            meter.reversing
-              ? 'bg-primary text-primary-foreground'
-              : 'border border-border hover:bg-accent'
-          }`}
-        >
-          Reverse
-        </button>
+          <button
+            type="button"
+            title="Tap for a flick backwards, hold to stay there. Shares the brake's slew, so it slows to a stop and climbs back the other way. Flick sets how long a tap lasts. (R)"
+            onPointerDown={(e) => {
+              e.currentTarget.setPointerCapture(e.pointerId);
+              setReverse(true);
+            }}
+            onPointerUp={() => setReverse(false)}
+            onPointerCancel={() => setReverse(false)}
+            // Lit from the engine's resolved state, not from the button: a tap's
+            // flick outlives the finger, and the light should say so.
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              meter.reversing
+                ? 'bg-primary text-primary-foreground'
+                : 'border border-border hover:bg-accent'
+            }`}
+          >
+            Reverse
+          </button>
 
-        <fieldset className="flex rounded border border-border p-0.5" aria-label="Mode">
-          {MODES.map((m) => (
-            <button
-              key={m.id}
-              type="button"
-              aria-pressed={mode === m.id}
-              title={m.title}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => setMode(m.id)}
-              className={`rounded-sm px-2 py-0.5 text-xs ${
-                mode === m.id
-                  ? 'bg-primary/15 text-primary'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              {m.label}
-            </button>
-          ))}
-        </fieldset>
-        <span className="text-sm font-semibold tracking-tight">Shard</span>
-        <span className="text-xs text-muted-foreground">{patchName ?? 'Untitled'}</span>
-        <div className="flex-1" />
-        <button
-          type="button"
-          title="Show or hide the grain inspector and the raw parameter list (⌘I)"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={() => setShowDebugger((v) => !v)}
-          className={`rounded border px-2 py-1 text-xs ${
-            showDebugger
-              ? 'border-primary bg-primary/15 text-primary'
-              : 'border-border hover:bg-accent'
-          }`}
-        >
-          Debug
-        </button>
-        <button
-          type="button"
-          onClick={doLoad}
-          className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
-        >
-          Open
-        </button>
-        <button
-          type="button"
-          onClick={doSave}
-          className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
-        >
-          Save
-        </button>
-        <button
-          type="button"
-          onClick={pickFiles}
-          className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
-        >
-          Add WAV
-        </button>
-      </header>
+          <fieldset className="flex rounded border border-border p-0.5" aria-label="Mode">
+            {MODES.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                aria-pressed={mode === m.id}
+                title={m.title}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setMode(m.id)}
+                className={`rounded-sm px-2 py-0.5 text-xs ${
+                  mode === m.id
+                    ? 'bg-primary/15 text-primary'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {m.label}
+              </button>
+            ))}
+          </fieldset>
+          <span className="text-sm font-semibold tracking-tight">Shard</span>
+          <span className="text-xs text-muted-foreground">{patchName ?? 'Untitled'}</span>
+          <div className="flex-1" />
+          <button
+            type="button"
+            title="Show or hide the grain inspector and the raw parameter list (⌘I)"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => setShowDebugger((v) => !v)}
+            className={`rounded border px-2 py-1 text-xs ${
+              showDebugger
+                ? 'border-primary bg-primary/15 text-primary'
+                : 'border-border hover:bg-accent'
+            }`}
+          >
+            Debug
+          </button>
+          <button
+            type="button"
+            onClick={doLoad}
+            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
+          >
+            Open
+          </button>
+          <button
+            type="button"
+            onClick={doSave}
+            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
+          >
+            Save
+          </button>
+          <button
+            type="button"
+            onClick={pickFiles}
+            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
+          >
+            Add WAV
+          </button>
+        </header>
 
-      {note && !error && (
-        <Banner tone="note" onDismiss={() => setNote(null)}>
-          {note}
-        </Banner>
-      )}
-
-      {error && (
-        <Banner tone="error" onDismiss={() => setError(null)}>
-          {error}
-        </Banner>
-      )}
-
-      <div className="flex min-h-0 flex-1">
-        {mode === 'soundscape' && (
-          <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
-            <MaterialTree
-              pool={pool}
-              selected={selection?.kind === 'material' ? selection.id : null}
-              onSelect={(id) => select({ kind: 'material', id })}
-              onAdd={() => void pickFiles()}
-              onAddDrone={() => void editMaterials(addDrone)}
-              onRemove={(id) =>
-                void editMaterials(async () => {
-                  const view = await removeMaterial(id);
+        <div className="flex min-h-0 flex-1">
+          {mode === 'soundscape' && (
+            <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
+              <MaterialTree
+                pool={pool}
+                selected={selection?.kind === 'material' ? selection.id : null}
+                onSelect={(id) => select({ kind: 'material', id })}
+                onAdd={() => void pickFiles()}
+                onAddDrone={() => void editMaterials(addDrone)}
+                onRemove={(id) =>
+                  void editMaterials(async () => {
+                    const view = await removeMaterial(id);
+                    const now = useSelection.getState().selection;
+                    if (now?.kind === 'material' && now.id === id) clear();
+                    return view;
+                  })
+                }
+              />
+              <GeneratorTree
+                generators={generators}
+                selected={selection?.kind === 'node' ? selection.id : null}
+                onSelect={(id) => (id === null ? clear() : select({ kind: 'node', id }))}
+                onAdd={(id) => {
+                  void setParam(`${id}.on`, 1).catch((e) => setError(String(e)));
+                  select({ kind: 'node', id });
+                }}
+                onRemove={(node) => {
+                  void setParam(`${node.id}.on`, 0).catch((e) => setError(String(e)));
                   const now = useSelection.getState().selection;
-                  if (now?.kind === 'material' && now.id === id) clear();
-                  return view;
-                })
-              }
-            />
-            <GeneratorTree
-              generators={generators}
-              selected={selection?.kind === 'node' ? selection.id : null}
-              onSelect={(id) => (id === null ? clear() : select({ kind: 'node', id }))}
-              onAdd={(id) => {
-                void setParam(`${id}.on`, 1).catch((e) => setError(String(e)));
-                select({ kind: 'node', id });
-              }}
-              onRemove={(node) => {
-                void setParam(`${node.id}.on`, 0).catch((e) => setError(String(e)));
-                const now = useSelection.getState().selection;
-                if (now?.kind === 'node' && now.id === node.id) clear();
-              }}
-            />
-            <ModulatorTree
-              modulators={modulatorsOf(mod)}
-              selected={selectedModulator}
-              linked={linkedCounts}
-              onSelect={(next) => (next === null ? clear() : select(next))}
-              onAdd={(kind) =>
-                void editMod(async () => {
-                  const view = kind === 'lfo' ? await addLfo() : await addEnvelope();
-                  // The new one is last; select it so it can be set up at once.
-                  const list = kind === 'lfo' ? view.lfos : view.envelopes;
-                  const added = list[list.length - 1];
-                  if (added) select({ kind, id: added.id });
-                  return view;
-                })
-              }
-              onRemove={(m) =>
-                void editMod(async () => {
-                  const view =
-                    m.kind === 'lfo' ? await removeLfo(m.id) : await removeEnvelope(m.id);
-                  const now = useSelection.getState().selection;
-                  if (now?.kind === m.kind && now.id === m.id) clear();
-                  const orphaned = linkedCounts.get(m.id) ?? 0;
-                  if (orphaned > 0) {
-                    setNote(
-                      `Removed ${m.name}. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
-                    );
-                  }
-                  return view;
-                })
-              }
-            />
-          </nav>
-        )}
+                  if (now?.kind === 'node' && now.id === node.id) clear();
+                }}
+              />
+              <ModulatorTree
+                modulators={modulatorsOf(mod)}
+                selected={selectedModulator}
+                linked={linkedCounts}
+                onSelect={(next) => (next === null ? clear() : select(next))}
+                onAdd={(kind) =>
+                  void editMod(async () => {
+                    const view = kind === 'lfo' ? await addLfo() : await addEnvelope();
+                    // The new one is last; select it so it can be set up at once.
+                    const list = kind === 'lfo' ? view.lfos : view.envelopes;
+                    const added = list[list.length - 1];
+                    if (added) select({ kind, id: added.id });
+                    return view;
+                  })
+                }
+                onRemove={(m) =>
+                  void editMod(async () => {
+                    const view =
+                      m.kind === 'lfo' ? await removeLfo(m.id) : await removeEnvelope(m.id);
+                    const now = useSelection.getState().selection;
+                    if (now?.kind === m.kind && now.id === m.id) clear();
+                    const orphaned = linkedCounts.get(m.id) ?? 0;
+                    if (orphaned > 0) {
+                      setNote(
+                        `Removed ${m.name}. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
+                      );
+                    }
+                    return view;
+                  })
+                }
+              />
+            </nav>
+          )}
 
-        <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
-          {/* The waveform follows the selection. Its title selects the
+          <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
+            {/* The waveform follows the selection. Its title selects the
               material shown, for its octave and trim. The playhead and the
               envelope are drawn only over Sample's material, and the grains
               only over Granular's. Sound scaping only (Georg, 2026-10-04):
               in the tracker it was mostly empty, and the room goes to the
               steps. Trim is still in the material's inspector. */}
-          {mode === 'soundscape' && (
-            <>
-              <div className="-mb-2 flex items-baseline gap-2">
-                <button
-                  type="button"
-                  disabled={shownId === null}
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    if (shownId === null) return;
-                    // Editing lives in sound scaping, where the inspector is.
-                    select({ kind: 'material', id: shownId });
-                    setMode('soundscape');
-                  }}
-                  title="Show this material's octave and trim"
-                  className={`text-[11px] font-semibold uppercase tracking-wider ${
-                    selection?.kind === 'material' && selection.id === shownId
-                      ? 'text-primary'
-                      : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  Material
-                </button>
-                <span className="truncate text-xs text-muted-foreground">
-                  {shownRecord
-                    ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
-                        blank
-                          ? 'Sample is off'
-                          : clockOnly
-                            ? 'Sample is off · its trim still sets how long a pass is'
-                            : readers.length > 0
-                              ? `read by ${readers.join(' and ')}`
-                              : 'not wired'
-                      }`
-                    : `Nothing is wired into ${shownFor}`}
-                </span>
-              </div>
-              <div className={clockOnly ? 'opacity-40' : ''}>
-                <Waveform
-                  peaks={blank ? [] : (shownWave?.peaks ?? [])}
-                  position={values['grain.position'] ?? 0}
-                  jitter={values['grain.jitter'] ?? 0}
-                  showGrain={shownIsGrain}
-                  playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
-                  trimStart={shownRecord?.trim_start ?? 0}
-                  trimEnd={shownRecord?.trim_end ?? 1}
-                  envelope={shownIsPlayer ? envelope : null}
-                  grains={shownIsGrain ? grains : []}
-                  newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
-                  selected={picked}
-                  totalSamples={
-                    shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0
-                  }
-                  // Stopped or frozen, the waveform is an inspector; playing, it is
-                  // still the trim control it has always been.
-                  inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
-                  onTrim={(which, v) => {
-                    if (!shownRecord) return;
-                    void changeMaterial(
-                      which === 'start'
-                        ? { ...shownRecord, trim_start: v }
-                        : { ...shownRecord, trim_end: v },
-                    );
-                  }}
-                  onPickGrain={(g) => {
-                    if (g) void doAudition(g);
-                  }}
-                />
-              </div>
-            </>
-          )}
-
-          {/* The patch only: the tracker's preview may be something else. */}
-          {mode === 'soundscape' && <PatchPreview preview={preview} busy={previewBusy} />}
-
-          <div className="flex items-center gap-6 text-xs text-muted-foreground">
-            <Meter peak={meter.peak} reduction={meter.reduction} />
-            <span title="Concurrent grains. Roughly density x grain length.">
-              {meter.grains} grains
-            </span>
-            <span title="Density x grain length: how many grains overlap at these settings.">
-              {((values['grain.density'] ?? 0) * (values['grain.size'] ?? 0) * 0.001).toFixed(1)}{' '}
-              expected
-            </span>
-            <span
-              title="The slowest audio block in the last two seconds, against the time the device allows for one. A block past its budget is a dropout."
-              className={
-                meter.block_budget_us > 0 && blockWorst > meter.block_budget_us * 0.75
-                  ? 'text-destructive'
-                  : undefined
-              }
-            >
-              {meter.block_budget_us > 0
-                ? `${(blockWorst / 1000).toFixed(2)} of ${(meter.block_budget_us / 1000).toFixed(1)} ms`
-                : '— ms'}
-            </span>
-            {meter.audio_allocs > 0 && (
-              <span
-                className="text-destructive"
-                title="Allocator calls inside the audio callback since launch. Each can cause a dropout. Counted in debug builds only."
-              >
-                {meter.audio_allocs} audio-thread allocations
-              </span>
+            {mode === 'soundscape' && (
+              <>
+                <div className="-mb-2 flex items-baseline gap-2">
+                  <button
+                    type="button"
+                    disabled={shownId === null}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() => {
+                      if (shownId === null) return;
+                      // Editing lives in sound scaping, where the inspector is.
+                      select({ kind: 'material', id: shownId });
+                      setMode('soundscape');
+                    }}
+                    title="Show this material's octave and trim"
+                    className={`text-[11px] font-semibold uppercase tracking-wider ${
+                      selection?.kind === 'material' && selection.id === shownId
+                        ? 'text-primary'
+                        : 'text-muted-foreground hover:text-foreground'
+                    }`}
+                  >
+                    Material
+                  </button>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {shownRecord
+                      ? `${shownRecord.name}${shownWave ? ` · ${shownWave.seconds.toFixed(1)}s` : ''} · ${
+                          blank
+                            ? 'Sample is off'
+                            : clockOnly
+                              ? 'Sample is off · its trim still sets how long a pass is'
+                              : readers.length > 0
+                                ? `read by ${readers.join(' and ')}`
+                                : 'not wired'
+                        }`
+                      : `Nothing is wired into ${shownFor}`}
+                  </span>
+                </div>
+                <div className={clockOnly ? 'opacity-40' : ''}>
+                  <Waveform
+                    peaks={blank ? [] : (shownWave?.peaks ?? [])}
+                    position={values['grain.position'] ?? 0}
+                    jitter={values['grain.jitter'] ?? 0}
+                    showGrain={shownIsGrain}
+                    playhead={meter.playing && shownIsPlayer ? meter.playhead : null}
+                    trimStart={shownRecord?.trim_start ?? 0}
+                    trimEnd={shownRecord?.trim_end ?? 1}
+                    envelope={shownIsPlayer ? envelope : null}
+                    grains={shownIsGrain ? grains : []}
+                    newestSeq={grains.length > 0 ? grains[grains.length - 1].seq : 0}
+                    selected={picked}
+                    totalSamples={
+                      shownWave ? Math.round(shownWave.seconds * shownWave.sample_rate) : 0
+                    }
+                    // Stopped or frozen, the waveform is an inspector; playing, it is
+                    // still the trim control it has always been.
+                    inspecting={shownIsGrain && grains.length > 0 && (frozen || !meter.playing)}
+                    onTrim={(which, v) => {
+                      if (!shownRecord) return;
+                      void changeMaterial(
+                        which === 'start'
+                          ? { ...shownRecord, trim_start: v }
+                          : { ...shownRecord, trim_end: v },
+                      );
+                    }}
+                    onPickGrain={(g) => {
+                      if (g) void doAudition(g);
+                    }}
+                  />
+                </div>
+              </>
             )}
-          </div>
 
-          {mode === 'tracker' && tracker && (
-            <StepStrip
-              tracker={tracker}
-              step={meter.step}
-              kitStep={meter.kit_step}
-              root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
-              onEdit={(edit) => void editTrackerView(edit)}
-              onChange={(next) => void changeTracker(next)}
-            />
-          )}
+            {/* The patch only: the tracker's preview may be something else. */}
+            {mode === 'soundscape' && <PatchPreview preview={preview} busy={previewBusy} />}
 
-          {/* The work area. A click anywhere but on a card deselects,
+            <div className="flex items-center gap-6 text-xs text-muted-foreground">
+              <Meter peak={meter.peak} reduction={meter.reduction} />
+              <span title="Concurrent grains. Roughly density x grain length.">
+                {meter.grains} grains
+              </span>
+              <span title="Density x grain length: how many grains overlap at these settings.">
+                {((values['grain.density'] ?? 0) * (values['grain.size'] ?? 0) * 0.001).toFixed(1)}{' '}
+                expected
+              </span>
+              <span
+                title="The slowest audio block in the last two seconds, against the time the device allows for one. A block past its budget is a dropout."
+                className={
+                  meter.block_budget_us > 0 && blockWorst > meter.block_budget_us * 0.75
+                    ? 'text-destructive'
+                    : undefined
+                }
+              >
+                {meter.block_budget_us > 0
+                  ? `${(blockWorst / 1000).toFixed(2)} of ${(meter.block_budget_us / 1000).toFixed(1)} ms`
+                  : '— ms'}
+              </span>
+              {meter.audio_allocs > 0 && (
+                <span
+                  className="text-destructive"
+                  title="Allocator calls inside the audio callback since launch. Each can cause a dropout. Counted in debug builds only."
+                >
+                  {meter.audio_allocs} audio-thread allocations
+                </span>
+              )}
+            </div>
+
+            {mode === 'tracker' && tracker && (
+              <StepStrip
+                tracker={tracker}
+                step={meter.step}
+                kitStep={meter.kit_step}
+                root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
+                onEdit={(edit) => void editTrackerView(edit)}
+                onChange={(next) => void changeTracker(next)}
+              />
+            )}
+
+            {/* The work area. A click anywhere but on a card deselects,
               including a lane's empty space below its cards; Escape does the
               same from the keyboard. Sound scaping shows the patch's nodes;
               the tracker shows the arrangement's, the same three lanes with
               the patches first (Georg, 2026-09-26). Selecting a card shows
               it in the inspector in either mode. */}
-          {defs && (
-            // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
-            // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
-            <div
-              className="grid min-h-0 flex-1 grid-cols-3 content-start gap-4 overflow-y-auto"
-              onClick={(e) => {
-                if (!(e.target as Element).closest('[data-node-card]')) clear();
-              }}
-            >
-              {(mode === 'tracker' ? ARRANGEMENT_LANES : LANES).map((lane) => (
-                <section key={lane.id} className="flex min-w-0 flex-col gap-2">
-                  <div className="flex items-center justify-between">
-                    <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-                      {lane.label}
-                    </h2>
-                    {lane.id === 'process' && (
-                      <AddMenu title="Add an effect" choices={addChoices} onAdd={addEffect} />
-                    )}
+            {defs && (
+              // biome-ignore lint/a11y/noStaticElementInteractions: Escape deselects from the keyboard
+              // biome-ignore lint/a11y/useKeyWithClickEvents: Escape deselects from the keyboard
+              <div
+                className="grid min-h-0 flex-1 grid-cols-3 content-start gap-4 overflow-y-auto"
+                onClick={(e) => {
+                  // Clicks from a menu's portal bubble here through React; only the work area's own count.
+                  if (!e.currentTarget.contains(e.target as Node)) return;
+                  if (!(e.target as Element).closest('[data-node-card]')) clear();
+                }}
+              >
+                {(mode === 'tracker' ? ARRANGEMENT_LANES : LANES).map((lane) => (
+                  <section key={lane.id} className="flex min-w-0 flex-col gap-2">
+                    <div className="flex items-center justify-between">
+                      <h2 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+                        {lane.label}
+                      </h2>
+                      {lane.id === 'process' && (
+                        <AddMenu title="Add an effect" choices={addChoices} onAdd={addEffect} />
+                      )}
+                    </div>
+                    {[
+                      // The chain first, in its order; then the fixed nodes.
+                      ...(lane.id === 'process' ? chain : []),
+                      ...(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
+                        .filter((n: NodeInfo) => n.lane === lane.id && !n.fx)
+                        // A generator that is off is not in the patch; the tree adds it.
+                        .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id)),
+                    ].map((node) => (
+                      <NodeCard
+                        key={node.id}
+                        node={node}
+                        defs={defs}
+                        values={values}
+                        ctx={panelCtx}
+                        selected={selection?.kind === 'node' && selection.id === node.id}
+                        onSelect={() => select({ kind: 'node', id: node.id })}
+                        onError={setError}
+                        onNote={setNote}
+                        onPresetApplied={refreshMod}
+                        onMove={node.fx ? (by) => moveEffect(node, by) : undefined}
+                        onRemove={node.fx ? () => removeEffect(node) : undefined}
+                      />
+                    ))}
+                  </section>
+                ))}
+              </div>
+            )}
+
+            {showDebugger && (
+              <GrainInspector
+                grains={grains}
+                frozen={frozen}
+                selected={picked}
+                playing={meter.playing}
+                auditioning={meter.auditioning}
+                sampleRate={shownWave?.sample_rate ?? 48000}
+                onFreeze={setFrozen}
+                onClear={() => {
+                  setGrains([]);
+                  setPicked(null);
+                }}
+                onSelect={(g) => void doAudition(g)}
+              />
+            )}
+          </main>
+
+          <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
+            {defs ? (
+              <Inspector
+                selection={selection}
+                defs={defs}
+                values={values}
+                ctx={panelCtx}
+                pool={pool}
+                onMaterialChange={(m) => void changeMaterial(m)}
+                limits={limits}
+                linkedCounts={linkedCounts}
+                onSelect={select}
+                onLfoChange={(next) => void editMod(() => setLfo(next))}
+                onEnvelopeChange={(next) => void editMod(() => setModEnvelope(next))}
+                onError={setError}
+                onNote={setNote}
+                onPresetApplied={refreshMod}
+              />
+            ) : (
+              <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
+            )}
+
+            {defs && showDebugger && (
+              <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
+                {defs.map((d) => (
+                  <div
+                    key={d.id}
+                    className="flex justify-between gap-2 text-[11px] text-muted-foreground"
+                  >
+                    <span className="truncate font-mono">{d.id}</span>
+                    <span className="shrink-0 tabular-nums">
+                      {format(d, values[d.id] ?? d.default)}
+                    </span>
                   </div>
-                  {[
-                    // The chain first, in its order; then the fixed nodes.
-                    ...(lane.id === 'process' ? chain : []),
-                    ...(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
-                      .filter((n: NodeInfo) => n.lane === lane.id && !n.fx)
-                      // A generator that is off is not in the patch; the tree adds it.
-                      .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id)),
-                  ].map((node) => (
-                    <NodeCard
-                      key={node.id}
-                      node={node}
-                      defs={defs}
-                      values={values}
-                      ctx={panelCtx}
-                      selected={selection?.kind === 'node' && selection.id === node.id}
-                      onSelect={() => select({ kind: 'node', id: node.id })}
-                      onError={setError}
-                      onNote={setNote}
-                      onPresetApplied={refreshMod}
-                      onMove={node.fx ? (by) => moveEffect(node, by) : undefined}
-                      onRemove={node.fx ? () => removeEffect(node) : undefined}
-                    />
-                  ))}
-                </section>
-              ))}
-            </div>
-          )}
+                ))}
+              </div>
+            )}
+          </aside>
+        </div>
 
-          {showDebugger && (
-            <GrainInspector
-              grains={grains}
-              frozen={frozen}
-              selected={picked}
-              playing={meter.playing}
-              auditioning={meter.auditioning}
-              sampleRate={shownWave?.sample_rate ?? 48000}
-              onFreeze={setFrozen}
-              onClear={() => {
-                setGrains([]);
-                setPicked(null);
-              }}
-              onSelect={(g) => void doAudition(g)}
-            />
-          )}
-        </main>
-
-        <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
-          {defs ? (
-            <Inspector
-              selection={selection}
-              defs={defs}
-              values={values}
-              ctx={panelCtx}
-              pool={pool}
-              onMaterialChange={(m) => void changeMaterial(m)}
-              limits={limits}
-              linkedCounts={linkedCounts}
-              onSelect={select}
-              onLfoChange={(next) => void editMod(() => setLfo(next))}
-              onEnvelopeChange={(next) => void editMod(() => setModEnvelope(next))}
-              onError={setError}
-              onNote={setNote}
-              onPresetApplied={refreshMod}
-            />
-          ) : (
-            <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
-          )}
-
-          {defs && showDebugger && (
-            <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
-              {defs.map((d) => (
-                <div
-                  key={d.id}
-                  className="flex justify-between gap-2 text-[11px] text-muted-foreground"
-                >
-                  <span className="truncate font-mono">{d.id}</span>
-                  <span className="shrink-0 tabular-nums">
-                    {format(d, values[d.id] ?? d.default)}
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-        </aside>
+        <SettingsDialog
+          open={settingsOpen}
+          onOpenChange={setSettingsOpen}
+          values={values}
+          ctx={panelCtx}
+          midi={midi}
+          onError={setError}
+        />
       </div>
-
-      <SettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        values={values}
-        ctx={panelCtx}
-        midi={midi}
-        onError={setError}
-      />
-    </div>
+      <SnackbarViewport className="fixed right-3 bottom-3 left-auto" />
+    </SnackbarProvider>
   );
 }
 
-/** A line under the header: what just happened, or what went wrong. Escape
- * or the cross dismisses it. */
-function Banner({
-  tone,
-  onDismiss,
-  children,
-}: {
-  tone: 'note' | 'error';
-  onDismiss: () => void;
-  children: ReactNode;
-}) {
-  const look =
-    tone === 'error'
-      ? 'border-destructive/40 bg-destructive/10 text-destructive'
-      : 'border-border bg-muted/40 text-muted-foreground';
-  return (
-    <div className={`flex items-center gap-3 border-b px-4 py-2 text-xs ${look}`}>
-      <span className="flex-1">{children}</span>
-      <button
-        type="button"
-        onClick={onDismiss}
-        className="rounded px-1 opacity-70 hover:opacity-100"
-        title="Dismiss (Escape)"
-        aria-label="Dismiss"
-      >
-        ×
-      </button>
-    </div>
-  );
+/** What just happened, or what went wrong, as the kit's snackbar: passing, so the layout never
+ * shifts. A new message replaces the last of its kind, and `null` takes it away. Errors stay
+ * until dismissed. Module-level: they hold no React state. */
+function message(kind: 'plain' | 'error') {
+  let last: string | null = null;
+  return (text: string | null) => {
+    if (last) dismissNotification(last);
+    last = text ? notify({ message: text, kind, persistent: kind === 'error' }) : null;
+  };
 }
+const setNote = message('plain');
+const setError = message('error');
