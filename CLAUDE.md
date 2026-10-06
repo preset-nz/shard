@@ -61,10 +61,21 @@ taper is both a value mapping and a hint about what control to draw.
 
 Keep the table small. Do not add a parameter the DSP does not read.
 
+**The session is a rhizome document, and the tree is the source of truth**
+(epic 32). `src-tauri/src/object_model/` declares Shard's node types and
+compiles the tree into what the engine reads (`compile.rs`, the `Plan`);
+`src-tauri/src/session.rs` holds the document and hands the engine only what
+changed after every edit, undo, redo and open. **Every write goes through the
+session.** Nothing writes `bank` or `arrangement` directly except the played
+rows (`tape.brake`, `tape.reverse`): a direct write is reverted, silently, by
+the next edit. The mode (tracker or sound scaping) is the session's, not the
+document's. Undo is rhizome's, one step per gesture.
+
 **The table is the patch, and the tracker is the level above it.** Tempo,
 swing and tracks of steps belong to the arrangement, not to a sound, so they are not
-parameters: they live in `src-tauri/src/tracker.rs`, save above the patch in
-the `.shard` document, and reach the engine through `steps::StepBank` and
+parameters: they live in the arrangement node of the session (the `Tracker`
+type in `src-tauri/src/tracker.rs` is how they cross to the webview and the
+engine), and reach the engine through `steps::StepBank` and
 `Engine::set_steps`, once a block. A value that should survive loading a
 different patch does not belong in `params.rs`.
 
@@ -98,7 +109,10 @@ the arrangement, under `arrangement.`.
   the kind's own ids (`chorus.mix`); `fx.rs` turns them into instance rows.
 - The order is read raw, never through an LFO, and no controller or link may
   target it. Reordering ducks the chain for 5 ms; adding resets the instance
-  and fades it in; removing fades it out and keeps its settings.
+  and fades it in; removing fades it out and deletes the effect's node (undo
+  brings it back with its settings).
+- In the session an effect is a node in its chain; the k-th of a kind plays
+  copy k, so the same tree always compiles to the same ids.
 - An empty chain is a bit-exact passthrough. An effect not in the chain costs
   nothing.
 - Filter, envelope and output are fixed nodes, not palette items.
