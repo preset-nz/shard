@@ -35,7 +35,6 @@ mod menu;
 mod midi;
 mod modulation;
 pub mod object_model;
-mod opened;
 mod profile;
 pub mod session;
 #[cfg(test)]
@@ -531,36 +530,6 @@ fn fold_preview(samples: &[f32], sr: f32, capped: bool) -> PatchPreview {
         seconds: frames as f32 / sr,
         capped,
     }
-}
-
-/// Write the session to a `.shard` file, in rhizome's format.
-#[tauri::command]
-fn save_patch(state: tauri::State<'_, Audio>, path: String) -> Result<(), String> {
-    state.session.save(std::path::Path::new(&path))
-}
-
-/// A document macOS opened before the frontend was listening, if any. Also
-/// the frontend saying it is listening now, so later ones are emitted.
-#[tauri::command]
-fn take_opened_file(opened: tauri::State<'_, opened::Opened>) -> Option<String> {
-    opened.take()
-}
-
-/// Open a `.shard` file. Its materials are decoded before anything changes,
-/// and a missing one is said plainly rather than loading half the session and
-/// looking fine. A file in the old JSON format is refused.
-///
-/// Async, so decoding happens off the main thread and never freezes the
-/// window.
-#[tauri::command(async)]
-fn load_patch(
-    state: tauri::State<'_, Audio>,
-    ctl: tauri::State<'_, Arc<midi::Controllers>>,
-    path: String,
-) -> Result<session::LoadReport, String> {
-    let mut report = state.session.open(std::path::Path::new(&path))?;
-    report.map_missing = follow_map(&state, &ctl);
-    Ok(report)
 }
 
 /// Makes the map the patch names the active one, so opening a patch or
@@ -1716,13 +1685,13 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
-        // The window comes back where it was, at the size it was (`native-apps.md`
-        // rule 4). Saved when it closes, kept in the app's config directory.
-        .plugin(tauri_plugin_window_state::Builder::default().build())
+        // The window comes back where it was, at the size it was, and app-kit
+        // reopens the last document (`native-apps.md` rule 4).
+        .plugin(preset_app_kit::window_state())
         .manage(audio)
-        .manage(opened::Opened::default())
+        // The close guard: an unsaved session asks before the window goes.
+        .on_window_event(preset_app_kit::on_window_event)
         .setup(|app| {
             // Controllers belong to this machine, so they live in the app's
             // config directory rather than in any patch.
@@ -1757,8 +1726,9 @@ pub fn run() {
             // handlers carry the shortcuts.
             let installed = preset_app_kit::AppKit::<tauri::Wry>::new(menu::APP_NAME)
                 .menu_config(menu::MENU_CONFIG)
+                .file_type("Shard session", "shard")
                 .commands(menu::commands())
-                .install_history::<Audio>(app.handle());
+                .install::<Audio>(app.handle());
             match installed {
                 // Undo's title follows every change, whoever made it: the
                 // webview, a knob, undo itself.
@@ -1779,6 +1749,8 @@ pub fn run() {
             preset_app_kit::app_kit_undo,
             preset_app_kit::app_kit_redo,
             preset_app_kit::app_kit_text_menu,
+            preset_app_kit::app_kit_document,
+            preset_app_kit::app_kit_document_note,
             param_defs,
             get_params,
             set_param,
@@ -1796,9 +1768,6 @@ pub fn run() {
             edit_tracker,
             envelope_curve,
             patch_preview,
-            save_patch,
-            load_patch,
-            take_opened_file,
             material_wave,
             materials,
             add_material,
@@ -1845,25 +1814,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app, event| {
-            // A document opened from Finder or `open`, at launch or later,
-            // takes the same path File > Open does, in the frontend.
-            #[cfg(target_os = "macos")]
-            if let tauri::RunEvent::Opened { urls } = &event {
-                if let Some(path) = opened::document_path(urls) {
-                    if let opened::Offer::Emit(path) = app.state::<opened::Opened>().offer(path) {
-                        use tauri::Emitter;
-                        if let Err(e) = app.emit(opened::OPEN_DOCUMENT, path) {
-                            eprintln!("shard: could not hand over an opened file: {e}");
-                        }
-                    }
-                }
-            }
-            #[cfg(not(target_os = "macos"))]
-            let _ = app;
+            // The last document at launch, a document from Finder or `open`,
+            // and the close guard on quit: app-kit's.
+            preset_app_kit::on_run_event(app, &event);
             // Hand a profiled surface back before quitting, so the device
             // returns to standalone rather than sitting in a DAW mode that
             // nothing is driving. A crash cannot do this; a clean exit can.
-            if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
+            // On `Exit`, not `ExitRequested`: the close guard may cancel that.
+            if matches!(event, tauri::RunEvent::Exit) {
                 midi::release_surfaces();
             }
         });
@@ -1959,7 +1917,6 @@ mod tests {
         for key in [
             "applied",
             "unknown",
-            "missing",
             "sample_path",
             "sample_missing",
             "refused",

@@ -26,7 +26,7 @@ const FIXTURE: &str = concat!(
     "/tests/fixtures/trip-hop-acid.shard"
 );
 
-/// The document, opened the way `load_patch` opens it, and the steps tracker
+/// The document, opened the way File > Open opens it, and the steps tracker
 /// mode plays.
 struct Loaded {
     rig: Rig,

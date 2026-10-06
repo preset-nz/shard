@@ -1,7 +1,15 @@
-import { isTextField, redo, undo, useCommands, useCommandTable } from '@preset.nz/app-kit/core';
+import {
+  isTextField,
+  redo,
+  undo,
+  useCommands,
+  useCommandTable,
+  useDocument,
+  useDocumentNotes,
+} from '@preset.nz/app-kit/core';
 import { dismissNotification, notify, SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
 import { listen } from '@tauri-apps/api/event';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { open } from '@tauri-apps/plugin-dialog';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ARRANGEMENT_PREFIX,
@@ -28,10 +36,10 @@ import {
   getTracker,
   grainLog,
   type LfoLimits,
+  type LoadReport,
   learnMidi,
   lfoLimits,
   linkParam,
-  loadPatch,
   type MappingsView,
   type MaterialsView,
   type MaterialView,
@@ -53,7 +61,6 @@ import {
   removeMaterial,
   resetSound,
   type SourceInfo,
-  savePatch,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -62,7 +69,6 @@ import {
   setTracker,
   type Tracker,
   type TrackerEdit,
-  takeOpenedFile,
   unlinkParam,
   wireMaterial,
 } from '@/audio';
@@ -171,7 +177,6 @@ export default function App() {
   const defsRef = useRef<ParamInfo[] | null>(null);
   const patchRowsRef = useRef(0);
   const [envelope, setEnvelope] = useState<number[] | null>(null);
-  const [patchName, setPatchName] = useState<string | null>(null);
   /** The open patch's LFOs and links, as Rust last answered with them. */
   const [mod, setMod] = useState<ModulationView>({
     lfos: [],
@@ -497,41 +502,19 @@ export default function App() {
     }
   }, []);
 
-  // The document open when the app last closed, as a path. UI memory, not
-  // the document: reopened at launch if the file is still there
-  // (`native-apps.md` rule 4).
-  const [lastDocument, setLastDocument] = usePersistedState<string | null>(
-    'shard.lastDocument',
-    null,
-  );
+  // The document's name and unsaved mark, from app-kit, which owns File's
+  // New, Open, Open Recent, Save and Revert, reopens the last document at
+  // launch and takes documents from Finder.
+  const document_ = useDocument();
+  useDocumentNotes(setNote);
 
-  const doSave = useCallback(async () => {
-    try {
-      const path = await save({
-        defaultPath: patchName ?? 'untitled.shard',
-        filters: [{ name: 'Shard patch', extensions: ['shard'] }],
-      });
-      if (!path) return;
-      await savePatch(path);
-      setLastDocument(path);
-      setPatchName(path.split('/').pop() ?? path);
-      setNote(null);
-      setError(null);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [patchName, setLastDocument]);
-
-  /**
-   * Replace the document with the one at `path`. File > Open and a file
-   * opened from Finder both come through here.
-   */
-  const openPath = useCallback(
-    async (path: string): Promise<boolean> => {
+  // A document replaced the one on screen: opened, reverted, restored at
+  // launch, from Finder, or New. Values and meters are polled; the rest is
+  // read again here, and a partial load says so.
+  useEffect(() => {
+    const unlisten = listen<LoadReport>('document-opened', async (e) => {
+      const report = e.payload;
       try {
-        const report = await loadPatch(path);
-        setLastDocument(path);
-        setPatchName(path.split('/').pop() ?? path);
         setWaves({});
         setPool(await readMaterials());
         setMod(await readModulation());
@@ -539,11 +522,8 @@ export default function App() {
         // an edit made before the load may put the old one back.
         trackerSeq.current++;
         const loaded = await getTracker();
+        // The mode is the session's, not the document's, so it stays.
         setTrackerView(loaded);
-        // The document's switch picks the mode it opens in. Correcting the
-        // switch to the mode instead would overwrite what the file saved, and
-        // the next Save would keep the damage.
-        setMode(loaded.tracks[0]?.on ? 'tracker' : 'soundscape');
         useSelection.getState().clear();
         setError(null);
 
@@ -555,9 +535,6 @@ export default function App() {
         if (report.unknown.length > 0) {
           parts.push(`${report.unknown.length} unknown parameter(s) ignored`);
         }
-        if (report.missing.length > 0) {
-          parts.push(`${report.missing.length} left at default`);
-        }
         if (report.refused.length > 0) {
           parts.push(`${report.refused.length} LFO or link(s) could not be used`);
         }
@@ -565,62 +542,14 @@ export default function App() {
           parts.push(`controller map "${report.map_missing}" not on this Mac`);
         }
         setNote(parts.length > 0 ? parts.join(' · ') : null);
-        return true;
-      } catch (e) {
-        setError(String(e));
-        return false;
+      } catch (err) {
+        setError(String(err));
       }
-    },
-    [setMode, setLastDocument],
-  );
-
-  const doLoad = useCallback(async () => {
-    try {
-      const path = await open({
-        multiple: false,
-        filters: [{ name: 'Shard patch', extensions: ['shard'] }],
-      });
-      if (typeof path === 'string') await openPath(path);
-    } catch (e) {
-      setError(String(e));
-    }
-  }, [openPath]);
-
-  // A document opened from Finder or `open some.shard`. Listen first, then
-  // ask Rust for one that arrived before the window had mounted: asking is
-  // what tells Rust to emit from now on, so nothing falls between the two.
-  // A file opened this way wins over anything restored at launch, so any
-  // restore belongs after the answer, and only when it is empty.
-  const openPathRef = useRef(openPath);
-  openPathRef.current = openPath;
-  const lastDocumentRef = useRef(lastDocument);
-  lastDocumentRef.current = lastDocument;
-  useEffect(() => {
-    const unlisten = listen<string>('open-document', (e) => {
-      void openPathRef.current(e.payload);
     });
-    // Not gated on unmount: `take` hands a held path over exactly once, so
-    // dropping it here would lose it for good.
-    void unlisten.then(() =>
-      takeOpenedFile().then(async (path) => {
-        if (path) {
-          void openPathRef.current(path);
-          return;
-        }
-        // Nothing was opened from Finder: reopen the last document, and say
-        // so if it has gone rather than opening on an empty patch in silence.
-        const last = lastDocumentRef.current;
-        if (last && !(await openPathRef.current(last))) {
-          setLastDocument(null);
-          setNote(`${last.split('/').pop() ?? last} was open last time and could not be reopened.`);
-        }
-      }),
-    );
     return () => {
       void unlisten.then((off) => off());
     };
-    // The setter is stable (its key never changes), so this runs once.
-  }, [setLastDocument]);
+  }, []);
 
   /** Run one material command, and draw the pool Rust answers with. */
   const editMaterials = useCallback(async (run: () => Promise<MaterialsView>) => {
@@ -754,16 +683,6 @@ export default function App() {
   // a control has focus, so arrow keys on a slider still work.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 's') {
-        e.preventDefault();
-        void doSave();
-        return;
-      }
-      if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
-        e.preventDefault();
-        void doLoad();
-        return;
-      }
       // A text field keeps its own undo; everything else steps the document.
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         if (isTextField(e.target)) return;
@@ -842,17 +761,7 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [
-    togglePlay,
-    doSave,
-    doLoad,
-    setBrake,
-    setReverse,
-    setShowDebugger,
-    setMode,
-    moveEffect,
-    removeEffect,
-  ]);
+  }, [togglePlay, setBrake, setReverse, setShowDebugger, setMode, moveEffect, removeEffect]);
 
   // The native menu bar: app-kit's, with Shard's commands (`menu.rs`). Each
   // item arrives as app-kit's `command` event carrying its id and runs the
@@ -870,12 +779,6 @@ export default function App() {
     switch (id) {
       case 'app.settings':
         setSettingsOpen(true);
-        break;
-      case 'file-open':
-        void doLoad();
-        break;
-      case 'file-save':
-        void doSave();
         break;
       case 'file-add-material':
         void pickFiles();
@@ -1041,7 +944,7 @@ export default function App() {
             ))}
           </fieldset>
           <span className="text-sm font-semibold tracking-tight">Shard</span>
-          <span className="text-xs text-muted-foreground">{patchName ?? 'Untitled'}</span>
+          <span className="text-xs text-muted-foreground">{document_?.title ?? 'Untitled-1'}</span>
           <div className="flex-1" />
           <button
             type="button"
@@ -1055,20 +958,6 @@ export default function App() {
             }`}
           >
             Debug
-          </button>
-          <button
-            type="button"
-            onClick={doLoad}
-            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
-          >
-            Open
-          </button>
-          <button
-            type="button"
-            onClick={doSave}
-            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
-          >
-            Save
           </button>
           <button
             type="button"

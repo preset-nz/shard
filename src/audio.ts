@@ -251,8 +251,6 @@ export interface LoadReport {
   applied: number;
   /** Ids in the file this build does not have. Usually a newer patch. */
   unknown: string[];
-  /** Ids this build has that the file did not carry; left at their defaults. */
-  missing: string[];
   sample_path: string | null;
   /** The patch named a sample that is no longer where it said it was. */
   sample_missing: boolean;
@@ -373,14 +371,6 @@ export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param'
 
 /** Every parameter as the engine last heard it, indexed as `getParams`. */
 export const getHeard = () => invoke<number[]>('get_heard');
-
-export const savePatch = (path: string) => invoke<void>('save_patch', { path });
-export const loadPatch = (path: string) => invoke<LoadReport>('load_patch', { path });
-/**
- * A document macOS opened before the UI was listening, if any. Calling it
- * also says the UI is listening now, so later ones arrive as `open-document`.
- */
-export const takeOpenedFile = () => invoke<string | null>('take_opened_file');
 
 /** The envelope sampled across the trimmed window, for drawing. */
 export const envelopeCurve = () => invoke<number[]>('envelope_curve');

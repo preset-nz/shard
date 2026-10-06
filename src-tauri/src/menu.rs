@@ -19,15 +19,13 @@ pub const FX_ADD_PREFIX: &str = "fx-add:";
 /// The app's name, as the App menu and About show it.
 pub const APP_NAME: &str = "Shard";
 
-/// app-kit's switches for its built-in items. Shard's own Open and Save stay
-/// until app-kit's file items take over.
+/// app-kit's switches for its built-in items: File's New, Open, Open Recent,
+/// Close, Save, Save As and Revert run against the session.
 pub const MENU_CONFIG: &str = include_str!("../menu.toml");
 
 /// Every accelerator Shard binds, by command id: written here and nowhere
 /// else, and held unique by a test.
 pub const SHORTCUTS: &[(&str, &str)] = &[
-    ("file-open", "CmdOrCtrl+O"),
-    ("file-save", "CmdOrCtrl+S"),
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
     ("file-add-material", "CmdOrCtrl+Shift+O"),
     ("view-tracker", "CmdOrCtrl+1"),
@@ -64,8 +62,6 @@ pub fn commands() -> Vec<Command> {
     let effect = |id, label| item(id, label).domain("Effect").section(1);
     let pattern = |id, label, section| item(id, label).domain("Pattern").section(section);
     let mut all = vec![
-        file("file-open", "Open…", 0),
-        file("file-save", "Save", 0),
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Add Material…", 1),
         view("view-tracker", "Tracker", 0),
@@ -123,9 +119,13 @@ mod tests {
     }
 
     /// What app-kit and macOS bind in the menu bar before Shard adds anything:
-    /// Undo, Redo, Settings, Quit, Hide, Hide Others, Minimise, Close Window,
-    /// Full Screen, Cut, Copy, Paste and Select All.
-    const BUILT_IN: [&str; 13] = [
+    /// New, Open, Save, Save As, Close, Undo, Redo, Settings, Quit, Hide, Hide
+    /// Others, Minimise, Full Screen, Cut, Copy, Paste and Select All.
+    const BUILT_IN: &[&str] = &[
+        "CmdOrCtrl+N",
+        "CmdOrCtrl+O",
+        "CmdOrCtrl+S",
+        "CmdOrCtrl+Shift+S",
         "CmdOrCtrl+Z",
         "CmdOrCtrl+Shift+Z",
         "CmdOrCtrl+,",

@@ -67,7 +67,6 @@ pub struct LoadReport {
     pub applied: usize,
     /// What the file held that this build could not take.
     pub unknown: Vec<String>,
-    pub missing: Vec<String>,
     pub sample_path: Option<String>,
     /// Set when a material a generator reads could not be found.
     pub sample_missing: bool,

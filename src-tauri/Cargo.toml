@@ -17,6 +17,8 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
+# Registered by app-kit; a direct dependency only so the webview's
+# `dialog:default` permission resolves (Add Material…'s panel).
 tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 serde = { version = "1", features = ["derive"] }
@@ -31,4 +33,3 @@ shard-dsp.workspace = true
 cpal.workspace = true
 hound.workspace = true
 midir.workspace = true
-tauri-plugin-window-state = "2"
