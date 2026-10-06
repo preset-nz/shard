@@ -76,7 +76,7 @@ impl Kind {
     }
 
     /// The template rows, ids as `<kind>.<param>`. `on` first, then `mix`.
-    pub(crate) const fn rows(self) -> &'static [ParamDef] {
+    pub const fn rows(self) -> &'static [ParamDef] {
         match self {
             Kind::Drive => DRIVE_ROWS,
             Kind::Crush => CRUSH_ROWS,

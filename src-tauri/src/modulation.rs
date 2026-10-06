@@ -27,8 +27,8 @@ use shard_dsp::{EnvSpec, LfoSpec, LinkError, ModSet, Shape, Taper, PARAMS};
 const MAX_NAME: usize = 60;
 
 /// A new LFO wanders slowly: the movement drift used to give.
-const NEW_RATE_HZ: f32 = 0.1;
-const NEW_SHAPE: &str = "smooth-random";
+pub(crate) const NEW_RATE_HZ: f32 = 0.1;
+pub(crate) const NEW_SHAPE: &str = "smooth-random";
 
 /// The longest envelope stage, in ms. The engine fits stages to the pass
 /// anyway; this only keeps a typed number sane.
@@ -68,7 +68,7 @@ pub struct EnvelopeRecord {
 }
 
 /// A new envelope is a pluck, the shape a filter envelope most often has.
-fn new_envelope(id: u64) -> EnvelopeRecord {
+pub(crate) fn new_envelope(id: u64) -> EnvelopeRecord {
     EnvelopeRecord {
         id,
         name: format!("Mod envelope {id}"),

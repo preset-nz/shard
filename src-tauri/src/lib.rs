@@ -34,6 +34,7 @@ mod materials;
 mod menu;
 mod midi;
 mod modulation;
+pub mod object_model;
 mod opened;
 mod patch;
 mod presets;
