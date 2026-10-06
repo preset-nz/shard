@@ -151,16 +151,31 @@ fn moving_an_effect_reorders_the_chain_the_engine_runs() {
         fx::order_of(&r.bank).as_slice(),
         &[drive as u8, crush as u8]
     );
-    assert!(r.session.fx_move("patch", crush, -1).unwrap());
+    assert_eq!(r.session.fx_move("patch", crush, -1).unwrap(), Some(crush));
     assert_eq!(
         fx::order_of(&r.bank).as_slice(),
         &[crush as u8, drive as u8]
     );
-    assert!(
-        !r.session.fx_move("patch", crush, -1).unwrap(),
+    assert_eq!(
+        r.session.fx_move("patch", crush, -1).unwrap(),
+        None,
         "already first"
     );
     assert_eq!(r.session.undo().unwrap().as_deref(), Some("Move Crush"));
+}
+
+#[test]
+fn an_effect_moved_past_its_own_kind_takes_the_other_copy() {
+    // The k-th of a kind plays copy k, so the moved delay's settings travel
+    // to the first copy, and the answer says so: the selection follows it.
+    let r = rig();
+    let first = r.session.fx_add("patch", "delay").unwrap();
+    let second = r.session.fx_add("patch", "delay").unwrap();
+    let id = |n: usize| format!("fx.{n}.delay.mix");
+    r.session.set_param(&id(second), 0.9).unwrap();
+    assert_eq!(r.session.fx_move("patch", second, -1).unwrap(), Some(first));
+    assert_eq!(get(&r, &id(first)), 0.9, "its settings came with it");
+    assert_ne!(get(&r, &id(second)), 0.9);
 }
 
 #[test]

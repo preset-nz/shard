@@ -648,10 +648,24 @@ export default function App() {
   );
   const moveEffect = useCallback(
     (node: NodeInfo, by: number) => {
-      if (!node.fx) return;
-      fxMove(level, node.fx.n, by).catch((e) => setError(String(e)));
+      const fx = node.fx;
+      if (!fx) return;
+      fxMove(level, fx.n, by)
+        .then((n) => {
+          // Passing another of its kind swaps their copies (the k-th of a
+          // kind plays copy k), so a selection on either follows its effect.
+          if (n === null || n === fx.n) return;
+          const prefix = level === 'arrangement' ? ARRANGEMENT_PREFIX : '';
+          const was = `${prefix}fx.${fx.n}.${fx.kind}`;
+          const now = `${prefix}fx.${n}.${fx.kind}`;
+          const sel = useSelection.getState().selection;
+          if (sel?.kind !== 'node') return;
+          if (sel.id === was) select({ kind: 'node', id: now });
+          else if (sel.id === now) select({ kind: 'node', id: was });
+        })
+        .catch((e) => setError(String(e)));
     },
-    [level],
+    [level, select],
   );
 
   // Undo and redo. Rust steps the document back; the values arrive with the
@@ -706,11 +720,13 @@ export default function App() {
         return;
       }
       const t = e.target as HTMLElement | null;
-      if (t && /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName)) return;
+      if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
 
       // The selected effect: Alt+Up and Alt+Down move it in its chain, Delete
-      // takes it out. Anything else selected ignores these.
-      const moving = e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
+      // takes it out. Anything else selected ignores these. Ahead of the
+      // button check, because clicking a card's title focuses its button.
+      // With Cmd the chord is the menu's accelerator, which has run already.
+      const moving = e.altKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
       // Not while a slider has focus: arrows and keys there belong to the slider.
       const inSlider = t?.closest('[role="slider"], [role="spinbutton"], [contenteditable="true"]');
       if (!inSlider && (moving || e.key === 'Backspace' || e.key === 'Delete')) {
@@ -723,6 +739,7 @@ export default function App() {
           return;
         }
       }
+      if (t?.tagName === 'BUTTON') return;
 
       // Deselect all. The inspector empties with it. A row waiting for a
       // MIDI control stops waiting, and a banner goes away.

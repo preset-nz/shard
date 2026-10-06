@@ -246,14 +246,15 @@ fn fx_remove(state: tauri::State<'_, Audio>, layer: String, n: usize) -> Result<
     state.session.fx_remove(&layer, n)
 }
 
-/// Moves an effect one place earlier (`by` below zero) or later.
+/// Moves an effect one place earlier (`by` below zero) or later. Answers the
+/// instance it plays afterwards, or None at an end.
 #[tauri::command]
 fn fx_move(
     state: tauri::State<'_, Audio>,
     layer: String,
     n: usize,
     by: i32,
-) -> Result<bool, String> {
+) -> Result<Option<usize>, String> {
     state.session.fx_move(&layer, n, by)
 }
 

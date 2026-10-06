@@ -350,9 +350,10 @@ impl Session {
         Ok(())
     }
 
-    /// Moves an effect one place earlier (`by` below zero) or later. False at
-    /// an end.
-    pub fn fx_move(&self, layer: &str, n: usize, by: i32) -> Result<bool, String> {
+    /// Moves an effect one place earlier (`by` below zero) or later. Answers
+    /// the instance it plays afterwards, which changes when it passes another
+    /// of its kind (the k-th of a kind plays copy k), or None at an end.
+    pub fn fx_move(&self, layer: &str, n: usize, by: i32) -> Result<Option<usize>, String> {
         let owner = self.owner(layer)?;
         let node = self.effect_at(layer, n)?;
         let mut order: Vec<NodeId> = self.read(|d| {
@@ -362,18 +363,21 @@ impl Session {
                 .unwrap_or_default()
         });
         let Some(at) = order.iter().position(|e| *e == node) else {
-            return Ok(false);
+            return Ok(None);
         };
         let to = at as i64 + i64::from(by.signum());
         if to < 0 || to as usize >= order.len() || by == 0 {
-            return Ok(false);
+            return Ok(None);
         }
         order.swap(at, to as usize);
         let label = fx::POOL.get(n).map_or("effect", |(k, _)| k.label());
         let (_, changed) = self.edit(&format!("Move {label}"), None, |tx| {
             tx.set_order(owner, om::CHAIN, order)
         })?;
-        Ok(changed)
+        if !changed {
+            return Ok(None);
+        }
+        Ok(self.read(|d| instance_of(d.tree(), node)))
     }
 
     // History.

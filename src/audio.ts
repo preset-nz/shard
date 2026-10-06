@@ -117,8 +117,9 @@ export type ChainLevel = 'patch' | 'arrangement';
  */
 export const fxAdd = (layer: ChainLevel, kind: string) => invoke<number>('fx_add', { layer, kind });
 export const fxRemove = (layer: ChainLevel, n: number) => invoke<void>('fx_remove', { layer, n });
+/** Answers the instance the effect plays afterwards, or null at an end. */
 export const fxMove = (layer: ChainLevel, n: number, by: number) =>
-  invoke<boolean>('fx_move', { layer, n, by });
+  invoke<number | null>('fx_move', { layer, n, by });
 
 /**
  * Undo and redo (`design/undo.md`): step back or forward one edit. Each answers
