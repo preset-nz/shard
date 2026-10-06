@@ -13,7 +13,8 @@
 //! 10, node API decision 23). Each track is monophonic, as in a tracker: a
 //! new step cuts the last.
 //!
-//! Saved in the same `.shard` file as the patch, above it. See `patch.rs`.
+//! Saved in the same `.shard` file as the patch, in the arrangement node
+//! (`object_model::write_tracker`).
 
 use serde::{Deserialize, Serialize};
 use shard_dsp::kit::{KitPattern, HAT, HIT_MAX, KICK, SNARE};

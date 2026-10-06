@@ -48,8 +48,8 @@ checks above are only the floor under it.
 just shard-check evals/agent/references/grim-industrial-1990.shard
 ```
 
-It reports whether the document loads clean (unknown, refused and missing
-ids, tracker in range), the mix level, and how much the drums add against the
+It reports whether the document loads clean (its nodes, and anything unknown
+or refused), the mix level, and how much the drums add against the
 track alone, and renders eight bars to `~/rhizomatic-preset/renders/`. The
 references measure:
 

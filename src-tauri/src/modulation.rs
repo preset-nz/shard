@@ -80,7 +80,6 @@ pub(crate) fn new_envelope(id: u64) -> EnvelopeRecord {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct LinkRecord {
     /// The id of the LFO or envelope the parameter follows.
-    #[serde(alias = "lfo")]
     pub source: u64,
     /// The ends of the sweep, 0 to 1 of the parameter's range. An LFO's
     /// trough, or an envelope at rest, lands on `lo`; the crest or the peak on
@@ -100,15 +99,6 @@ pub struct Modulation {
     pub envelopes: Vec<EnvelopeRecord>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub links: Links,
-    /// The id the next new LFO or envelope takes. Saved, so the id of a
-    /// removed one is never handed out again: a preset or a link that still
-    /// names it must not start following a different modulator.
-    #[serde(default, alias = "next_lfo_id", skip_serializing_if = "is_zero")]
-    pub next_modulator_id: u64,
-}
-
-fn is_zero(n: &u64) -> bool {
-    *n == 0
 }
 
 /// Something in the document the engine could not use.
@@ -320,16 +310,6 @@ mod tests {
         // A link to the shared id follows the LFO, which is the one that built.
         doc.links.insert("grain.size".into(), link(1, 1.0));
         assert!(doc.build().1.iter().all(|r| r.id != "grain.size"));
-    }
-
-    #[test]
-    fn a_link_written_as_lfo_still_reads() {
-        let doc: Modulation = serde_json::from_str(
-            r#"{"lfos":[],"links":{"grain.size":{"lfo":3,"lo":0.0,"hi":1.0}},"next_lfo_id":4}"#,
-        )
-        .unwrap();
-        assert_eq!(doc.links["grain.size"].source, 3);
-        assert_eq!(doc.next_modulator_id, 4);
     }
 
     #[test]

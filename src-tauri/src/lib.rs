@@ -35,10 +35,6 @@ mod midi;
 mod modulation;
 pub mod object_model;
 mod opened;
-// The old JSON document, read only by the end-to-end test until its
-// fixture moves to rhizome's format.
-#[cfg(test)]
-mod patch;
 mod profile;
 pub mod session;
 #[cfg(test)]
@@ -2053,7 +2049,6 @@ mod tests {
                 },
             )]
             .into(),
-            next_modulator_id: 3,
         };
         let view = serde_json::to_value(ModulationView::of(&doc, Vec::new()))
             .expect("ModulationView is serialisable");

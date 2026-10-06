@@ -433,11 +433,18 @@ fn a_session_saves_and_opens_with_its_sound() {
 #[test]
 fn a_file_in_the_old_format_is_refused() {
     let r = rig();
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/trip-hop-acid.shard");
+    let dir = std::env::temp_dir().join(format!("shard-old-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("old.shard");
+    std::fs::write(
+        &path,
+        r#"{"version":3,"tracker":{"tempo":82.0},"patch":{"params":{"grain.size":80.0}}}"#,
+    )
+    .unwrap();
     let before = get(&r, "grain.size");
     assert!(r.session.open(&path).is_err());
     assert_eq!(get(&r, "grain.size"), before, "nothing changed");
+    std::fs::remove_dir_all(&dir).ok();
 }
 
 #[test]

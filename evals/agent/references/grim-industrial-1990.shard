@@ -1,1040 +1,756 @@
 {
-  "version": 3,
-  "tracker": {
-    "tempo": 118.0,
-    "swing": 0.0,
-    "tracks": [
-      {
-        "on": true,
-        "length": 32,
-        "steps": [
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 72,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 90,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 12,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 72,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 90,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 72,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 90,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 12,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 72,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 90,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 0,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 1,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 1,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 13,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 1,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 1,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 1,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": -2,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": -2,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": 10,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": -2,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": -2,
-            "hold": 1,
-            "velocity": 84,
-            "nudge": 0
-          },
-          {
-            "on": true,
-            "pitch": -2,
-            "hold": 1,
-            "velocity": 118,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          },
-          {
-            "on": false,
-            "pitch": 0,
-            "hold": 0,
-            "velocity": 127,
-            "nudge": 0
-          }
+  "rhizome": 1,
+  "nodes": [
+    {
+      "path": "/",
+      "id": "01M48E19P982CTCV5V6735RMVS",
+      "type": "root"
+    },
+    {
+      "path": "/arrangements",
+      "id": "01M48E19P99WM6GFYF5ZYJF8XZ",
+      "type": "category"
+    },
+    {
+      "path": "/arrangements/arrangement",
+      "id": "01M48E19P9RCHKJCCM02BTN1YM",
+      "type": "arrangement",
+      "values": {
+        "arrangement.tempo": 118.0
+      },
+      "orders": {
+        "chain": [
+          "01M48E19PZXXMB0QCC6RE43MT3"
+        ],
+        "tracks": [
+          "01M48E19P90T5X939G49C29WH7"
         ]
       }
-    ],
-    "kit": {
-      "length": 32,
-      "kick": [
-        127,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        70,
-        127,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        127,
-        0,
-        90,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      "snare": [
-        0,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        127,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        127,
-        55,
-        80,
-        110,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
-      ],
-      "hat": [
-        55,
-        38,
-        110,
-        38,
-        55,
-        38,
-        110,
-        38,
-        55,
-        38,
-        110,
-        38,
-        55,
-        38,
-        110,
-        38,
-        55,
-        38,
-        110,
-        38,
-        55,
-        38,
-        110,
-        38,
-        55,
-        38,
-        110,
-        38,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0
+    },
+    {
+      "path": "/arrangements/arrangement/amp",
+      "id": "01M48E19P94CN6T3WSSZV6PRH7",
+      "type": "master"
+    },
+    {
+      "path": "/arrangements/arrangement/filter",
+      "id": "01M48E19P9Z7EFFSR58C1HDGPG",
+      "type": "filter"
+    },
+    {
+      "path": "/arrangements/arrangement/kit",
+      "id": "01M48E19P9AJJT3VEQ4KFP27KG",
+      "type": "kit",
+      "values": {
+        "kit.decay": 0.7,
+        "kit.length": 32,
+        "kit.on": true,
+        "kit.tune": -2.0
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/1",
+      "id": "01M48E19P91R9CYXWN3M6QDHWQ",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/10",
+      "id": "01M48E19PA3KG71990DG42ZBVR",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/11",
+      "id": "01M48E19P9HV93E3Z90BERVQMR",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/12",
+      "id": "01M48E19PA1EQQ6ZBVCDR2N262",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/13",
+      "id": "01M48E19P96BB5FR3789KQG6TJ",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127,
+        "beat.snare": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/14",
+      "id": "01M48E19PA83SA8QSYKQ0F61P5",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/15",
+      "id": "01M48E19P9ZQ16ZMVM3SSHNR6B",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/16",
+      "id": "01M48E19PA3G91T2967FYP7PZW",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38,
+        "beat.kick": 70
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/17",
+      "id": "01M48E19PATMP4V8S8WPDD0BAM",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/18",
+      "id": "01M48E19PA2T7MWNEX8Q1CV7SJ",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/19",
+      "id": "01M48E19PASM8JDDSBH07SK4TB",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/2",
+      "id": "01M48E19PAHF5ESCTZQY5B4KYP",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/20",
+      "id": "01M48E19PAXFXA39243EN232AA",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/21",
+      "id": "01M48E19PA9JCP99BH0JAJM0TP",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127,
+        "beat.snare": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/22",
+      "id": "01M48E19PAPFYWRWB2172Y7EJH",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/23",
+      "id": "01M48E19PAT0C37VD582361K23",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/24",
+      "id": "01M48E19PADY6N6206QWW6HDSV",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/25",
+      "id": "01M48E19PANDHBBVEXA84TZAZ5",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/26",
+      "id": "01M48E19PANGMHW3TW0NDAWRPQ",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/27",
+      "id": "01M48E19PASEC7FF9C40YF2TXA",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/28",
+      "id": "01M48E19PAXCMR6W3KZ8AT9ZAR",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/29",
+      "id": "01M48E19PAX8KZACCMPZ37M2B4",
+      "type": "beat",
+      "values": {
+        "beat.kick": 127,
+        "beat.snare": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/3",
+      "id": "01M48E19P9XT4GFQ7RKXMANWSN",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/30",
+      "id": "01M48E19PACCWE1KBRABH90J9S",
+      "type": "beat",
+      "values": {
+        "beat.snare": 55
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/31",
+      "id": "01M48E19PATZVWF2YWWB9D79T1",
+      "type": "beat",
+      "values": {
+        "beat.kick": 90,
+        "beat.snare": 80
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/32",
+      "id": "01M48E19PAETV7SMB1AYVJPFJJ",
+      "type": "beat",
+      "values": {
+        "beat.snare": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/4",
+      "id": "01M48E19PASCGH55EWKNSYW3NJ",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/5",
+      "id": "01M48E19P9KKVYFGYTJ9YRD5XV",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127,
+        "beat.snare": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/6",
+      "id": "01M48E19PAHTZ51JNC4Z387GC5",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/7",
+      "id": "01M48E19P993R60WD4SF587563",
+      "type": "beat",
+      "values": {
+        "beat.hat": 110
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/8",
+      "id": "01M48E19PA8MTBGYB0ZQ256ZYC",
+      "type": "beat",
+      "values": {
+        "beat.hat": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/kit/9",
+      "id": "01M48E19P9H76V90RMN8JMQ67X",
+      "type": "beat",
+      "values": {
+        "beat.hat": 55,
+        "beat.kick": 127
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/reverb",
+      "id": "01M48E19PZXXMB0QCC6RE43MT3",
+      "type": "reverb",
+      "values": {
+        "reverb.decay": 1.2,
+        "reverb.mix": 0.15,
+        "reverb.size": 0.35,
+        "reverb.tone": 4500.0,
+        "reverb.type": 2
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track",
+      "id": "01M48E19P90T5X939G49C29WH7",
+      "type": "track",
+      "values": {
+        "track.gain": 0.9,
+        "track.length": 32
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/10",
+      "id": "01M48E19PAHRHC9B95TH5C4XC8",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 72
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/11",
+      "id": "01M48E19PASQSCRA9CWFKM3DFV",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/12",
+      "id": "01M48E19PA8PMTBN3DVSXQ20Q4",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 12,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/14",
+      "id": "01M48E19PAKQS5Y59HP81D8YTA",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 72
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/15",
+      "id": "01M48E19PA8J55GAPS10V1KKJV",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/16",
+      "id": "01M48E19PAR41DGQC4ZKD6NFJM",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/18",
+      "id": "01M48E19PAZDNWKK54MPYER26G",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 1,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/19",
+      "id": "01M48E19PARK5284T1Z6WP6AAP",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 1,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/2",
+      "id": "01M48E19PAHXD3X42DGNF2V1JK",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 72
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/20",
+      "id": "01M48E19PAE0TJNFFGX6RJNMSV",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 13,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/22",
+      "id": "01M48E19PA7CQCTMJNVYWEA0T5",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 1,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/23",
+      "id": "01M48E19PA4NZ88S4QJP6FY0GC",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 1,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/24",
+      "id": "01M48E19PAZYSRHYV6P5X3QQXG",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 1,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/26",
+      "id": "01M48E19PASY7X11JN4FB0WJBE",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": -2,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/27",
+      "id": "01M48E19PA0B3SKYNTRV9MEKHF",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": -2,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/28",
+      "id": "01M48E19PAYZTDCRM4WJ2DPTH8",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 10,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/3",
+      "id": "01M48E19PA0KM9MDN23STPE3BF",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/30",
+      "id": "01M48E19PA0MXANKVAF93X51DJ",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": -2,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/31",
+      "id": "01M48E19PAD7SPZB5YS98PSFB1",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": -2,
+        "step.velocity": 84
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/32",
+      "id": "01M48E19PAF0MF48505EABFTXF",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": -2,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/4",
+      "id": "01M48E19PA086EHKSXRQ7EC7FX",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.pitch": 12,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/6",
+      "id": "01M48E19PA07K18JKBAGP3KYD5",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 72
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/7",
+      "id": "01M48E19PAHG3YJ54K6606JQYS",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/track/8",
+      "id": "01M48E19PACBT8ES9HTWYVFTKK",
+      "type": "step",
+      "values": {
+        "step.hold": 1,
+        "step.on": true,
+        "step.velocity": 118
+      }
+    },
+    {
+      "path": "/materials",
+      "id": "01M48E19P94D9VKGQSX7JJMWEW",
+      "type": "category",
+      "orders": {
+        "pool": [
+          "01M48E19P9EP88P1620ZBZHKFY"
+        ]
+      }
+    },
+    {
+      "path": "/materials/Built-in-drone",
+      "id": "01M48E19P9EP88P1620ZBZHKFY",
+      "type": "sample",
+      "values": {
+        "sample.label": "Built-in drone"
+      }
+    },
+    {
+      "path": "/patches",
+      "id": "01M48E19P9Q8NCWM2AWNWJA16S",
+      "type": "category"
+    },
+    {
+      "path": "/patches/patch",
+      "id": "01M48E19P9XTK6SNQNB8DPDEYF",
+      "type": "patch",
+      "values": {
+        "patch.length": 2
+      },
+      "orders": {
+        "chain": [
+          "01M48E19PBA7B0Z9HFTZQG2PBH",
+          "01M48E19PB9GD60X8DBDW6EYY5"
+        ],
+        "modulators": [
+          "01M48E19Q8VG1BG2VRH9XWNTM0"
+        ]
+      }
+    },
+    {
+      "path": "/patches/patch/amp",
+      "id": "01M48E19P9XZPH1EPBHYYXP74W",
+      "type": "amp",
+      "values": {
+        "amp.gain": 0.5
+      }
+    },
+    {
+      "path": "/patches/patch/crush",
+      "id": "01M48E19PB9GD60X8DBDW6EYY5",
+      "type": "crush",
+      "values": {
+        "crush.bits": 7.0,
+        "crush.mix": 0.35,
+        "crush.rate": 14000.0
+      }
+    },
+    {
+      "path": "/patches/patch/drive",
+      "id": "01M48E19PBA7B0Z9HFTZQG2PBH",
+      "type": "drive",
+      "values": {
+        "drive.amount": 26.0,
+        "drive.mix": 0.75,
+        "drive.type": 1
+      }
+    },
+    {
+      "path": "/patches/patch/env",
+      "id": "01M48E19P9GSBTAA7VZ7K8FJ94",
+      "type": "env",
+      "values": {
+        "env.decay": 110.0,
+        "env.release": 25.0,
+        "env.sustain": 0.15
+      }
+    },
+    {
+      "path": "/patches/patch/filter",
+      "id": "01M48E19P9W5MDH8VB38WXHQR4",
+      "type": "filter",
+      "values": {
+        "filter.cutoff": 700.0,
+        "filter.on": true,
+        "filter.resonance": 0.45
+      },
+      "bindings": [
+        {
+          "on": {
+            "value": "filter.cutoff"
+          },
+          "source": "01M48E19Q8VG1BG2VRH9XWNTM0",
+          "values": {
+            "hi": 0.68,
+            "lo": 0.4
+          }
+        }
       ]
+    },
+    {
+      "path": "/patches/patch/fm",
+      "id": "01M48E19P9MKNG28RPSN0QRVS9",
+      "type": "fm",
+      "values": {
+        "fm.feedback": 0.55,
+        "fm.freq": 55.0,
+        "fm.gain": 0.9,
+        "fm.index": 3.4,
+        "fm.on": true,
+        "fm.ratio": 1.41
+      }
+    },
+    {
+      "path": "/patches/patch/grain",
+      "id": "01M48E19P9WK58BVMXNZF4BSW4",
+      "type": "grain",
+      "refs": {
+        "grain.source": {
+          "node": "01M48E19P9EP88P1620ZBZHKFY",
+          "path": "/materials/Built-in-drone"
+        }
+      }
+    },
+    {
+      "path": "/patches/patch/material",
+      "id": "01M48E19P9T590KGZT7016SWJK",
+      "type": "material",
+      "values": {
+        "material.on": false
+      },
+      "refs": {
+        "material.source": {
+          "node": "01M48E19P9EP88P1620ZBZHKFY",
+          "path": "/materials/Built-in-drone"
+        }
+      }
+    },
+    {
+      "path": "/patches/patch/mod-env",
+      "id": "01M48E19Q8VG1BG2VRH9XWNTM0",
+      "type": "mod-env",
+      "values": {
+        "mod-env.attack": 1.0,
+        "mod-env.decay": 90.0,
+        "mod-env.label": "Filter snap",
+        "mod-env.release": 30.0,
+        "mod-env.sustain": 0.0
+      }
+    },
+    {
+      "path": "/patches/patch/tape",
+      "id": "01M48E19P9FRGXQ0YBXEKDK3SM",
+      "type": "tape"
+    },
+    {
+      "path": "/presets",
+      "id": "01M48E19P9CSWZWW3EC1YK25A1",
+      "type": "category"
     }
-  },
-  "arrangement": {
-    "arrangement.track.gain": 0.9,
-    "arrangement.kit.on": 1.0,
-    "arrangement.kit.gain": 1.0,
-    "arrangement.kit.tune": -2.0,
-    "arrangement.kit.decay": 0.7,
-    "arrangement.fx.0.drive.on": 1.0,
-    "arrangement.fx.0.drive.mix": 1.0,
-    "arrangement.fx.0.drive.amount": 24.0,
-    "arrangement.fx.0.drive.tone": 8000.0,
-    "arrangement.fx.0.drive.type": 0.0,
-    "arrangement.fx.1.crush.on": 1.0,
-    "arrangement.fx.1.crush.mix": 0.0,
-    "arrangement.fx.1.crush.bits": 16.0,
-    "arrangement.fx.1.crush.rate": 48000.0,
-    "arrangement.fx.2.ring.on": 1.0,
-    "arrangement.fx.2.ring.mix": 0.0,
-    "arrangement.fx.2.ring.freq": 140.0,
-    "arrangement.fx.3.chorus.on": 1.0,
-    "arrangement.fx.3.chorus.mix": 0.5,
-    "arrangement.fx.3.chorus.type": 0.0,
-    "arrangement.fx.3.chorus.rate": 0.6,
-    "arrangement.fx.3.chorus.depth": 0.5,
-    "arrangement.fx.3.chorus.voices": 4.0,
-    "arrangement.fx.3.chorus.spread": 1.0,
-    "arrangement.fx.3.chorus.lowcut": 240.0,
-    "arrangement.fx.3.chorus.eq": 0.0,
-    "arrangement.fx.4.overtone.on": 1.0,
-    "arrangement.fx.4.overtone.mix": 0.5,
-    "arrangement.fx.4.overtone.sub": 0.5,
-    "arrangement.fx.4.overtone.octave": 0.3,
-    "arrangement.fx.4.overtone.fifth": 0.0,
-    "arrangement.fx.4.overtone.tone": 5000.0,
-    "arrangement.fx.5.flanger.on": 1.0,
-    "arrangement.fx.5.flanger.mix": 0.5,
-    "arrangement.fx.5.flanger.manual": 1.5,
-    "arrangement.fx.5.flanger.rate": 0.25,
-    "arrangement.fx.5.flanger.depth": 0.7,
-    "arrangement.fx.5.flanger.feedback": 0.5,
-    "arrangement.fx.6.wear.on": 1.0,
-    "arrangement.fx.6.wear.mix": 0.7,
-    "arrangement.fx.6.wear.wow": 0.4,
-    "arrangement.fx.6.wear.flutter": 0.3,
-    "arrangement.fx.6.wear.unstable": 0.0,
-    "arrangement.fx.6.wear.dropouts": 0.2,
-    "arrangement.fx.6.wear.dull": 0.4,
-    "arrangement.fx.7.delay.on": 1.0,
-    "arrangement.fx.7.delay.mix": 0.3,
-    "arrangement.fx.7.delay.time": 350.0,
-    "arrangement.fx.7.delay.feedback": 0.4,
-    "arrangement.fx.7.delay.tone": 8000.0,
-    "arrangement.fx.7.delay.pingpong": 0.0,
-    "arrangement.fx.8.echo.on": 1.0,
-    "arrangement.fx.8.echo.mix": 0.35,
-    "arrangement.fx.8.echo.time": 300.0,
-    "arrangement.fx.8.echo.feedback": 0.45,
-    "arrangement.fx.8.echo.tone": 3500.0,
-    "arrangement.fx.8.echo.wobble": 0.3,
-    "arrangement.fx.8.echo.grit": 0.3,
-    "arrangement.fx.9.rise.on": 1.0,
-    "arrangement.fx.9.rise.mix": 0.4,
-    "arrangement.fx.9.rise.time": 380.0,
-    "arrangement.fx.9.rise.feedback": 0.6,
-    "arrangement.fx.9.rise.shift": 7.0,
-    "arrangement.fx.9.rise.wobble": 0.3,
-    "arrangement.fx.9.rise.tone": 6000.0,
-    "arrangement.fx.10.reverb.on": 1.0,
-    "arrangement.fx.10.reverb.mix": 0.15,
-    "arrangement.fx.10.reverb.type": 2.0,
-    "arrangement.fx.10.reverb.decay": 1.2,
-    "arrangement.fx.10.reverb.size": 0.35,
-    "arrangement.fx.10.reverb.tone": 4500.0,
-    "arrangement.fx.10.reverb.predelay": 12.0,
-    "arrangement.fx.11.drive.on": 1.0,
-    "arrangement.fx.11.drive.mix": 1.0,
-    "arrangement.fx.11.drive.amount": 24.0,
-    "arrangement.fx.11.drive.tone": 8000.0,
-    "arrangement.fx.11.drive.type": 0.0,
-    "arrangement.fx.12.crush.on": 1.0,
-    "arrangement.fx.12.crush.mix": 0.0,
-    "arrangement.fx.12.crush.bits": 16.0,
-    "arrangement.fx.12.crush.rate": 48000.0,
-    "arrangement.fx.13.ring.on": 1.0,
-    "arrangement.fx.13.ring.mix": 0.0,
-    "arrangement.fx.13.ring.freq": 140.0,
-    "arrangement.fx.14.chorus.on": 1.0,
-    "arrangement.fx.14.chorus.mix": 0.5,
-    "arrangement.fx.14.chorus.type": 0.0,
-    "arrangement.fx.14.chorus.rate": 0.6,
-    "arrangement.fx.14.chorus.depth": 0.5,
-    "arrangement.fx.14.chorus.voices": 4.0,
-    "arrangement.fx.14.chorus.spread": 1.0,
-    "arrangement.fx.14.chorus.lowcut": 240.0,
-    "arrangement.fx.14.chorus.eq": 0.0,
-    "arrangement.fx.15.overtone.on": 1.0,
-    "arrangement.fx.15.overtone.mix": 0.5,
-    "arrangement.fx.15.overtone.sub": 0.5,
-    "arrangement.fx.15.overtone.octave": 0.3,
-    "arrangement.fx.15.overtone.fifth": 0.0,
-    "arrangement.fx.15.overtone.tone": 5000.0,
-    "arrangement.fx.16.flanger.on": 1.0,
-    "arrangement.fx.16.flanger.mix": 0.5,
-    "arrangement.fx.16.flanger.manual": 1.5,
-    "arrangement.fx.16.flanger.rate": 0.25,
-    "arrangement.fx.16.flanger.depth": 0.7,
-    "arrangement.fx.16.flanger.feedback": 0.5,
-    "arrangement.fx.17.wear.on": 1.0,
-    "arrangement.fx.17.wear.mix": 0.7,
-    "arrangement.fx.17.wear.wow": 0.4,
-    "arrangement.fx.17.wear.flutter": 0.3,
-    "arrangement.fx.17.wear.unstable": 0.0,
-    "arrangement.fx.17.wear.dropouts": 0.2,
-    "arrangement.fx.17.wear.dull": 0.4,
-    "arrangement.fx.18.delay.on": 1.0,
-    "arrangement.fx.18.delay.mix": 0.3,
-    "arrangement.fx.18.delay.time": 350.0,
-    "arrangement.fx.18.delay.feedback": 0.4,
-    "arrangement.fx.18.delay.tone": 8000.0,
-    "arrangement.fx.18.delay.pingpong": 0.0,
-    "arrangement.fx.19.echo.on": 1.0,
-    "arrangement.fx.19.echo.mix": 0.35,
-    "arrangement.fx.19.echo.time": 300.0,
-    "arrangement.fx.19.echo.feedback": 0.45,
-    "arrangement.fx.19.echo.tone": 3500.0,
-    "arrangement.fx.19.echo.wobble": 0.3,
-    "arrangement.fx.19.echo.grit": 0.3,
-    "arrangement.fx.20.rise.on": 1.0,
-    "arrangement.fx.20.rise.mix": 0.4,
-    "arrangement.fx.20.rise.time": 380.0,
-    "arrangement.fx.20.rise.feedback": 0.6,
-    "arrangement.fx.20.rise.shift": 7.0,
-    "arrangement.fx.20.rise.wobble": 0.3,
-    "arrangement.fx.20.rise.tone": 6000.0,
-    "arrangement.fx.21.reverb.on": 1.0,
-    "arrangement.fx.21.reverb.mix": 0.3,
-    "arrangement.fx.21.reverb.type": 0.0,
-    "arrangement.fx.21.reverb.decay": 2.5,
-    "arrangement.fx.21.reverb.size": 0.5,
-    "arrangement.fx.21.reverb.tone": 6000.0,
-    "arrangement.fx.21.reverb.predelay": 12.0,
-    "arrangement.fx.order.0": 11.0,
-    "arrangement.fx.order.1": 0.0,
-    "arrangement.fx.order.2": 0.0,
-    "arrangement.fx.order.3": 0.0,
-    "arrangement.fx.order.4": 0.0,
-    "arrangement.fx.order.5": 0.0,
-    "arrangement.fx.order.6": 0.0,
-    "arrangement.fx.order.7": 0.0,
-    "arrangement.fx.order.8": 0.0,
-    "arrangement.fx.order.9": 0.0,
-    "arrangement.fx.order.10": 0.0,
-    "arrangement.fx.order.11": 0.0,
-    "arrangement.fx.order.12": 0.0,
-    "arrangement.fx.order.13": 0.0,
-    "arrangement.fx.order.14": 0.0,
-    "arrangement.fx.order.15": 0.0,
-    "arrangement.filter.on": 0.0,
-    "arrangement.filter.mix": 1.0,
-    "arrangement.filter.cutoff": 2000.0,
-    "arrangement.filter.resonance": 0.2,
-    "arrangement.filter.type": 0.0,
-    "arrangement.amp.gain": 1.0,
-    "arrangement.amp.limit": 1.0,
-    "arrangement.amp.ceiling": 0.95
-  },
-  "patch": {
-    "params": {
-      "amp.gain": 0.5,
-      "env.attack": 0.0,
-      "env.decay": 110.0,
-      "env.mix": 1.0,
-      "env.on": 1.0,
-      "env.release": 25.0,
-      "env.sustain": 0.15,
-      "filter.cutoff": 700.0,
-      "filter.mix": 1.0,
-      "filter.on": 1.0,
-      "filter.resonance": 0.45,
-      "filter.type": 0.0,
-      "fm.drift": 0.0,
-      "fm.feedback": 0.55,
-      "fm.freq": 55.0,
-      "fm.gain": 0.9,
-      "fm.index": 3.4,
-      "fm.on": 1.0,
-      "fm.ratio": 1.41,
-      "fm.type": 0.0,
-      "fx.0.drive.amount": 26.0,
-      "fx.0.drive.mix": 0.75,
-      "fx.0.drive.on": 1.0,
-      "fx.0.drive.tone": 8000.0,
-      "fx.0.drive.type": 1.0,
-      "fx.1.crush.bits": 7.0,
-      "fx.1.crush.mix": 0.35,
-      "fx.1.crush.on": 1.0,
-      "fx.1.crush.rate": 14000.0,
-      "fx.10.reverb.decay": 2.5,
-      "fx.10.reverb.mix": 0.3,
-      "fx.10.reverb.on": 1.0,
-      "fx.10.reverb.predelay": 12.0,
-      "fx.10.reverb.size": 0.5,
-      "fx.10.reverb.tone": 6000.0,
-      "fx.10.reverb.type": 0.0,
-      "fx.11.drive.amount": 24.0,
-      "fx.11.drive.mix": 1.0,
-      "fx.11.drive.on": 1.0,
-      "fx.11.drive.tone": 8000.0,
-      "fx.11.drive.type": 0.0,
-      "fx.12.crush.bits": 16.0,
-      "fx.12.crush.mix": 0.0,
-      "fx.12.crush.on": 1.0,
-      "fx.12.crush.rate": 48000.0,
-      "fx.13.ring.freq": 140.0,
-      "fx.13.ring.mix": 0.0,
-      "fx.13.ring.on": 1.0,
-      "fx.14.chorus.depth": 0.5,
-      "fx.14.chorus.eq": 0.0,
-      "fx.14.chorus.lowcut": 240.0,
-      "fx.14.chorus.mix": 0.5,
-      "fx.14.chorus.on": 1.0,
-      "fx.14.chorus.rate": 0.6,
-      "fx.14.chorus.spread": 1.0,
-      "fx.14.chorus.type": 0.0,
-      "fx.14.chorus.voices": 4.0,
-      "fx.15.overtone.fifth": 0.0,
-      "fx.15.overtone.mix": 0.5,
-      "fx.15.overtone.octave": 0.3,
-      "fx.15.overtone.on": 1.0,
-      "fx.15.overtone.sub": 0.5,
-      "fx.15.overtone.tone": 5000.0,
-      "fx.16.flanger.depth": 0.7,
-      "fx.16.flanger.feedback": 0.5,
-      "fx.16.flanger.manual": 1.5,
-      "fx.16.flanger.mix": 0.5,
-      "fx.16.flanger.on": 1.0,
-      "fx.16.flanger.rate": 0.25,
-      "fx.17.wear.dropouts": 0.2,
-      "fx.17.wear.dull": 0.4,
-      "fx.17.wear.flutter": 0.3,
-      "fx.17.wear.mix": 0.7,
-      "fx.17.wear.on": 1.0,
-      "fx.17.wear.unstable": 0.0,
-      "fx.17.wear.wow": 0.4,
-      "fx.18.delay.feedback": 0.4,
-      "fx.18.delay.mix": 0.3,
-      "fx.18.delay.on": 1.0,
-      "fx.18.delay.pingpong": 0.0,
-      "fx.18.delay.time": 350.0,
-      "fx.18.delay.tone": 8000.0,
-      "fx.19.echo.feedback": 0.45,
-      "fx.19.echo.grit": 0.3,
-      "fx.19.echo.mix": 0.35,
-      "fx.19.echo.on": 1.0,
-      "fx.19.echo.time": 300.0,
-      "fx.19.echo.tone": 3500.0,
-      "fx.19.echo.wobble": 0.3,
-      "fx.2.ring.freq": 140.0,
-      "fx.2.ring.mix": 0.0,
-      "fx.2.ring.on": 1.0,
-      "fx.20.rise.feedback": 0.6,
-      "fx.20.rise.mix": 0.4,
-      "fx.20.rise.on": 1.0,
-      "fx.20.rise.shift": 7.0,
-      "fx.20.rise.time": 380.0,
-      "fx.20.rise.tone": 6000.0,
-      "fx.20.rise.wobble": 0.3,
-      "fx.21.reverb.decay": 2.5,
-      "fx.21.reverb.mix": 0.3,
-      "fx.21.reverb.on": 1.0,
-      "fx.21.reverb.predelay": 12.0,
-      "fx.21.reverb.size": 0.5,
-      "fx.21.reverb.tone": 6000.0,
-      "fx.21.reverb.type": 0.0,
-      "fx.3.chorus.depth": 0.5,
-      "fx.3.chorus.eq": 0.0,
-      "fx.3.chorus.lowcut": 240.0,
-      "fx.3.chorus.mix": 0.5,
-      "fx.3.chorus.on": 1.0,
-      "fx.3.chorus.rate": 0.6,
-      "fx.3.chorus.spread": 1.0,
-      "fx.3.chorus.type": 0.0,
-      "fx.3.chorus.voices": 4.0,
-      "fx.4.overtone.fifth": 0.0,
-      "fx.4.overtone.mix": 0.5,
-      "fx.4.overtone.octave": 0.3,
-      "fx.4.overtone.on": 1.0,
-      "fx.4.overtone.sub": 0.5,
-      "fx.4.overtone.tone": 5000.0,
-      "fx.5.flanger.depth": 0.7,
-      "fx.5.flanger.feedback": 0.5,
-      "fx.5.flanger.manual": 1.5,
-      "fx.5.flanger.mix": 0.5,
-      "fx.5.flanger.on": 1.0,
-      "fx.5.flanger.rate": 0.25,
-      "fx.6.wear.dropouts": 0.2,
-      "fx.6.wear.dull": 0.4,
-      "fx.6.wear.flutter": 0.3,
-      "fx.6.wear.mix": 0.7,
-      "fx.6.wear.on": 1.0,
-      "fx.6.wear.unstable": 0.0,
-      "fx.6.wear.wow": 0.4,
-      "fx.7.delay.feedback": 0.4,
-      "fx.7.delay.mix": 0.3,
-      "fx.7.delay.on": 1.0,
-      "fx.7.delay.pingpong": 0.0,
-      "fx.7.delay.time": 350.0,
-      "fx.7.delay.tone": 8000.0,
-      "fx.8.echo.feedback": 0.45,
-      "fx.8.echo.grit": 0.3,
-      "fx.8.echo.mix": 0.35,
-      "fx.8.echo.on": 1.0,
-      "fx.8.echo.time": 300.0,
-      "fx.8.echo.tone": 3500.0,
-      "fx.8.echo.wobble": 0.3,
-      "fx.9.rise.feedback": 0.6,
-      "fx.9.rise.mix": 0.4,
-      "fx.9.rise.on": 1.0,
-      "fx.9.rise.shift": 7.0,
-      "fx.9.rise.time": 380.0,
-      "fx.9.rise.tone": 6000.0,
-      "fx.9.rise.wobble": 0.3,
-      "fx.order.0": 1.0,
-      "fx.order.1": 2.0,
-      "fx.order.10": 0.0,
-      "fx.order.11": 0.0,
-      "fx.order.12": 0.0,
-      "fx.order.13": 0.0,
-      "fx.order.14": 0.0,
-      "fx.order.15": 0.0,
-      "fx.order.2": 0.0,
-      "fx.order.3": 0.0,
-      "fx.order.4": 0.0,
-      "fx.order.5": 0.0,
-      "fx.order.6": 0.0,
-      "fx.order.7": 0.0,
-      "fx.order.8": 0.0,
-      "fx.order.9": 0.0,
-      "grain.density": 60.0,
-      "grain.gain": 1.0,
-      "grain.jitter": 0.05,
-      "grain.on": 0.0,
-      "grain.pan": 0.6,
-      "grain.pitch": 0.0,
-      "grain.position": 0.25,
-      "grain.reverse": 0.0,
-      "grain.size": 180.0,
-      "grain.spread": 0.0,
-      "grain.window": 0.0,
-      "material.gain": 1.0,
-      "material.on": 0.0,
-      "patch.hold": 400.0,
-      "patch.length": 2.0,
-      "tape.brake": 0.0,
-      "tape.flick": 150.0,
-      "tape.reverse": 0.0,
-      "tape.time": 400.0
-    },
-    "envelopes": [
-      {
-        "id": 1,
-        "name": "Filter snap",
-        "attack": 1.0,
-        "decay": 90.0,
-        "sustain": 0.0,
-        "release": 30.0
-      }
-    ],
-    "links": {
-      "filter.cutoff": {
-        "source": 1,
-        "lo": 0.4,
-        "hi": 0.68
-      }
-    },
-    "next_modulator_id": 2
-  }
+  ]
 }
