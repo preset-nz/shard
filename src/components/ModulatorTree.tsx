@@ -59,26 +59,28 @@ export function ModulatorTree({
         const count = linked.get(m.id) ?? 0;
         const isSelected = selected?.kind === m.kind && selected.id === m.id;
         return (
-          <ContextMenu key={m.id} modal={false}>
-            <ContextMenuTrigger asChild>
-              <button
-                type="button"
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onSelect(isSelected ? null : { kind: m.kind, id: m.id })}
-                className={`flex w-full items-baseline gap-2 px-3 py-1 text-left text-xs ${
-                  isSelected
-                    ? 'bg-accent text-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <span className="w-3 shrink-0 text-center" aria-hidden>
-                  {m.kind === 'lfo' ? '∿' : '⌒'}
-                </span>
-                <span className="flex-1 truncate">{m.name}</span>
-                <span className="shrink-0 text-[10px] tabular-nums">
-                  {count > 0 ? `${count} linked` : ''}
-                </span>
-              </button>
+          <ContextMenu key={m.id}>
+            <ContextMenuTrigger
+              render={
+                <button
+                  type="button"
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onSelect(isSelected ? null : { kind: m.kind, id: m.id })}
+                  className={`flex w-full items-baseline gap-2 px-3 py-1 text-left text-xs ${
+                    isSelected
+                      ? 'bg-accent text-foreground'
+                      : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                />
+              }
+            >
+              <span className="w-3 shrink-0 text-center" aria-hidden>
+                {m.kind === 'lfo' ? '∿' : '⌒'}
+              </span>
+              <span className="flex-1 truncate">{m.name}</span>
+              <span className="shrink-0 text-[10px] tabular-nums">
+                {count > 0 ? `${count} linked` : ''}
+              </span>
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
               <ContextMenuItem onSelect={() => onRemove(m)}>Remove {m.name}</ContextMenuItem>

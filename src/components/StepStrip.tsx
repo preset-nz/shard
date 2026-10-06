@@ -247,7 +247,9 @@ export function StepStrip({
           max={75}
           step={1}
           value={[toPercent(tracker.swing)]}
-          onValueChange={([percent]) => onChange({ ...tracker, swing: fromPercent(percent) })}
+          onValueChange={(v) =>
+            onChange({ ...tracker, swing: fromPercent(Array.isArray(v) ? v[0] : (v as number)) })
+          }
           aria-label="Swing"
           className="w-20"
         />

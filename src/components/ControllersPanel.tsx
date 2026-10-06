@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Plus } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import { useEffect, useState } from 'react';
 import {
   addMap,
@@ -146,7 +146,7 @@ export function ControllersPanel({
         title="New map"
         onClick={() => void addMap(`map ${midi.maps.length + 1}`).catch(fail)}
       >
-        <Plus className="size-3.5" />
+        <Icons.PlusIcon className="size-3.5" />
       </button>
     </div>
   );
@@ -233,72 +233,70 @@ function DeviceGroup({
   apply: (p: Promise<ControllersView>) => void;
 }) {
   const moving = controls.some((c) => c.active);
-  const Chevron = open ? ChevronDown : ChevronRight;
+  const Chevron = open ? Icons.CaretDownIcon : Icons.CaretRightIcon;
   // A surface is driven, not learned: there is nothing to unfold, nothing to
   // name and nothing to map, so the row only reports that it is there.
   const surface = d.surface !== null;
   return (
     <div>
       <ContextMenu>
-        <ContextMenuTrigger asChild>
-          <div className="flex items-center gap-1.5 px-3">
-            {surface ? (
-              <span className="size-3.5 shrink-0" />
-            ) : (
-              <button
-                type="button"
-                className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-                title={open ? 'Fold' : 'Unfold'}
-                aria-expanded={open}
-                onClick={() => onFold(!open)}
-              >
-                <Chevron className="size-3.5" />
-              </button>
-            )}
-            <span
-              className={
-                moving
-                  ? 'size-1.5 shrink-0 rounded-full bg-amber-400'
-                  : d.connected
-                    ? 'size-1.5 shrink-0 rounded-full bg-emerald-400'
-                    : 'size-1.5 shrink-0 rounded-full bg-muted-foreground/40'
-              }
-              title={d.connected ? 'Connected' : 'Not connected'}
-            />
-            {surface ? (
-              <span className="flex-1 truncate px-1.5 text-xs">{d.surface}</span>
-            ) : (
-              <NameField value={d.name} onCommit={(n) => apply(renameDevice(d.port, n))} />
-            )}
-            <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.port}</span>
-            <span
-              className={
-                d.connected
-                  ? 'w-28 shrink-0 text-right text-[10px] text-emerald-400'
-                  : 'w-28 shrink-0 text-right text-[10px] text-muted-foreground'
-              }
+        <ContextMenuTrigger render={<div className="flex items-center gap-1.5 px-3" />}>
+          {surface ? (
+            <span className="size-3.5 shrink-0" />
+          ) : (
+            <button
+              type="button"
+              className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+              title={open ? 'Fold' : 'Unfold'}
+              aria-expanded={open}
+              onClick={() => onFold(!open)}
             >
-              {d.connected ? 'Connected' : 'Not connected'}
-            </span>
-            <span
-              className={
-                surface
-                  ? 'w-28 shrink-0 text-right text-[10px] text-primary'
-                  : 'w-28 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground'
-              }
-              title={
-                surface
-                  ? `Shard drives this device: it wakes it, maps it and lights it. Its controls are not learned or mapped by hand.`
-                  : undefined
-              }
-            >
-              {surface
-                ? 'Control surface'
-                : controls.length === 1
-                  ? '1 control'
-                  : `${controls.length} controls`}
-            </span>
-          </div>
+              <Chevron className="size-3.5" />
+            </button>
+          )}
+          <span
+            className={
+              moving
+                ? 'size-1.5 shrink-0 rounded-full bg-amber-400'
+                : d.connected
+                  ? 'size-1.5 shrink-0 rounded-full bg-emerald-400'
+                  : 'size-1.5 shrink-0 rounded-full bg-muted-foreground/40'
+            }
+            title={d.connected ? 'Connected' : 'Not connected'}
+          />
+          {surface ? (
+            <span className="flex-1 truncate px-1.5 text-xs">{d.surface}</span>
+          ) : (
+            <NameField value={d.name} onCommit={(n) => apply(renameDevice(d.port, n))} />
+          )}
+          <span className="shrink-0 font-mono text-[10px] text-muted-foreground">{d.port}</span>
+          <span
+            className={
+              d.connected
+                ? 'w-28 shrink-0 text-right text-[10px] text-emerald-400'
+                : 'w-28 shrink-0 text-right text-[10px] text-muted-foreground'
+            }
+          >
+            {d.connected ? 'Connected' : 'Not connected'}
+          </span>
+          <span
+            className={
+              surface
+                ? 'w-28 shrink-0 text-right text-[10px] text-primary'
+                : 'w-28 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground'
+            }
+            title={
+              surface
+                ? `Shard drives this device: it wakes it, maps it and lights it. Its controls are not learned or mapped by hand.`
+                : undefined
+            }
+          >
+            {surface
+              ? 'Control surface'
+              : controls.length === 1
+                ? '1 control'
+                : `${controls.length} controls`}
+          </span>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem disabled={surface} onSelect={() => apply(forgetDevice(d.port))}>
@@ -384,59 +382,61 @@ function ChannelGroup({
       )}
       {controls.map((c) => (
         <ContextMenu key={c.id}>
-          <ContextMenuTrigger asChild>
-            <div className={`flex items-center gap-2 py-0.5 pr-3 ${sole ? 'pl-9' : 'pl-12'}`}>
-              <span
-                className={
-                  c.active
-                    ? 'size-1.5 shrink-0 rounded-full bg-amber-400'
-                    : 'size-1.5 shrink-0 rounded-full bg-muted-foreground/25'
+          <ContextMenuTrigger
+            render={
+              <div className={`flex items-center gap-2 py-0.5 pr-3 ${sole ? 'pl-9' : 'pl-12'}`} />
+            }
+          >
+            <span
+              className={
+                c.active
+                  ? 'size-1.5 shrink-0 rounded-full bg-amber-400'
+                  : 'size-1.5 shrink-0 rounded-full bg-muted-foreground/25'
+              }
+            />
+            <NameField value={c.name} onCommit={(n) => apply(renameControl(c.id, n))} />
+            <Select value={c.role} onValueChange={(r) => r && apply(setControlRole(c.id, r))}>
+              <SelectTrigger size="sm" className="h-6 w-16 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {roles.map((r) => (
+                  <SelectItem key={r} value={r} className="text-xs">
+                    {r}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {c.role === 'knob' ? (
+              <button
+                type="button"
+                className={`h-6 w-28 shrink-0 rounded border px-1.5 text-[11px] ${
+                  calibrating === c.id
+                    ? 'border-amber-400/60 bg-amber-400/10 text-amber-500'
+                    : 'border-border text-muted-foreground hover:text-foreground'
+                }`}
+                title={
+                  calibrating === c.id
+                    ? 'Click to stop.'
+                    : 'A pot sends where it is; an endless encoder sends how far it moved, and needs no pickup. Click and turn it, and shard works out which it is.'
                 }
-              />
-              <NameField value={c.name} onCommit={(n) => apply(renameControl(c.id, n))} />
-              <Select value={c.role} onValueChange={(r) => apply(setControlRole(c.id, r))}>
-                <SelectTrigger size="sm" className="h-6 w-16 text-xs">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {roles.map((r) => (
-                    <SelectItem key={r} value={r} className="text-xs">
-                      {r}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {c.role === 'knob' ? (
-                <button
-                  type="button"
-                  className={`h-6 w-28 shrink-0 rounded border px-1.5 text-[11px] ${
-                    calibrating === c.id
-                      ? 'border-amber-400/60 bg-amber-400/10 text-amber-500'
-                      : 'border-border text-muted-foreground hover:text-foreground'
-                  }`}
-                  title={
-                    calibrating === c.id
-                      ? 'Click to stop.'
-                      : 'A pot sends where it is; an endless encoder sends how far it moved, and needs no pickup. Click and turn it, and shard works out which it is.'
-                  }
-                  onClick={() =>
-                    apply(calibrating === c.id ? cancelCalibrate() : calibrateControl(c.id))
-                  }
-                >
-                  {calibrating === c.id ? 'Turn it…' : c.mode === 'absolute' ? 'Pot' : 'Endless'}
-                </button>
-              ) : (
-                <span className="w-28 shrink-0" />
-              )}
-              <span className="w-14 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
-                {c.kind} {c.number}
-              </span>
-              <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
-                {c.delta !== null
-                  ? `${c.delta > 0 ? '+' : c.delta < 0 ? '\u2212' : ''}${Math.abs(c.delta)}`
-                  : (c.last ?? '')}
-              </span>
-            </div>
+                onClick={() =>
+                  apply(calibrating === c.id ? cancelCalibrate() : calibrateControl(c.id))
+                }
+              >
+                {calibrating === c.id ? 'Turn it…' : c.mode === 'absolute' ? 'Pot' : 'Endless'}
+              </button>
+            ) : (
+              <span className="w-28 shrink-0" />
+            )}
+            <span className="w-14 shrink-0 text-right font-mono text-[10px] text-muted-foreground">
+              {c.kind} {c.number}
+            </span>
+            <span className="w-10 shrink-0 text-right font-mono text-[10px] tabular-nums text-muted-foreground">
+              {c.delta !== null
+                ? `${c.delta > 0 ? '+' : c.delta < 0 ? '\u2212' : ''}${Math.abs(c.delta)}`
+                : (c.last ?? '')}
+            </span>
           </ContextMenuTrigger>
           <ContextMenuContent>
             <ContextMenuItem

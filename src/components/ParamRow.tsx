@@ -15,6 +15,7 @@ import {
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
@@ -24,6 +25,9 @@ import {
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
 import { Slider } from '@/components/ui/slider';
+
+/** A one-thumb slider's value: Base UI hands over a number or an array. */
+const first = (v: number | readonly number[]) => (Array.isArray(v) ? v[0] : (v as number));
 
 /**
  * Knobs under a heading of "device · channel", which is the namespace these
@@ -114,95 +118,94 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
   const arrangement = isArrangement(def.id);
 
   return (
-    <ContextMenu modal={false}>
-      <ContextMenuTrigger asChild>
-        <div className="space-y-1">
-          <div className="flex items-baseline gap-2">
-            <span className="flex-1 truncate text-xs">{f.label ?? def.name}</span>
-            {learning && (
-              <span className="shrink-0 animate-pulse text-[10px] text-primary">
-                touch a control
-              </span>
-            )}
-            {mapped && !learning && (
-              <span
-                className={`max-w-16 shrink truncate text-[10px] ${
-                  mapped.armed ? 'text-muted-foreground' : 'text-primary'
-                }`}
-                title={
-                  mapped.armed
-                    ? `${mapped.control_name} is waiting: turn it past the value.`
-                    : `${mapped.control_name} sets this. Right-click to forget.`
-                }
-              >
-                ⦿ {mapped.control_name}
-              </span>
-            )}
-            {link && (
-              <span
-                className={`max-w-24 shrink truncate text-[10px] ${
-                  source ? 'text-primary' : 'text-destructive'
-                }`}
-                title={
-                  source
-                    ? `Follows ${source.name}. Right-click to change or unlink.`
-                    : 'Follows a modulator this patch no longer has. Right-click to unlink.'
-                }
-              >
-                {source?.kind === 'envelope' ? '⌒' : '∿'}{' '}
-                {source ? source.name : 'missing modulator'}
-              </span>
-            )}
-            <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
-              {format(def, real)}
+    <ContextMenu>
+      <ContextMenuTrigger render={<div className="space-y-1" />}>
+        <div className="flex items-baseline gap-2">
+          <span className="flex-1 truncate text-xs">{f.label ?? def.name}</span>
+          {learning && (
+            <span className="shrink-0 animate-pulse text-[10px] text-primary">touch a control</span>
+          )}
+          {mapped && !learning && (
+            <span
+              className={`max-w-16 shrink truncate text-[10px] ${
+                mapped.armed ? 'text-muted-foreground' : 'text-primary'
+              }`}
+              title={
+                mapped.armed
+                  ? `${mapped.control_name} is waiting: turn it past the value.`
+                  : `${mapped.control_name} sets this. Right-click to forget.`
+              }
+            >
+              ⦿ {mapped.control_name}
             </span>
-          </div>
-          <div className="relative">
+          )}
+          {link && (
+            <span
+              className={`max-w-24 shrink truncate text-[10px] ${
+                source ? 'text-primary' : 'text-destructive'
+              }`}
+              title={
+                source
+                  ? `Follows ${source.name}. Right-click to change or unlink.`
+                  : 'Follows a modulator this patch no longer has. Right-click to unlink.'
+              }
+            >
+              {source?.kind === 'envelope' ? '⌒' : '∿'} {source ? source.name : 'missing modulator'}
+            </span>
+          )}
+          <span className="shrink-0 font-mono text-[11px] text-muted-foreground tabular-nums">
+            {format(def, real)}
+          </span>
+        </div>
+        <div className="relative">
+          <Slider
+            min={0}
+            max={1}
+            step={0.001}
+            value={[t]}
+            onValueChange={(v) => onChange?.(first(v))}
+          />
+          {mark !== null && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 h-3.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded bg-primary"
+              style={{ left: `${mark * 100}%` }}
+            />
+          )}
+          {mapped?.armed && mapped.knob !== null && (
+            <div
+              aria-hidden
+              className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-muted-foreground"
+              style={{ left: `${mapped.knob * 100}%` }}
+            />
+          )}
+        </div>
+        {link && source && (
+          <div className="flex items-center gap-2 pl-3">
+            <span className="w-14 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
+              {format(def, denormalise(def, Math.min(link.lo, link.hi)))}
+            </span>
             <Slider
               min={0}
               max={1}
               step={0.001}
-              value={[t]}
-              onValueChange={([next]) => onChange?.(next)}
+              minStepsBetweenValues={1}
+              value={[Math.min(link.lo, link.hi), Math.max(link.lo, link.hi)]}
+              onValueChange={(v) => {
+                if (Array.isArray(v)) c.onLink(def.id, link.source, v[0], v[1]);
+              }}
+              className="flex-1"
             />
-            {mark !== null && (
-              <div
-                aria-hidden
-                className="pointer-events-none absolute top-1/2 h-3.5 w-0.5 -translate-x-1/2 -translate-y-1/2 rounded bg-primary"
-                style={{ left: `${mark * 100}%` }}
-              />
-            )}
-            {mapped?.armed && mapped.knob !== null && (
-              <div
-                aria-hidden
-                className="pointer-events-none absolute top-1/2 size-3 -translate-x-1/2 -translate-y-1/2 rounded-full border border-muted-foreground"
-                style={{ left: `${mapped.knob * 100}%` }}
-              />
-            )}
+            <span className="w-14 shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
+              {format(def, denormalise(def, Math.max(link.lo, link.hi)))}
+            </span>
           </div>
-          {link && source && (
-            <div className="flex items-center gap-2 pl-3">
-              <span className="w-14 shrink-0 text-right font-mono text-[10px] text-muted-foreground tabular-nums">
-                {format(def, denormalise(def, Math.min(link.lo, link.hi)))}
-              </span>
-              <Slider
-                min={0}
-                max={1}
-                step={0.001}
-                minStepsBetweenThumbs={1}
-                value={[Math.min(link.lo, link.hi), Math.max(link.lo, link.hi)]}
-                onValueChange={([lo, hi]) => c.onLink(def.id, link.source, lo, hi)}
-                className="flex-1"
-              />
-              <span className="w-14 shrink-0 font-mono text-[10px] text-muted-foreground tabular-nums">
-                {format(def, denormalise(def, Math.max(link.lo, link.hi)))}
-              </span>
-            </div>
-          )}
-        </div>
+        )}
       </ContextMenuTrigger>
       <ContextMenuContent className="w-52">
-        <ContextMenuLabel>{def.name}</ContextMenuLabel>
+        <ContextMenuGroup>
+          <ContextMenuLabel>{def.name}</ContextMenuLabel>
+        </ContextMenuGroup>
         <ContextMenuSeparator />
         <ContextMenuSub>
           <ContextMenuSubTrigger disabled={arrangement || modulators.length === 0}>
@@ -228,14 +231,18 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
           Unlink
         </ContextMenuItem>
         {arrangement && (
-          <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-            The arrangement's controls follow no modulator yet.
-          </ContextMenuLabel>
+          <ContextMenuGroup>
+            <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+              The arrangement's controls follow no modulator yet.
+            </ContextMenuLabel>
+          </ContextMenuGroup>
         )}
         {!arrangement && modulators.length === 0 && (
-          <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-            Add an LFO or envelope under Modulators first.
-          </ContextMenuLabel>
+          <ContextMenuGroup>
+            <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+              Add an LFO or envelope under Modulators first.
+            </ContextMenuLabel>
+          </ContextMenuGroup>
         )}
         <ContextMenuSeparator />
         <ContextMenuSub>
@@ -243,9 +250,11 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
           <ContextMenuSubContent className="max-h-80 overflow-y-auto">
             {groupKnobs(c.midi.knobs).map(([where, knobs]) => (
               <Fragment key={where}>
-                <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-                  {where}
-                </ContextMenuLabel>
+                <ContextMenuGroup>
+                  <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                    {where}
+                  </ContextMenuLabel>
+                </ContextMenuGroup>
                 {knobs.map((k) => (
                   <ContextMenuItem key={k.id} onSelect={() => c.onMapMidi(def.id, k.id)}>
                     {k.name}
@@ -256,9 +265,11 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
               </Fragment>
             ))}
             {c.midi.knobs.length === 0 && (
-              <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-                No knobs known yet. Turn one, or name them in Settings.
-              </ContextMenuLabel>
+              <ContextMenuGroup>
+                <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                  No knobs known yet. Turn one, or name them in Settings.
+                </ContextMenuLabel>
+              </ContextMenuGroup>
             )}
             <ContextMenuSeparator />
             <ContextMenuItem onSelect={() => c.onLearn(def.id)}>Learn by touch</ContextMenuItem>

@@ -53,20 +53,22 @@ export function GeneratorTree({
       )}
 
       {present.map(({ node }) => (
-        <ContextMenu key={node.id} modal={false}>
-          <ContextMenuTrigger asChild>
-            <button
-              type="button"
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onSelect(selected === node.id ? null : node.id)}
-              className={`flex w-full items-baseline gap-2 px-3 py-1 text-left text-xs ${
-                selected === node.id
-                  ? 'bg-accent text-foreground'
-                  : 'text-muted-foreground hover:text-foreground'
-              }`}
-            >
-              <span className="flex-1 truncate">{node.label}</span>
-            </button>
+        <ContextMenu key={node.id}>
+          <ContextMenuTrigger
+            render={
+              <button
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => onSelect(selected === node.id ? null : node.id)}
+                className={`flex w-full items-baseline gap-2 px-3 py-1 text-left text-xs ${
+                  selected === node.id
+                    ? 'bg-accent text-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              />
+            }
+          >
+            <span className="flex-1 truncate">{node.label}</span>
           </ContextMenuTrigger>
           <ContextMenuContent className="w-48">
             <ContextMenuItem onSelect={() => onRemove(node)}>Remove {node.label}</ContextMenuItem>

@@ -99,7 +99,9 @@ export function MaterialEditor({
           max={1}
           step={0.001}
           value={[material.trim_start]}
-          onValueChange={([t]) => onChange({ ...material, trim_start: t })}
+          onValueChange={(v) =>
+            onChange({ ...material, trim_start: Array.isArray(v) ? v[0] : (v as number) })
+          }
           aria-label="Trim start"
           className="flex-1"
         />
@@ -110,7 +112,9 @@ export function MaterialEditor({
           max={1}
           step={0.001}
           value={[material.trim_end]}
-          onValueChange={([t]) => onChange({ ...material, trim_end: t })}
+          onValueChange={(v) =>
+            onChange({ ...material, trim_end: Array.isArray(v) ? v[0] : (v as number) })
+          }
           aria-label="Trim end"
           className="flex-1"
         />

@@ -1,4 +1,3 @@
-import '@fontsource-variable/inter';
 import { registerBuiltinRenderers } from '@preset.nz/facets';
 import React from 'react';
 import ReactDOM from 'react-dom/client';

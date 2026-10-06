@@ -1,7 +1,8 @@
-import { Plus } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuTrigger,
@@ -30,19 +31,23 @@ export function AddMenu<K extends string>({
 }) {
   return (
     <DropdownMenu modal={false}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          title={title}
-          // Keep focus off the button, so Space still starts playback.
-          onMouseDown={(e) => e.preventDefault()}
-          className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
-        >
-          <Plus size={13} />
-        </button>
+      <DropdownMenuTrigger
+        render={
+          <button
+            type="button"
+            title={title}
+            // Keep focus off the button, so Space still starts playback.
+            onMouseDown={(e) => e.preventDefault()}
+            className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          />
+        }
+      >
+        <Icons.PlusIcon size={13} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-44">
-        <DropdownMenuLabel>{title} of type</DropdownMenuLabel>
+        <DropdownMenuGroup>
+          <DropdownMenuLabel>{title} of type</DropdownMenuLabel>
+        </DropdownMenuGroup>
         {choices.map((c) => (
           <DropdownMenuItem
             key={c.kind}

@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import {
   ContextMenu,
   ContextMenuContent,
+  ContextMenuGroup,
   ContextMenuItem,
   ContextMenuLabel,
   ContextMenuSeparator,
@@ -109,12 +110,12 @@ export function NodePresets({
     <>
       {/* Not modal, so choosing "Save as preset…" can hand focus straight to
           the dialog instead of fighting the menu for it as it closes. */}
-      <ContextMenu modal={false} onOpenChange={(open) => open && void refresh()}>
-        <ContextMenuTrigger asChild>
-          <div className={className}>{children}</div>
-        </ContextMenuTrigger>
+      <ContextMenu onOpenChange={(open) => open && void refresh()}>
+        <ContextMenuTrigger render={<div className={className} />}>{children}</ContextMenuTrigger>
         <ContextMenuContent className="w-56">
-          <ContextMenuLabel>{label} presets</ContextMenuLabel>
+          <ContextMenuGroup>
+            <ContextMenuLabel>{label} presets</ContextMenuLabel>
+          </ContextMenuGroup>
           <ContextMenuSeparator />
           <ContextMenuSub>
             <ContextMenuSubTrigger disabled={names.length === 0}>

@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import type { MaterialsView } from '@/audio';
 import {
   ContextMenu,
@@ -45,7 +45,7 @@ export function MaterialTree({
           onClick={onAdd}
           className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
         >
-          <Plus size={13} />
+          <Icons.PlusIcon size={13} />
         </button>
       </div>
 
@@ -59,41 +59,41 @@ export function MaterialTree({
           pool.wires.grain === m.id ? { tag: 'G', name: 'Granular' } : null,
         ].filter((r) => r !== null);
         return (
-          <ContextMenu key={m.id} modal={false}>
-            <ContextMenuTrigger asChild>
-              <button
-                type="button"
-                title={
-                  m.path === null
-                    ? 'Built in, no file'
-                    : m.missing
-                      ? `Not found: ${m.path}`
-                      : m.path
-                }
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => onSelect(m.id)}
-                className={`flex w-full items-baseline gap-1.5 px-3 py-1 text-left text-xs ${
-                  selected === m.id
-                    ? 'bg-accent text-foreground'
-                    : readers.length > 0
-                      ? 'text-foreground'
-                      : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                <span className="flex-1 truncate">{m.name}</span>
-                {m.missing && (
-                  <span className="shrink-0 text-[10px] text-destructive">missing</span>
-                )}
-                {readers.map((r) => (
-                  <span
-                    key={r.tag}
-                    title={`Read by ${r.name}`}
-                    className="shrink-0 rounded bg-primary/15 px-1 text-[9px] font-semibold text-primary"
-                  >
-                    {r.tag}
-                  </span>
-                ))}
-              </button>
+          <ContextMenu key={m.id}>
+            <ContextMenuTrigger
+              render={
+                <button
+                  type="button"
+                  title={
+                    m.path === null
+                      ? 'Built in, no file'
+                      : m.missing
+                        ? `Not found: ${m.path}`
+                        : m.path
+                  }
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => onSelect(m.id)}
+                  className={`flex w-full items-baseline gap-1.5 px-3 py-1 text-left text-xs ${
+                    selected === m.id
+                      ? 'bg-accent text-foreground'
+                      : readers.length > 0
+                        ? 'text-foreground'
+                        : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                />
+              }
+            >
+              <span className="flex-1 truncate">{m.name}</span>
+              {m.missing && <span className="shrink-0 text-[10px] text-destructive">missing</span>}
+              {readers.map((r) => (
+                <span
+                  key={r.tag}
+                  title={`Read by ${r.name}`}
+                  className="shrink-0 rounded bg-primary/15 px-1 text-[9px] font-semibold text-primary"
+                >
+                  {r.tag}
+                </span>
+              ))}
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48">
               <ContextMenuItem onSelect={() => onRemove(m.id)}>Remove {m.name}</ContextMenuItem>

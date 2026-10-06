@@ -15,9 +15,9 @@ export default defineConfig(async () => ({
       '@': path.resolve(__dirname, './src'),
     },
     // @preset.nz packages ship unbuilt TypeScript. Pin the shared runtime to
-    // this app's copy; facets is in the list because two copies would mean
+    // this app's copy; facets and the kit are in the list because two copies would mean
     // two registries (a temporary `pnpm link` makes that easy to hit).
-    dedupe: ['react', 'react-dom', '@tauri-apps/api', '@preset.nz/facets'],
+    dedupe: ['react', 'react-dom', '@tauri-apps/api', '@preset.nz/ux-kit', '@preset.nz/facets'],
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

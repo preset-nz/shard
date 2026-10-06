@@ -1,5 +1,5 @@
 import { PropertyPanel } from '@preset.nz/facets';
-import { ChevronDown, ChevronUp, X } from 'lucide-react';
+import { Icons } from '@preset.nz/ux-kit';
 import type { ReactNode } from 'react';
 import { type ParamInfo, setParam } from '@/audio';
 import { NodePresets } from '@/components/NodePresets';
@@ -66,7 +66,7 @@ export function ChainButtons({
         onClick={() => onMove(-1)}
         className={button}
       >
-        <ChevronUp size={12} />
+        <Icons.CaretUpIcon size={12} />
       </button>
       <button
         type="button"
@@ -75,7 +75,7 @@ export function ChainButtons({
         onClick={() => onMove(1)}
         className={button}
       >
-        <ChevronDown size={12} />
+        <Icons.CaretDownIcon size={12} />
       </button>
       <button
         type="button"
@@ -84,7 +84,7 @@ export function ChainButtons({
         onClick={onRemove}
         className={button}
       >
-        <X size={12} />
+        <Icons.XIcon size={12} />
       </button>
     </span>
   );

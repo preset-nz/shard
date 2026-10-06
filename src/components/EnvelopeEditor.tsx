@@ -94,7 +94,7 @@ export function EnvelopeEditor({
         max={1}
         step={0.001}
         value={[normalise(def, v)]}
-        onValueChange={([t]) => set(denormalise(def, t))}
+        onValueChange={(v) => set(denormalise(def, Array.isArray(v) ? v[0] : (v as number)))}
       />
     </div>
   );
