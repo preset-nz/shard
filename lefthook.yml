@@ -1,0 +1,28 @@
+# Thin hooks; `just` recipes are the source of truth.
+# Convention: ~/rhizomatic-preset/guidance/runbooks/pre-commit-hooks.md
+
+pre-commit:
+  parallel: true
+  commands:
+    biome:
+      glob: "*.{ts,tsx,json}"
+      run: ./node_modules/.bin/biome check --no-errors-on-unmatched {staged_files}
+    rustfmt:
+      glob: "*.rs"
+      run: rustfmt --edition 2021 --check {staged_files}
+
+pre-push:
+  commands:
+    check:
+      run: just check
+
+# Conventional Commits, subject ≤ 72. knope reads the types to version releases.
+# How to write one: the write-conventional-commit skill.
+commit-msg:
+  commands:
+    conventional:
+      run: |
+        s=$(head -n1 {1})
+        printf '%s' "$s" | grep -qE '^((feat|fix|perf|refactor|style|test|docs|build|ci|chore|revert|release)(\([a-z0-9-]+\))?!?: [^ ]|Merge |Revert ")' \
+          || { echo "commit-msg: subject must be 'type(scope): subject' (feat, fix, perf, refactor, style, test, docs, build, ci, chore, revert)"; exit 1; }
+        [ ${#s} -le 72 ] || { echo "commit-msg: subject is ${#s} characters; keep it to 72 and put the why in the body"; exit 1; }
