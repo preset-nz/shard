@@ -327,7 +327,7 @@ mod tests {
                 let w = core::f64::consts::TAU * f as f64 / sr as f64;
                 let mut total = 0.0;
                 let mut segs = 0.0;
-                for seg in x.chunks_exact(SEG) {
+                for seg in x.as_chunks::<SEG>().0 {
                     let (mut re, mut im) = (0.0, 0.0);
                     for (n, (&s, &h)) in seg.iter().zip(&window).enumerate() {
                         re += s as f64 * h * (w * n as f64).cos();
