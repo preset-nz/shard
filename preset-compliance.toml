@@ -1,0 +1,3 @@
+# preset-compliance: https://github.com/preset-nz/compliance
+[licences]
+extends = "permissive@2"

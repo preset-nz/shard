@@ -78,13 +78,14 @@ check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
-    just licenses
+    just licences
 
-# Licence gate: permissive allowlist, no copyleft anywhere in the tree.
-# Family policy, see guidance/projects/oblique/design/licensing.md.
+# Licence check against the committed lock (preset-compliance.toml). Reads files
+# only, no network. Re-resolve with `preset-compliance licences scan` after
+# changing dependencies. Family policy, see guidance/projects/oblique/design/licensing.md.
 [group('quality')]
-licenses:
-    @./scripts/check-licenses.py
+licences:
+    preset-compliance licences check
 
 [group('quality')]
 fmt:
@@ -137,3 +138,4 @@ package: build
 [group('eval')]
 eval-agent *args:
     python3 evals/agent/agent_eval.py {{args}}
+

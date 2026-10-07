@@ -133,6 +133,6 @@ real regressions; a golden sample buffer does not.
 
 - `just check` before committing: fmt, clippy with `-D warnings`, tests,
   licence gate.
-- Licensing is permissive-only, no copyleft in the tree. `just licenses`
+- Licensing is permissive-only, no copyleft in the tree. `just licences`
   enforces it. Symphonia is excluded deliberately, being MPL-2.0.
 - Family rules are in `../CLAUDE.md`.

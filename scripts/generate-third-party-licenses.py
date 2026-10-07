@@ -6,7 +6,7 @@ machine's target (normal dependencies, no dev or build ones), and the npm
 production dependencies bundled into the interface. One line per package,
 name, version and licence, the same level as Oblique's notices file.
 
-`just licenses` is the gate; this only reports.
+`just licences` is the gate; this only reports.
 """
 
 import json
