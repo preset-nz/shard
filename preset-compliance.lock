@@ -6,11 +6,11 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "7ab87b8a67f932988c6ba37b0e9bdfa992f8fbc0e7061c0438a2848ac4ef3f55"
+sha256 = "fa7b84f106a566c464926f27d3a8e58dbb06160f22e26f8d1b494ff5ae3daeac"
 
 [[inputs]]
 path = "Cargo.toml"
-sha256 = "c41a2e668921cb18d8edeb3e12d62c04d2f298f18c66bb493bbd55b99177a44f"
+sha256 = "28d18f796619aaf99d28c10229ff85711a3ccfa1f533373d20ec1944e0d36aaa"
 
 [[inputs]]
 path = "crates/shard-dsp/Cargo.toml"

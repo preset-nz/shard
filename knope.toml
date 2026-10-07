@@ -1,0 +1,40 @@
+# Releases: `just release`. Bumps package.json, the workspace Cargo.toml and
+# Cargo.lock in lockstep from the conventional commits since the last tag, writes
+# CHANGELOG.md, rescans the licence lock, commits and tags. Pushing stays manual.
+# src-tauri/tauri.conf.json reads its version from package.json.
+
+[package]
+versioned_files = [
+    "Cargo.toml",
+    "package.json",
+    { path = "Cargo.lock", dependency = "shard" },
+    { path = "Cargo.lock", dependency = "shard-dsp" },
+    { path = "Cargo.lock", dependency = "shard-play" },
+    { path = "Cargo.lock", dependency = "shard-probe" },
+]
+changelog = "CHANGELOG.md"
+
+[[workflows]]
+name = "release"
+
+[[workflows.steps]]
+type = "Command"
+command = "just check"
+
+[[workflows.steps]]
+type = "PrepareRelease"
+
+# knope writes package.json without a trailing newline, which Biome rejects;
+# the licence lock hashes Cargo.toml and Cargo.lock, so a bump makes it stale.
+[[workflows.steps]]
+type = "Command"
+command = "./node_modules/.bin/biome format --write package.json && preset-compliance licences scan && git add package.json preset-compliance.lock"
+shell = true
+
+[[workflows.steps]]
+type = "Command"
+command = "git commit -m \"release: $version\""
+variables = { "$version" = "Version" }
+
+[[workflows.steps]]
+type = "Release"
