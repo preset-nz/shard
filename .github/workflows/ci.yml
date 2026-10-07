@@ -37,6 +37,8 @@ jobs:
           components: clippy, rustfmt
       - uses: Swatinem/rust-cache@v2
       - uses: extractions/setup-just@v3
+      # `just check` ends with `just licences`; install-only (no args).
+      - uses: preset-nz/compliance@v0.1.1
       - run: pnpm install --frozen-lockfile
       # The app crate's build script embeds the frontend, so `dist/` has to
       # exist before cargo compiles it. It is git-ignored.
