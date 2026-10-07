@@ -1,0 +1,5 @@
+# Stable channel, so CI and every machine use the same components. The
+# version still floats with `rustup update` (Georg, 2026-10-08).
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
