@@ -15,6 +15,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: preset-nz/compliance@v0.1.0
+      - uses: preset-nz/compliance@v0.1.1
         with:
           args: licences check
