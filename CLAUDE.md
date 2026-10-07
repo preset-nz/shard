@@ -30,10 +30,10 @@ Three crates, and the boundary around the first is the important part.
   wrong, so this is kept rather than rewritten each time. The LPD8 table and
   the whole Launch Control 3 protocol were measured with it.
 
-A Tauri and React shell is intended, matching Oblique, Strata and Fault
-(Tauri 2, Vite, React, TypeScript, shadcn/ui, zustand, biome). It does not
-exist yet. When it lands, audio stays in the Rust process; the webview never
-sees a sample. That rule forbids DSP in JavaScript, not a web UI.
+The app is a Tauri and React shell (`src-tauri/`, `src/`) on ux-kit,
+app-kit and rhizome, like the rest of the family. Audio stays in the Rust
+process; the webview never sees a sample. That rule forbids DSP in
+JavaScript, not a web UI.
 
 ## Audio thread rules
 
@@ -135,5 +135,4 @@ real regressions; a golden sample buffer does not.
   licence gate.
 - Licensing is permissive-only, no copyleft in the tree. `just licenses`
   enforces it. Symphonia is excluded deliberately, being MPL-2.0.
-- NZ English in user-facing strings. Identifiers stay standard.
-- Dates absolute, `YYYY-MM-DD`.
+- Family rules are in `../CLAUDE.md`.
