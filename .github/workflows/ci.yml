@@ -14,6 +14,6 @@ permissions:
 
 jobs:
   check:
-    uses: preset-nz/workflows/.github/workflows/check.yml@v0.1.0
+    uses: preset-nz/workflows/.github/workflows/check.yml@v1
     with:
       tauri: true
