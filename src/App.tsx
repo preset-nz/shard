@@ -938,7 +938,7 @@ export default function App() {
                 : 'border border-border hover:bg-accent'
             }`}
           >
-            Reverse
+            Rewind
           </button>
 
           <fieldset className="flex rounded border border-border p-0.5" aria-label="Mode">
@@ -962,27 +962,6 @@ export default function App() {
           </fieldset>
           <span className="text-sm font-semibold tracking-tight">Shard</span>
           <span className="text-xs text-muted-foreground">{document_?.title ?? 'Untitled-1'}</span>
-          <div className="flex-1" />
-          <button
-            type="button"
-            title="Show or hide the grain inspector and the raw parameter list (⌘I)"
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setShowDebugger((v) => !v)}
-            className={`rounded border px-2 py-1 text-xs ${
-              showDebugger
-                ? 'border-primary bg-primary/15 text-primary'
-                : 'border-border hover:bg-accent'
-            }`}
-          >
-            Debug
-          </button>
-          <button
-            type="button"
-            onClick={pickFiles}
-            className="rounded border border-border px-2 py-1 text-xs hover:bg-accent"
-          >
-            Add WAV
-          </button>
         </header>
 
         <div className="flex min-h-0 flex-1">

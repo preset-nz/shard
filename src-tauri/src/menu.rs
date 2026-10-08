@@ -27,7 +27,7 @@ pub const MENU_CONFIG: &str = include_str!("../menu.toml");
 /// else, and held unique by a test.
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
-    ("file-add-material", "CmdOrCtrl+Shift+O"),
+    ("file-add-material", "CmdOrCtrl+Shift+I"),
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
     ("view-inspector", "CmdOrCtrl+I"),
@@ -63,7 +63,7 @@ pub fn commands() -> Vec<Command> {
     let pattern = |id, label, section| item(id, label).domain("Pattern").section(section);
     let mut all = vec![
         file("file-reset-sound", "Reset Sound", 1),
-        file("file-add-material", "Add Material…", 1),
+        file("file-add-material", "Import…", 1),
         view("view-tracker", "Tracker", 0),
         view("view-soundscape", "Sound Scaping", 0),
         view("view-inspector", "Grain Inspector", 1),
