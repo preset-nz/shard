@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "fa7b84f106a566c464926f27d3a8e58dbb06160f22e26f8d1b494ff5ae3daeac"
+sha256 = "db64e1044540d098519e6a76198af08407cefd2fdf0dc629369c1762afa0f359"
 
 [[inputs]]
 path = "Cargo.toml"
@@ -27,11 +27,11 @@ sha256 = "f3a33563a6f00ac348fee5597eb34274d3b9f469dfa19d3184da0913ad78a9d1"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "eacad3463c413949a4eb04d8a0e7e5fc8972f5fddbb10ecd730b918bffbc3a6e"
+sha256 = "8d745810445ce66f48923b3570ab1d5f4cac8773b419f06a55f44d92c68f3a7b"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "34b90739192fba0defa2b2a0d26ea9367691aa7176cf54b0083bdeb8c217c5f1"
+sha256 = "a54a56982c2cec584073fa152ab7693ce26521736daf1f8fb5145c8f327f8377"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2348,7 +2348,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "preset-app-kit"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
@@ -5012,7 +5012,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "@preset.nz/app-kit"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
