@@ -27,7 +27,7 @@ sha256 = "f3a33563a6f00ac348fee5597eb34274d3b9f469dfa19d3184da0913ad78a9d1"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "8d745810445ce66f48923b3570ab1d5f4cac8773b419f06a55f44d92c68f3a7b"
+sha256 = "61e9dafe731bede80cb68a21515e333e528623527ddf89bd3796b9866b1fd573"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
@@ -5572,7 +5572,7 @@ scope = "dev"
 [[packages]]
 ecosystem = "pnpm"
 name = "@types/node"
-version = "26.5.1"
+version = "26.6.4"
 source = "registry"
 declared = "MIT"
 scope = "dev"
@@ -7756,7 +7756,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "tailwind-merge"
-version = "3.6.0"
+version = "3.7.0"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
