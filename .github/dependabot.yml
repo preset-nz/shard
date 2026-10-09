@@ -1,0 +1,63 @@
+# Weekly version updates, grouped to keep the PR count down; security updates
+# arrive on top whenever an advisory lands. Commits are chore(deps), so a bump
+# never releases on its own. A bump changes a lockfile, which makes
+# preset-compliance.lock stale and `just licences` red: `just deps` in
+# ~/rhizomatic-preset/devsecops-base rescans and pushes the lock on each open
+# Dependabot PR. Our own packages skip the 7-day cooldown.
+# Guidance: design/family-alignment.md, row 7a.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      exclude: ["@preset.nz/*"]
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      preset:
+        patterns: ["@preset.nz/*"]
+      tauri:
+        patterns: ["@tauri-apps/*"]
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      exclude: ["preset-*", "rhizome-*"]
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      preset:
+        patterns: ["preset-*", "rhizome-*"]
+      tauri:
+        patterns: ["tauri", "tauri-*"]
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      minor-and-patch:
+        patterns: ["*"]
+        update-types: [minor, patch]
