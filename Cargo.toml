@@ -15,7 +15,7 @@ publish = false
 # the family are build-time tools that never ship. hound covers WAV, which is
 # all batch one needs. Revisit only if MP3/FLAC input is ever wanted.
 [workspace.dependencies]
-cpal = "0.15"
+cpal = "0.17"
 hound = "3"
 midir = "0.11"
 shard-dsp = { path = "crates/shard-dsp" }
