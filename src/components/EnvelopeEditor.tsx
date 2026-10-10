@@ -3,10 +3,11 @@ import {
   type Adsr,
   adsrCurve,
   adsrOf,
+  type CurveConstraint,
   CurveEditor,
   constrainAdsr,
 } from '@preset.nz/ux-kit/graphics';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   denormalise,
   type EnvelopeRecord,
@@ -46,6 +47,44 @@ const curveEnd = (curve: Curve) => curve.points[curve.points.length - 1]?.x ?? 0
 
 const formatX = (x: number) => `${Math.round(x * 100)}% of the note`;
 const formatLevel = (y: number) => `${Math.round(y * 100)}%`;
+
+type Stage = 'attack' | 'decay' | 'release';
+const STAGES: Stage[] = ['attack', 'decay', 'release'];
+
+/**
+ * `from` with one stage set to `v`, the others giving way if the three no
+ * longer fit in the note. They shrink in proportion and keep the sustain
+ * level, as the Envelope node's stages are fitted to the pass, so any stage
+ * can grow at once instead of waiting for the others to be made shorter
+ * first (Georg, 2026-10-10).
+ */
+function makeRoom(from: Adsr, key: Stage, v: number): Adsr {
+  const moved = Math.min(1, Math.max(0, v));
+  const others = STAGES.filter((k) => k !== key);
+  const rest = others.reduce((sum, k) => sum + from[k], 0);
+  const next = { ...from, [key]: moved };
+  if (moved + rest > 1 && rest > 0) {
+    const k = (1 - moved) / rest;
+    for (const o of others) next[o] = from[o] * k;
+  }
+  return next;
+}
+
+/**
+ * The ADSR limits for a drag on the curve: the stage whose end moved takes
+ * its new length, and the others make room as `makeRoom` does, from the
+ * shape the drag started with, so dragging back gives them back.
+ */
+const fitAdsr: CurveConstraint = (next, prev) => {
+  const shaped = constrainAdsr()(next, prev);
+  const was = adsrOf(prev);
+  const now = shaped && adsrOf(shaped);
+  if (!shaped || !was || !now) return shaped;
+  const key = STAGES.find((k) => Math.abs(now[k] - was[k]) > 1e-9);
+  // Only the sustain level moved.
+  if (!key) return shaped;
+  return adsrCurve({ ...makeRoom(was, key, now[key]), sustain: now.sustain });
+};
 
 /**
  * The nearest ADSR to a free curve. The attack runs to the highest point;
@@ -156,17 +195,19 @@ export function EnvelopeEditor({
     else setName(envelope.name);
   };
 
-  /** Write one ADSR field from a slider. The stages share one note, so the moved one yields. */
+  // The shape a slider drag started from, so the stages that made room get
+  // it back when the slider returns.
+  const slid = useRef<Adsr | null>(null);
+
+  /** Write one ADSR field from a slider. The stages share one note, so the others make room. */
   const setStage = (key: keyof Adsr, v: number) => {
     if (!adsr) return;
-    const next = { ...adsr };
-    if (key === 'sustain') next.sustain = v;
-    else {
-      const others = (['attack', 'decay', 'release'] as const)
-        .filter((k) => k !== key)
-        .reduce((sum, k) => sum + adsr[k], 0);
-      next[key] = Math.max(0, Math.min(v, 1 - others));
-    }
+    slid.current ??= adsr;
+    const from = slid.current;
+    const next =
+      key === 'sustain'
+        ? { ...adsr, sustain: v }
+        : { ...makeRoom(from, key, v), sustain: adsr.sustain };
     edit({ curve: adsrCurve(next) }, true);
   };
 
@@ -189,6 +230,9 @@ export function EnvelopeEditor({
           onValueChange={(t) =>
             setStage(key, denormalise(def, Array.isArray(t) ? t[0] : (t as number)))
           }
+          onValueCommitted={() => {
+            slid.current = null;
+          }}
         />
       </div>
     );
@@ -203,7 +247,7 @@ export function EnvelopeEditor({
       xDomain={X_DOMAIN}
       formatX={formatX}
       formatY={formatLevel}
-      constrain={envelope.mode === 'adsr' ? constrainAdsr(1) : undefined}
+      constrain={envelope.mode === 'adsr' ? fitAdsr : undefined}
       onGestureStart={() => gesture.begin(envelope.id)}
       onGestureEnd={(committed) => {
         if (committed) gesture.end();
