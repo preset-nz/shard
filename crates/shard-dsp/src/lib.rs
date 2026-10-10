@@ -64,7 +64,9 @@ pub use granular::{GrainParams, Granular, Window};
 pub use inspect::{GrainLog, GrainSpawn};
 pub use kit::{Kit, KitClock, KitParams, KitPattern};
 pub use limiter::{Limiter, LimiterParams};
-pub use modulation::{Curve, Ease, EnvSpec, LfoSpec, LinkError, ModSet, Shape};
+pub use modulation::{
+    adsr_curve, Curve, Ease, EnvSpec, LfoSpec, LinkError, ModSet, Shape, TimeBase,
+};
 pub use overtone::{Overtone, OvertoneParams};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;

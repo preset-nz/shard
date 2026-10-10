@@ -321,10 +321,12 @@ fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulati
             MOD_ENV => m.envelopes.push(EnvelopeRecord {
                 id,
                 name: text(&node, "mod-env.label"),
-                attack: float(&node, "mod-env.attack"),
-                decay: float(&node, "mod-env.decay"),
-                sustain: float(&node, "mod-env.sustain"),
-                release: float(&node, "mod-env.release"),
+                mode: text(&node, "mod-env.mode"),
+                time: text(&node, "mod-env.time"),
+                curve: match node.value("mod-env.curve") {
+                    Some(Value::Shaped(j)) => serde_json::from_value(j).unwrap_or_default(),
+                    _ => Default::default(),
+                },
             }),
             _ => {}
         }

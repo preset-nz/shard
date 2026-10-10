@@ -9,6 +9,7 @@
  * The parameter table lives in Rust. This module asks for it rather than
  * duplicating it, so adding a parameter there adds a control here.
  */
+import type { Curve, CurvePoint } from '@preset.nz/math';
 import { invoke } from '@tauri-apps/api/core';
 
 export type Taper = 'linear' | 'exponential' | 'bipolar' | 'stepped';
@@ -298,21 +299,33 @@ export interface LfoRecord {
 }
 
 /**
- * One modulation envelope: ADSR on the pass's clock, so a step starts it. Its
- * id shares the LFOs' space. Called "Mod envelope" so it is not mistaken for
- * the Envelope node, which shapes the amplitude.
+ * One modulation envelope, a curve on the pass's clock. Its id shares the
+ * LFOs' space. Called "Mod envelope" so it is not mistaken for the Envelope
+ * node, which shapes the amplitude.
  */
 export interface EnvelopeRecord {
   id: number;
   name: string;
-  /** ms. */
-  attack: number;
-  /** ms. */
-  decay: number;
-  /** 0 to 1. */
-  sustain: number;
-  /** ms. */
-  release: number;
+  /** 'adsr': four points, sustain on the third, sliders; 'free': any curve. */
+  mode: 'adsr' | 'free';
+  /** 'seconds': x in seconds, real time. 'fitted': x 0..1 spans the note or pass. */
+  time: 'seconds' | 'fitted';
+  curve: Curve;
+}
+
+/**
+ * A curve as Rust hands it back: optional fields arrive as `null`, which the
+ * curve editor's equality check and `adsrOf` do not expect.
+ */
+export function toCurve(v: unknown): Curve {
+  const raw = (v ?? {}) as {
+    points?: (CurvePoint & { tension?: number | null })[];
+    sustain?: number | null;
+  };
+  const points = (raw.points ?? []).map(({ tension, ...p }) =>
+    tension == null ? p : { ...p, tension },
+  );
+  return raw.sustain == null ? { points } : { points, sustain: raw.sustain };
 }
 
 export interface LinkRecord {
@@ -364,8 +377,18 @@ export const removeLfo = (id: number) => invoke<ModulationView>('remove_lfo', { 
 export const setLfo = (lfo: LfoRecord) => invoke<ModulationView>('set_lfo', { lfo });
 export const addEnvelope = () => invoke<ModulationView>('add_envelope');
 export const removeEnvelope = (id: number) => invoke<ModulationView>('remove_envelope', { id });
-export const setEnvelope = (envelope: EnvelopeRecord) =>
-  invoke<ModulationView>('set_envelope', { envelope });
+/**
+ * `coalesce` is for streamed input, a slider or a keyboard nudge: consecutive
+ * calls share one undo step. A discrete edit leaves it false.
+ */
+export const setEnvelope = (envelope: EnvelopeRecord, coalesce = false) =>
+  invoke<ModulationView>('set_envelope', { envelope, coalesce });
+/** A curve drag is one undo step: begin, apply per move, then end or cancel. */
+export const envelopeGestureBegin = (id: number) => invoke<void>('envelope_gesture_begin', { id });
+export const envelopeGestureApply = (envelope: EnvelopeRecord) =>
+  invoke<ModulationView>('envelope_gesture_apply', { envelope });
+export const envelopeGestureEnd = () => invoke<void>('envelope_gesture_end');
+export const envelopeGestureCancel = () => invoke<ModulationView>('envelope_gesture_cancel');
 export const linkParam = (id: string, source: number, lo: number, hi: number) =>
   invoke<ModulationView>('link_param', { id, source, lo, hi });
 export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param', { id });

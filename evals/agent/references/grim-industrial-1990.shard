@@ -735,11 +735,32 @@
       "id": "01M48E19Q8VG1BG2VRH9XWNTM0",
       "type": "mod-env",
       "values": {
-        "mod-env.attack": 1.0,
-        "mod-env.decay": 90.0,
-        "mod-env.label": "Filter snap",
-        "mod-env.release": 30.0,
-        "mod-env.sustain": 0.0
+        "mod-env.curve": {
+          "points": [
+            {
+              "basis": "linear",
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "basis": "linear",
+              "x": 0.001,
+              "y": 1.0
+            },
+            {
+              "basis": "linear",
+              "x": 0.091000006,
+              "y": 0.0
+            },
+            {
+              "basis": "linear",
+              "x": 0.12100001,
+              "y": 0.0
+            }
+          ],
+          "sustain": 2
+        },
+        "mod-env.label": "Filter snap"
       }
     },
     {

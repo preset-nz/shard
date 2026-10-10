@@ -521,11 +521,32 @@
       "id": "01M48DSQ260AJXX1ATC93JQ6C1",
       "type": "mod-env",
       "values": {
-        "mod-env.attack": 2.0,
-        "mod-env.decay": 180.0,
-        "mod-env.label": "Filter pluck",
-        "mod-env.release": 80.0,
-        "mod-env.sustain": 0.1
+        "mod-env.curve": {
+          "points": [
+            {
+              "basis": "linear",
+              "x": 0.0,
+              "y": 0.0
+            },
+            {
+              "basis": "linear",
+              "x": 0.002,
+              "y": 1.0
+            },
+            {
+              "basis": "linear",
+              "x": 0.18200001,
+              "y": 0.1
+            },
+            {
+              "basis": "linear",
+              "x": 0.26200002,
+              "y": 0.0
+            }
+          ],
+          "sustain": 2
+        },
+        "mod-env.label": "Filter pluck"
       }
     },
     {

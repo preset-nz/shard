@@ -238,6 +238,10 @@ fn links_compile_to_the_records_that_build_a_mod_set_today() {
     assert_eq!(m.lfos[0].shape, "sine");
     assert_eq!(m.envelopes.len(), 1);
     assert_eq!(m.envelopes[0].id, env);
+    // A new envelope reads back as the pluck, its defaults being the tree's.
+    let mut pluck = crate::modulation::new_envelope(env);
+    pluck.name = m.envelopes[0].name.clone();
+    assert_eq!(m.envelopes[0], pluck);
 
     let copy0 = fx::POOL
         .iter()

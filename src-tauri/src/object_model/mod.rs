@@ -27,17 +27,17 @@ use rhizome_core::{
     ValueKind, ValueSpec,
 };
 use rhizome_pom::{Kinds, NodeValues, ObjectModel};
-use serde_json::json;
+use serde_json::{json, Value as Json};
 use shard_dsp::arrangement;
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::HIT_MAX;
-use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
+use shard_dsp::modulation::{Shape as LfoShape, TimeBase, MAX_RATE_HZ, MIN_RATE_HZ};
 use shard_dsp::params::{ParamDef, Taper, GENERATORS, PARAMS};
 use shard_dsp::sources::OCTAVE_RANGE;
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
 
 use crate::materials::Pool;
-use crate::modulation::{new_envelope, MAX_STAGE_MS, NEW_RATE_HZ, NEW_SHAPE};
+use crate::modulation::{pluck_curve, MAX_CURVE_SECONDS, MODES, NEW_RATE_HZ, NEW_SHAPE};
 use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX, TEMPO_MAX, TEMPO_MIN};
 
 mod compile;
@@ -302,6 +302,130 @@ fn chain_fits(node: &Node<'_>) -> std::result::Result<(), String> {
     }
 }
 
+/// A mod envelope's curve as rhizome checks it, the shape ux-kit's curve
+/// editor uses: points with a basis and an optional tension, and an optional
+/// sustain index.
+fn curve_shape() -> Shape {
+    Shape::record([
+        (
+            "points",
+            Shape::list(Shape::record([
+                ("x", Shape::Float),
+                ("y", Shape::Float),
+                (
+                    "basis",
+                    Shape::choice(&["constant", "linear", "monotone", "catmull-rom"]),
+                ),
+                ("tension", Shape::optional(Shape::Float)),
+            ])),
+        ),
+        ("sustain", Shape::optional(Shape::Int)),
+    ])
+}
+
+/// A curve as the tree holds it. Written by hand rather than through serde,
+/// which would widen an `f32` to the `f64` that is not its shortest decimal:
+/// every float goes through `float`, so a save says `0.005` and a curve
+/// written back as it was compares equal.
+pub fn curve_json(curve: &preset_math::Curve) -> Json {
+    let points: Vec<Json> = curve
+        .points
+        .iter()
+        .map(|p| {
+            let mut o = serde_json::Map::new();
+            o.insert("x".into(), json!(float(p.x)));
+            o.insert("y".into(), json!(float(p.y)));
+            let basis = serde_json::to_value(p.basis).unwrap_or(Json::Null);
+            o.insert("basis".into(), basis);
+            if p.tension != 0.0 {
+                o.insert("tension".into(), json!(float(p.tension)));
+            }
+            Json::Object(o)
+        })
+        .collect();
+    let mut o = serde_json::Map::new();
+    o.insert("points".into(), Json::Array(points));
+    if let Some(i) = curve.sustain {
+        o.insert("sustain".into(), json!(i));
+    }
+    Json::Object(o)
+}
+
+/// A mod envelope's curve must be one the engine can play: sorted, inside the
+/// time base's span, in 0 to 1, and with a sustain mark that exists. In ADSR
+/// mode it must also be the shape the four sliders draw, because the editor
+/// shows sliders for it and a slider cannot say anything else.
+fn envelope_holds(node: &Node<'_>) -> std::result::Result<(), String> {
+    let Some(Value::Shaped(json)) = node.value("mod-env.curve") else {
+        return Err("a mod envelope needs a curve".into());
+    };
+    let curve: preset_math::Curve =
+        serde_json::from_value(json).map_err(|e| format!("the curve is not readable: {e}"))?;
+    let fitted = matches!(node.value("mod-env.time"), Some(Value::Choice(t)) if t == "fitted");
+    let adsr = matches!(node.value("mod-env.mode"), Some(Value::Choice(m)) if m == "adsr");
+    let span = if fitted { 1.0 } else { MAX_CURVE_SECONDS };
+
+    let pts = &curve.points;
+    if pts.is_empty() {
+        return Err("a curve needs at least one point".into());
+    }
+    let mut last = 0.0f32;
+    for (i, p) in pts.iter().enumerate() {
+        if p.x < 0.0 {
+            return Err(format!("point {i} is before the start (x {})", p.x));
+        }
+        if p.x < last {
+            return Err(format!(
+                "point {i} is before the one ahead of it (x {} after {last})",
+                p.x
+            ));
+        }
+        if p.x > span {
+            let unit = if fitted { "" } else { " seconds" };
+            return Err(format!(
+                "point {i} is past the end, x {} of {span}{unit}",
+                p.x
+            ));
+        }
+        if !(0.0..=1.0).contains(&p.y) {
+            return Err(format!("point {i} is outside 0 to 1 (y {})", p.y));
+        }
+        last = p.x;
+    }
+    if let Some(s) = curve.sustain.filter(|s| *s >= pts.len()) {
+        return Err(format!(
+            "the sustain mark is on point {s}, and there are {} points",
+            pts.len()
+        ));
+    }
+    if adsr {
+        // Four sliders can say only this shape, so anything else is a free
+        // curve and the mode must say so.
+        let why = if pts.len() != 4 {
+            Some(format!("it has {} points, not four", pts.len()))
+        } else if curve.sustain != Some(2) {
+            Some(format!(
+                "its sustain mark is {:?}, not on the third point",
+                curve.sustain
+            ))
+        } else if (pts[0].x, pts[0].y) != (0.0, 0.0) {
+            Some("it does not start at 0 at the start".into())
+        } else if pts[1].y != 1.0 {
+            Some("its attack does not reach 1".into())
+        } else if pts[3].y != 0.0 {
+            Some("its release does not end at 0".into())
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            return Err(format!(
+                "this is not an ADSR curve ({why}); a free curve needs the free mode"
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn is_effect(node: &Node<'_>) -> bool {
     Fx::from_name(node.type_name()).is_some()
 }
@@ -424,18 +548,17 @@ pub fn kinds() -> Vec<KindDecl> {
         None,
     );
 
-    let e = new_envelope(0);
-    let stage = |key: &str, ms: f32| ValueSpec::float(key, 0.0..=float(MAX_STAGE_MS), float(ms));
+    let mut curve = ValueSpec::shaped("mod-env.curve", curve_shape());
+    curve.default = Value::Shaped(curve_json(&pluck_curve()));
     let env = NodeType::new(MOD_ENV)
         .in_categories(&[PATCHES])
         .text("mod-env.label", "")
-        .value(stage("mod-env.attack", e.attack))
-        .value(stage("mod-env.decay", e.decay))
-        .float("mod-env.sustain", 0.0..=1.0, float(e.sustain))
-        .value(stage("mod-env.release", e.release))
+        .choice("mod-env.mode", &MODES, MODES[0])
+        .choice("mod-env.time", &TimeBase::NAMES, TimeBase::Seconds.name())
+        .value(curve)
         .bindable(link_values());
     push(
-        checked(env, Under::Patch, none),
+        checked(env, Under::Patch, envelope_holds),
         Role::Modulator,
         false,
         None,

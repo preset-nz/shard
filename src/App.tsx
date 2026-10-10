@@ -24,6 +24,10 @@ import {
   EMPTY_MAPPINGS,
   editTracker,
   envelopeCurve,
+  envelopeGestureApply,
+  envelopeGestureBegin,
+  envelopeGestureCancel,
+  envelopeGestureEnd,
   forgetMidi,
   format,
   fxAdd,
@@ -1239,7 +1243,15 @@ export default function App() {
                 linkedCounts={linkedCounts}
                 onSelect={select}
                 onLfoChange={(next) => void editMod(() => setLfo(next))}
-                onEnvelopeChange={(next) => void editMod(() => setModEnvelope(next))}
+                onEnvelopeChange={(next, coalesce) =>
+                  void editMod(() => setModEnvelope(next, coalesce))
+                }
+                envelopeGesture={{
+                  begin: (id) => void envelopeGestureBegin(id).catch((e) => setError(String(e))),
+                  apply: (next) => void editMod(() => envelopeGestureApply(next)),
+                  end: () => void envelopeGestureEnd().catch((e) => setError(String(e))),
+                  cancel: () => void editMod(envelopeGestureCancel),
+                }}
                 onError={setError}
                 onNote={setNote}
                 onPresetApplied={refreshMod}

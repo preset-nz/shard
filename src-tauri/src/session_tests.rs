@@ -638,3 +638,399 @@ fn undoing_back_to_what_was_saved_clears_the_unsaved_mark() {
     assert!(!r.session.is_unsaved());
     std::fs::remove_dir_all(&dir).ok();
 }
+
+// Mod envelopes: a curve, a mode and a time base (epic 32, story 6).
+
+use crate::modulation::EnvelopeRecord;
+use preset_math::{Basis, Curve, CurvePoint};
+
+fn pt(x: f32, y: f32, basis: Basis, tension: f32) -> CurvePoint {
+    CurvePoint {
+        x,
+        y,
+        basis,
+        tension,
+    }
+}
+
+/// A free curve with every feature the file must keep: a smooth basis, a
+/// bent linear segment, a sustain mark off the third point, and floats that
+/// are not exact in binary.
+fn free_curve() -> Curve {
+    Curve {
+        points: vec![
+            pt(0.0, 0.0, Basis::CatmullRom, 0.0),
+            pt(0.013, 0.9, Basis::CatmullRom, 0.0),
+            pt(0.4, 0.35, Basis::Linear, -0.3),
+            pt(0.7, 0.35, Basis::Monotone, 0.0),
+            pt(1.1, 0.0, Basis::Linear, 0.0),
+        ],
+        sustain: Some(3),
+    }
+}
+
+fn first_envelope(r: &Rig) -> EnvelopeRecord {
+    r.session.modulation().0.envelopes[0].clone()
+}
+
+/// Where the engine's envelope stands 20 ms into a one second pass, from the
+/// set the session last handed over (or the one before it, if none waits).
+fn engine_level(r: &Rig, held: &mut Option<shard_dsp::ModSet>) -> f32 {
+    if let Some(set) = r.mod_swap.lock().unwrap().take() {
+        *held = Some(set);
+    }
+    let set = held.as_mut().expect("the engine has a set");
+    let id = first_envelope(r).id;
+    set.clock_envelopes(960.0, 48_000.0, true, 48_000.0);
+    set.env_value(id).unwrap()
+}
+
+#[test]
+fn a_new_envelope_is_the_pluck_in_adsr_mode_in_seconds() {
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let mut e = first_envelope(&r);
+    let want = crate::modulation::new_envelope(e.id);
+    e.name = want.name.clone();
+    assert_eq!(e, want);
+    assert_eq!((e.mode.as_str(), e.time.as_str()), ("adsr", "seconds"));
+}
+
+#[test]
+fn a_drag_is_one_undo_step_and_undo_restores_the_curve_and_the_engine() {
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let was = first_envelope(&r);
+    let mut held = None;
+    let level_was = engine_level(&r, &mut held);
+    let steps_before = r.session.history_labels().0.len();
+
+    r.session.envelope_gesture_begin(was.id).unwrap();
+    let mut level_during = level_was;
+    for i in 1..=8 {
+        let mut e = was.clone();
+        e.curve.points[1].x = 0.005 + 0.01 * i as f32;
+        e.curve.points[2].x = e.curve.points[1].x + 0.3;
+        e.curve.points[3].x = e.curve.points[2].x + 0.1;
+        r.session.envelope_gesture_apply(e).unwrap();
+        level_during = engine_level(&r, &mut held);
+    }
+    assert_ne!(level_during, level_was, "the engine heard the drag");
+    assert_eq!(
+        r.session.history_labels().0.len(),
+        steps_before,
+        "no step is cut while the gesture is open"
+    );
+    r.session.envelope_gesture_end().unwrap();
+
+    let dragged = first_envelope(&r);
+    assert_ne!(dragged.curve, was.curve);
+    let (undo, _) = r.session.history_labels();
+    assert_eq!(undo.len(), steps_before + 1, "one step for the whole drag");
+    assert_eq!(undo.last().map(String::as_str), Some("Change envelope"));
+
+    assert_eq!(
+        r.session.undo().unwrap().as_deref(),
+        Some("Change envelope")
+    );
+    assert_eq!(first_envelope(&r), was, "undo restores the curve");
+    assert_eq!(engine_level(&r, &mut held), level_was, "and the engine");
+    r.session.redo().unwrap();
+    assert_eq!(first_envelope(&r), dragged);
+}
+
+#[test]
+fn escape_leaves_no_step_and_puts_the_envelope_back() {
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let was = first_envelope(&r);
+    let mut held = None;
+    let level_was = engine_level(&r, &mut held);
+    let steps_before = r.session.history_labels().0.len();
+
+    r.session.envelope_gesture_begin(was.id).unwrap();
+    let mut e = was.clone();
+    e.curve.points[1].x = 0.2;
+    e.curve.points[2].x = 0.5;
+    e.curve.points[3].x = 0.6;
+    r.session.envelope_gesture_apply(e).unwrap();
+    assert_ne!(engine_level(&r, &mut held), level_was);
+
+    r.session.envelope_gesture_cancel().unwrap();
+    assert_eq!(first_envelope(&r), was);
+    assert_eq!(engine_level(&r, &mut held), level_was, "the engine too");
+    assert_eq!(r.session.history_labels().0.len(), steps_before);
+    assert!(r.session.history_labels().1.is_empty(), "nothing to redo");
+
+    // A release after the cancel, and a second cancel, are harmless.
+    r.session.envelope_gesture_end().unwrap();
+    r.session.envelope_gesture_cancel().unwrap();
+    assert!(r.session.envelope_gesture_apply(was).is_err());
+}
+
+#[test]
+fn a_gesture_meeting_other_edits_neither_deadlocks_nor_panics() {
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let was = first_envelope(&r);
+
+    r.session.envelope_gesture_begin(was.id).unwrap();
+    let mut e = was.clone();
+    e.curve.points[3].x = 0.9;
+    r.session.envelope_gesture_apply(e.clone()).unwrap();
+
+    // Undo is refused while a drag is open, and says why.
+    assert!(r.session.undo().is_err());
+    // A knob turned mid-drag joins the drag's step.
+    r.session.set_param("grain.size", 77.0).unwrap();
+    // Another envelope, or none, is refused too.
+    assert!(r
+        .session
+        .envelope_gesture_apply(EnvelopeRecord {
+            id: 999_999,
+            ..e.clone()
+        })
+        .is_err());
+
+    // A new begin ends the old drag, keeping what it did as its own step.
+    let steps = r.session.history_labels().0.len();
+    r.session.envelope_gesture_begin(was.id).unwrap();
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    assert_eq!(first_envelope(&r).curve, e.curve, "kept, not cancelled");
+    r.session.envelope_gesture_cancel().unwrap();
+    assert_eq!(first_envelope(&r).curve, e.curve);
+
+    // A drag on an envelope that does not exist never opens.
+    assert!(r.session.envelope_gesture_begin(999_999).is_err());
+
+    // A document replaced mid-drag drops the drag.
+    r.session.envelope_gesture_begin(was.id).unwrap();
+    r.session.new_document(2).unwrap();
+    r.session.envelope_gesture_end().unwrap();
+    r.session.add_envelope().unwrap();
+    r.session.undo().unwrap();
+}
+
+#[test]
+fn mode_and_time_edits_round_trip_and_nudges_coalesce() {
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let mut e = first_envelope(&r);
+
+    e.mode = "free".into();
+    e.curve = free_curve();
+    r.session.set_envelope(e.clone(), false).unwrap();
+    assert_eq!(first_envelope(&r), e);
+
+    // Fitted needs a curve that spans 0 to 1, so time and curve go together.
+    e.time = "fitted".into();
+    e.curve = Curve {
+        points: vec![
+            pt(0.0, 0.0, Basis::Linear, 0.0),
+            pt(0.5, 1.0, Basis::Monotone, 0.0),
+            pt(1.0, 0.0, Basis::Linear, 0.0),
+        ],
+        sustain: None,
+    };
+    r.session.set_envelope(e.clone(), false).unwrap();
+    assert_eq!(first_envelope(&r), e);
+
+    let steps = r.session.history_labels().0.len();
+    for i in 0..5 {
+        e.curve.points[1].y = 0.5 + 0.1 * i as f32;
+        r.session.set_envelope(e.clone(), true).unwrap();
+    }
+    assert_eq!(
+        r.session.history_labels().0.len(),
+        steps + 1,
+        "coalesced nudges share a step"
+    );
+    r.session.undo().unwrap();
+    assert_eq!(first_envelope(&r).curve.points[1].y, 1.0);
+    r.session.undo().unwrap();
+    assert_eq!(first_envelope(&r).time, "seconds");
+}
+
+#[test]
+fn a_free_curve_with_a_sustain_mark_saves_and_opens_bit_exactly() {
+    let dir = std::env::temp_dir().join(format!("shard-envelope-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("curve.shard");
+
+    let a = rig();
+    a.session.add_envelope().unwrap();
+    let mut e = first_envelope(&a);
+    e.name = "Wobbly".into();
+    e.mode = "free".into();
+    e.curve = free_curve();
+    a.session.set_envelope(e.clone(), false).unwrap();
+    a.session.save(&path).unwrap();
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("catmull-rom"), "{text}");
+    assert!(
+        text.contains("0.013"),
+        "floats are written as typed: {text}"
+    );
+    assert!(!text.contains("0.0130000"), "{text}");
+
+    let b = rig();
+    let report = b.session.open(&path).unwrap();
+    assert!(report.unknown.is_empty(), "{:?}", report.unknown);
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+    let back = first_envelope(&b);
+    assert_eq!(back.curve, free_curve(), "bit for bit");
+    assert_eq!((back.mode.as_str(), back.name.as_str()), ("free", "Wobbly"));
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn an_envelope_the_tree_would_refuse_is_refused_with_its_reason() {
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let base = first_envelope(&r);
+    let adsr = |points: Vec<CurvePoint>, sustain: Option<usize>| EnvelopeRecord {
+        curve: Curve { points, sustain },
+        ..base.clone()
+    };
+    let free = |time: &str, points: Vec<CurvePoint>, sustain: Option<usize>| EnvelopeRecord {
+        mode: "free".into(),
+        time: time.into(),
+        curve: Curve { points, sustain },
+        ..base.clone()
+    };
+    let l = |x: f32, y: f32| pt(x, y, Basis::Linear, 0.0);
+    let good = || vec![l(0.0, 0.0), l(0.1, 1.0), l(0.3, 0.4), l(0.5, 0.0)];
+
+    let cases: Vec<(&str, EnvelopeRecord, &str)> = vec![
+        (
+            "adsr with five points",
+            adsr(
+                vec![
+                    l(0.0, 0.0),
+                    l(0.1, 1.0),
+                    l(0.3, 0.4),
+                    l(0.4, 0.4),
+                    l(0.5, 0.0),
+                ],
+                Some(2),
+            ),
+            "it has 5 points, not four",
+        ),
+        (
+            "adsr without a sustain mark",
+            adsr(good(), None),
+            "sustain mark is None",
+        ),
+        (
+            "adsr with the sustain on the wrong point",
+            adsr(good(), Some(1)),
+            "sustain mark is Some(1)",
+        ),
+        (
+            "adsr not starting at rest",
+            adsr(
+                vec![l(0.0, 0.2), l(0.1, 1.0), l(0.3, 0.4), l(0.5, 0.0)],
+                Some(2),
+            ),
+            "does not start at 0",
+        ),
+        (
+            "adsr not reaching the peak",
+            adsr(
+                vec![l(0.0, 0.0), l(0.1, 0.8), l(0.3, 0.4), l(0.5, 0.0)],
+                Some(2),
+            ),
+            "attack does not reach 1",
+        ),
+        (
+            "adsr not ending at rest",
+            adsr(
+                vec![l(0.0, 0.0), l(0.1, 1.0), l(0.3, 0.4), l(0.5, 0.1)],
+                Some(2),
+            ),
+            "release does not end at 0",
+        ),
+        (
+            "no points",
+            free("seconds", vec![], None),
+            "at least one point",
+        ),
+        (
+            "points out of order",
+            free("seconds", vec![l(0.0, 0.0), l(0.5, 1.0), l(0.2, 0.0)], None),
+            "before the one ahead of it",
+        ),
+        (
+            "a point before the start",
+            free("seconds", vec![l(-0.1, 0.0), l(0.5, 1.0)], None),
+            "before the start",
+        ),
+        (
+            "fitted past 1",
+            free("fitted", vec![l(0.0, 0.0), l(1.5, 1.0)], None),
+            "past the end",
+        ),
+        (
+            "seconds past 30",
+            free("seconds", vec![l(0.0, 0.0), l(31.0, 1.0)], None),
+            "past the end",
+        ),
+        (
+            "a level above 1",
+            free("seconds", vec![l(0.0, 0.0), l(0.5, 1.2)], None),
+            "outside 0 to 1",
+        ),
+        (
+            "a sustain mark off the end",
+            free("seconds", vec![l(0.0, 0.0), l(0.5, 1.0)], Some(2)),
+            "sustain mark",
+        ),
+        (
+            "seconds curve filed as fitted",
+            EnvelopeRecord {
+                time: "fitted".into(),
+                curve: Curve {
+                    points: vec![l(0.0, 0.0), l(1.0, 1.0), l(3.0, 0.4), l(5.0, 0.0)],
+                    sustain: Some(2),
+                },
+                ..base.clone()
+            },
+            "past the end",
+        ),
+    ];
+    for (what, record, reason) in cases {
+        let e = r
+            .session
+            .set_envelope(record.clone(), false)
+            .expect_err(what);
+        eprintln!("{what}: {e}");
+        assert!(e.contains(reason), "{what}: wrong reason, got “{e}”");
+        // The gesture path holds the same line, and leaves the gesture open.
+        r.session.envelope_gesture_begin(base.id).unwrap();
+        assert!(r.session.envelope_gesture_apply(record).is_err(), "{what}");
+        r.session.envelope_gesture_cancel().unwrap();
+        assert_eq!(first_envelope(&r), base, "{what} changed something");
+    }
+
+    // The names the webview sends are checked before the tree sees them.
+    for bad in [
+        EnvelopeRecord {
+            mode: "wobble".into(),
+            ..base.clone()
+        },
+        EnvelopeRecord {
+            time: "beats".into(),
+            ..base.clone()
+        },
+        EnvelopeRecord {
+            name: " ".into(),
+            ..base.clone()
+        },
+    ] {
+        let e = r.session.set_envelope(bad, false).unwrap_err();
+        eprintln!("{e}");
+    }
+    assert_eq!(first_envelope(&r), base);
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Add envelope"));
+}

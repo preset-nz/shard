@@ -756,6 +756,7 @@ impl Engine {
                     self.note.age as f32,
                     (length == Length::Hold).then_some(self.note.gate as f32),
                     self.note.id,
+                    self.pass_len,
                     self.sample_rate,
                 ),
             }
@@ -2296,10 +2297,8 @@ mod tests {
                 // 900 ms of attack across a one-second pass.
                 let rise = crate::modulation::EnvSpec {
                     id: 3,
-                    attack_ms: 900.0,
-                    decay_ms: 0.0,
-                    sustain: 1.0,
-                    release_ms: 0.0,
+                    curve: crate::modulation::adsr_curve(0.9, 0.0, 1.0, 0.0),
+                    time: crate::modulation::TimeBase::Seconds,
                 };
                 let mut set = ModSet::with_envelopes(&[], &[rise]);
                 set.link("fx.1.crush.mix", 3, 0.0, 1.0).unwrap();
@@ -2821,10 +2820,8 @@ mod tests {
     fn pluck(id: u64) -> crate::modulation::EnvSpec {
         crate::modulation::EnvSpec {
             id,
-            attack_ms: 10.0,
-            decay_ms: 50.0,
-            sustain: 0.5,
-            release_ms: 20.0,
+            curve: crate::modulation::adsr_curve(0.01, 0.05, 0.5, 0.02),
+            time: crate::modulation::TimeBase::Seconds,
         }
     }
 

@@ -13,6 +13,7 @@
   "dependencies": {
     "@preset.nz/app-kit": "^0.1.2",
     "@preset.nz/facets": "^0.2.0",
+    "@preset.nz/math": "^0.1.0",
     "@preset.nz/ux-kit": "^0.1.0",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",

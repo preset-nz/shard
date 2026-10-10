@@ -2,9 +2,9 @@
 //!
 //! **Two kinds of modulator, one id space.** An LFO runs on its own clock. A
 //! modulation envelope (Georg, 2026-09-27: the ADSR a Dark Energy switches onto
-//! its filter) runs on the pass's clock, as the amplitude envelope does: a
-//! step starts it, and it rests between steps. A link names either by id, so
-//! ids are unique across both lists.
+//! its filter, now any curve with a sustain mark) runs on the pass's clock, as
+//! the amplitude envelope does: a step starts it, and it rests between steps.
+//! A link names either by id, so ids are unique across both lists.
 //!
 //! **Resolution.** Both are read once per block and then smoothed per row, so
 //! no attack is faster than a row's smoothing (about 20 ms on most) and a
@@ -30,9 +30,9 @@
 //!   hand's value does not take part while a link exists; it is what you get
 //!   back when you unlink. Low above high runs the sweep the other way.
 
-use crate::envelope::EnvParams;
 use crate::params::{index_of, Taper, PARAMS};
 use crate::rng::Rng;
+use preset_math::{Basis, Curve as EnvCurve, CurvePoint};
 
 /// The slowest an LFO runs. Below this a cycle takes nearly two minutes, and
 /// the control stops meaning anything you can hear move.
@@ -204,48 +204,198 @@ fn bounce_out(t: f32) -> f32 {
     }
 }
 
-/// A modulation envelope as the document describes it. The same four stages
-/// as the amplitude envelope, fitted to the pass the same way.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// What a modulation envelope's curve is measured in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TimeBase {
+    /// Curve x is seconds, the way an ADSR's stages are real time. On the
+    /// pass's clock a curve longer than the pass is scaled down to fit it.
+    Seconds,
+    /// Curve x is 0 to 1, stretched over the pass, or over the note's gate.
+    /// The whole curve, release included, spans that length.
+    Fitted,
+}
+
+impl TimeBase {
+    pub const ALL: [TimeBase; 2] = [TimeBase::Seconds, TimeBase::Fitted];
+
+    /// How each time base is spelled in a patch, in the order of `ALL`.
+    /// **A wire format**, like `Shape::NAMES`.
+    pub const NAMES: [&'static str; 2] = ["seconds", "fitted"];
+
+    pub fn name(self) -> &'static str {
+        let i = Self::ALL.iter().position(|t| *t == self).unwrap_or(0);
+        Self::NAMES[i]
+    }
+
+    pub fn from_name(name: &str) -> Option<TimeBase> {
+        Self::NAMES
+            .iter()
+            .position(|n| *n == name)
+            .map(|i| Self::ALL[i])
+    }
+}
+
+/// The curve an ADSR draws: from rest up to the peak over the attack, down to
+/// the sustain level over the decay, and back to rest over the release, with
+/// the sustain mark on the third point. Linear throughout. Matches ux-kit's
+/// `adsrCurve`, which the sliders and the editor both write.
+pub fn adsr_curve(attack_s: f32, decay_s: f32, sustain: f32, release_s: f32) -> EnvCurve {
+    let a = attack_s.max(0.0);
+    let d = decay_s.max(0.0);
+    let r = release_s.max(0.0);
+    let point = |x: f32, y: f32| CurvePoint {
+        x,
+        y,
+        basis: Basis::Linear,
+        tension: 0.0,
+    };
+    EnvCurve {
+        points: vec![
+            point(0.0, 0.0),
+            point(a, 1.0),
+            point(a + d, sustain.clamp(0.0, 1.0)),
+            point(a + d + r, 0.0),
+        ],
+        sustain: Some(2),
+    }
+}
+
+/// A modulation envelope as the document describes it: a curve, and what its
+/// x axis means. An ADSR is the curve `adsr_curve` draws.
+///
+/// The curve is built on the command thread and crosses in the modulation
+/// swap, so evaluating it (which never allocates) is all the audio thread does.
+#[derive(Debug, Clone, PartialEq)]
 pub struct EnvSpec {
     /// Stable and never reused, and never the id of an LFO in the same set.
     pub id: u64,
-    pub attack_ms: f32,
-    pub decay_ms: f32,
-    /// 0 to 1.
-    pub sustain: f32,
-    pub release_ms: f32,
+    pub curve: EnvCurve,
+    pub time: TimeBase,
 }
 
 impl EnvSpec {
     /// The shape at `elapsed` samples into a pass `length` long, 0 at rest and
     /// 1 at the peak. Rest whenever no pass is sounding.
+    ///
+    /// In seconds, a curve that outlasts the pass is scaled down whole to fit
+    /// it, so its release still ends on the pass's last sample (the amplitude
+    /// envelope's rule). One that is shorter plays in real time and its
+    /// release is placed to finish at the end. Fitted, the curve spans the
+    /// pass.
     pub fn level_at(&self, elapsed: f32, length: f32, sounding: bool, sample_rate: f32) -> f32 {
-        if !sounding || length < 2.0 {
+        if !sounding || length < 2.0 || self.curve.points.is_empty() {
             return 0.0;
         }
-        EnvParams {
-            amount: 1.0,
-            attack_ms: self.attack_ms,
-            decay_ms: self.decay_ms,
-            sustain: self.sustain,
-            release_ms: self.release_ms,
-        }
-        .gain_at(elapsed, length, sample_rate)
+        let t = elapsed.clamp(0.0, length);
+        let level = match self.time {
+            TimeBase::Fitted => self.curve.evaluate(t / length),
+            TimeBase::Seconds => {
+                let end = self.end();
+                let length_s = length / sample_rate;
+                let t_s = t / sample_rate;
+                let k = if end > length_s { length_s / end } else { 1.0 };
+                let sustain = self.curve.sustain.filter(|&s| s < self.curve.points.len());
+                match sustain {
+                    Some(s) => {
+                        let release = end - self.curve.points[s].x;
+                        if release > 0.0 {
+                            let start = (length_s - release * k) / k;
+                            self.curve.evaluate_envelope(t_s / k, Some(start))
+                        } else {
+                            self.curve.evaluate_envelope(t_s / k, None)
+                        }
+                    }
+                    None => self.curve.evaluate(t_s / k),
+                }
+            }
+        };
+        level.clamp(0.0, 1.0)
     }
 
-    fn shape(&self) -> EnvParams {
-        EnvParams {
-            amount: 1.0,
-            attack_ms: self.attack_ms,
-            decay_ms: self.decay_ms,
-            sustain: self.sustain,
-            release_ms: self.release_ms,
+    /// The shape on the note clock: `age` samples into a note held for `gate`
+    /// samples, or for ever when `gate` is none. `pass_len` is the sample's
+    /// window, the only length a Loop note has to span. 0 at rest, 1 at the
+    /// peak.
+    ///
+    /// In seconds the curve plays in real time and the gate releases it.
+    /// Fitted, the whole curve spans the gate (Georg, 2026-10-10), release
+    /// included, then holds its last value; with no gate it spans one pass of
+    /// the sample.
+    ///
+    /// The first segment climbs from `from`, the level the last note had
+    /// reached, so a retrigger mid-release does not click: the curve's own
+    /// first segment is offset by the gap, and the offset fades out across
+    /// that segment. For a linear attack that is `from + (1 - from) * t / a`.
+    pub fn level_at_note(
+        &self,
+        age: f32,
+        gate: Option<f32>,
+        pass_len: f32,
+        from: f32,
+        sample_rate: f32,
+    ) -> f32 {
+        let pts = &self.curve.points;
+        if pts.is_empty() {
+            return 0.0;
         }
+        let from = from.clamp(0.0, 1.0);
+        let age = age.max(0.0);
+        let level = match self.time {
+            TimeBase::Fitted => {
+                let span = gate.unwrap_or(pass_len).max(1.0);
+                let x = age / span;
+                self.curve.evaluate(x) + self.retrigger_offset(x, from)
+            }
+            TimeBase::Seconds => {
+                let t = age / sample_rate;
+                let release = gate.map(|g| g / sample_rate);
+                let base = self.curve.evaluate_envelope(t, release);
+                match (release, self.curve.sustain.filter(|&s| s < pts.len())) {
+                    (Some(r), Some(s)) if t >= r => {
+                        // The release starts from the level reached with the
+                        // offset in it, so the offset carries into the first
+                        // release segment and fades out across it.
+                        let width = pts.get(s + 1).map_or(0.0, |p| p.x - pts[s].x);
+                        let fade = if s + 1 >= pts.len() {
+                            1.0
+                        } else if width > 0.0 {
+                            (1.0 - (t - r) / width).max(0.0)
+                        } else {
+                            0.0
+                        };
+                        base + self.retrigger_offset(r, from) * fade
+                    }
+                    _ => base + self.retrigger_offset(t, from),
+                }
+            }
+        };
+        level.clamp(0.0, 1.0)
+    }
+
+    /// The last point's x, which is where the shape ends.
+    fn end(&self) -> f32 {
+        self.curve.points.last().map_or(0.0, |p| p.x)
+    }
+
+    /// How far above the curve a retriggered note sits at `x`: the gap
+    /// between where the last note had got to and where the curve starts,
+    /// fading to nothing across the first segment. Nothing after it, and
+    /// nothing when the first segment has no width or the curve holds from
+    /// its first point.
+    fn retrigger_offset(&self, x: f32, from: f32) -> f32 {
+        let pts = &self.curve.points;
+        if pts.len() < 2 || self.curve.sustain == Some(0) {
+            return 0.0;
+        }
+        let width = pts[1].x - pts[0].x;
+        if width <= 0.0 || x < pts[0].x || x >= pts[1].x {
+            return 0.0;
+        }
+        (from - pts[0].y) * (1.0 - (x - pts[0].x) / width)
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 struct Env {
     spec: EnvSpec,
     /// This block's output, -1 at rest to 1 at the peak, so a link reads it
@@ -424,7 +574,7 @@ impl ModSet {
             envs: envs
                 .iter()
                 .map(|s| Env {
-                    spec: *s,
+                    spec: s.clone(),
                     value: -1.0,
                     from: 0.0,
                     note: 0,
@@ -506,7 +656,7 @@ impl ModSet {
     }
 
     /// The same, on the note clock, for the Loop and Hold lengths: `age`
-    /// samples into note number `note`, held for `gate` samples or for ever.
+    /// samples into note number `note`, held for `gate` samples or for ever, and `pass_len` the sample's window.
     /// A note number it has not seen is a new note, whose attack climbs from
     /// where the last one had got to.
     #[inline]
@@ -515,6 +665,7 @@ impl ModSet {
         age: f32,
         gate: Option<f32>,
         note: u32,
+        pass_len: f32,
         sample_rate: f32,
     ) {
         for env in &mut self.envs {
@@ -524,8 +675,7 @@ impl ModSet {
             }
             let level = env
                 .spec
-                .shape()
-                .shape_at_note(age, gate, env.from, sample_rate);
+                .level_at_note(age, gate, pass_len, env.from, sample_rate);
             env.value = 2.0 * level - 1.0;
         }
     }
@@ -839,5 +989,227 @@ mod tests {
                 }
             }
         }
+    }
+
+    // ----- Curve envelopes -----
+
+    use crate::envelope::EnvParams;
+
+    fn env(curve: EnvCurve, time: TimeBase) -> EnvSpec {
+        EnvSpec { id: 1, curve, time }
+    }
+
+    fn ramp() -> EnvCurve {
+        let p = |x: f32, y: f32| CurvePoint {
+            x,
+            y,
+            basis: Basis::Linear,
+            tension: 0.0,
+        };
+        EnvCurve {
+            points: vec![p(0.0, 0.0), p(1.0, 1.0)],
+            sustain: None,
+        }
+    }
+
+    /// ADSR settings in ms (attack, decay, sustain, release): ordinary ones,
+    /// zero stages, a release longer than the sustain stage, and stages that
+    /// together outlast a short pass.
+    const ADSRS: [(f32, f32, f32, f32); 9] = [
+        (10.0, 50.0, 0.5, 100.0),
+        (0.0, 0.0, 1.0, 0.0),
+        (0.0, 0.0, 0.6, 0.0),
+        (30.0, 0.0, 1.0, 0.0),
+        (0.0, 40.0, 0.3, 80.0),
+        (120.0, 120.0, 0.2, 400.0),
+        (5.0, 5.0, 0.0, 300.0),
+        (200.0, 100.0, 0.8, 250.0),
+        (1.0, 300.0, 0.4, 2.0),
+    ];
+
+    #[test]
+    fn the_old_adsr_and_the_adsr_curve_agree_on_the_pass_clock() {
+        // Old stage code (still the amplitude envelope's) against the curve.
+        // The old code caps each stage at the pass before scaling the three
+        // down; so does this, as slice b's builder must when it fits stages.
+        for (a, d, s, r) in ADSRS {
+            for length_ms in [40.0f32, 150.0, 500.0, 1_500.0] {
+                let length = length_ms * SR * 0.001;
+                let cap = |ms: f32| ms.min(length_ms);
+                let old = EnvParams {
+                    amount: 1.0,
+                    attack_ms: cap(a),
+                    decay_ms: cap(d),
+                    sustain: s,
+                    release_ms: cap(r),
+                };
+                let spec = env(
+                    adsr_curve(cap(a) / 1e3, cap(d) / 1e3, s, cap(r) / 1e3),
+                    TimeBase::Seconds,
+                );
+                for i in 0..=200 {
+                    let elapsed = length * i as f32 / 200.0;
+                    let (want, got) = (
+                        old.gain_at(elapsed, length, SR),
+                        spec.level_at(elapsed, length, true, SR),
+                    );
+                    assert!(
+                        (want - got).abs() < 1e-5,
+                        "adsr {a}/{d}/{s}/{r} on {length_ms} ms, at {i}/200: {want} vs {got}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_old_adsr_and_the_adsr_curve_agree_on_the_note_clock() {
+        for (a, d, s, r) in ADSRS {
+            let old = EnvParams {
+                amount: 1.0,
+                attack_ms: a,
+                decay_ms: d,
+                sustain: s,
+                release_ms: r,
+            };
+            let spec = env(adsr_curve(a / 1e3, d / 1e3, s, r / 1e3), TimeBase::Seconds);
+            for gate_ms in [None, Some(0.0), Some(5.0), Some(60.0), Some(400.0)] {
+                for from in [0.0, 0.4, 1.0] {
+                    let gate = gate_ms.map(|g: f32| g * SR * 0.001);
+                    for i in 0..=300 {
+                        let age = i as f32 * 0.005 * SR;
+                        let (want, got) = (
+                            old.shape_at_note(age, gate, from, SR).clamp(0.0, 1.0),
+                            spec.level_at_note(age, gate, 48_000.0, from, SR),
+                        );
+                        assert!(
+                            (want - got).abs() < 1e-5,
+                            "adsr {a}/{d}/{s}/{r}, gate {gate_ms:?}, from {from}, age {i}: {want} vs {got}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_fitted_ramp_reads_half_way_through_the_pass_and_the_gate() {
+        let e = env(ramp(), TimeBase::Fitted);
+        assert!((e.level_at(500.0, 1_000.0, true, SR) - 0.5).abs() < 1e-6);
+        assert!((e.level_at(1_000.0, 1_000.0, true, SR) - 1.0).abs() < 1e-6);
+        assert_eq!(e.level_at(500.0, 1_000.0, false, SR), 0.0, "rests between");
+        // Hold: the gate is the span, and the end holds after it.
+        let hold = |age: f32| e.level_at_note(age, Some(2_000.0), 9_999.0, 0.0, SR);
+        assert!((hold(1_000.0) - 0.5).abs() < 1e-6);
+        assert!((hold(2_000.0) - 1.0).abs() < 1e-6);
+        assert!((hold(50_000.0) - 1.0).abs() < 1e-6, "holds the end");
+        // Loop: there is no gate, so the sample's pass is the span.
+        let lp = |age: f32| e.level_at_note(age, None, 4_000.0, 0.0, SR);
+        assert!((lp(1_000.0) - 0.25).abs() < 1e-6);
+        assert!((lp(4_000.0) - 1.0).abs() < 1e-6);
+        assert!((lp(90_000.0) - 1.0).abs() < 1e-6, "holds the end");
+    }
+
+    #[test]
+    fn a_fitted_curve_has_its_release_inside_the_gate() {
+        // An adsr drawn over 0 to 1: its release is part of the span, so the
+        // level is back at rest when the gate closes.
+        let e = env(adsr_curve(0.1, 0.2, 0.5, 0.7), TimeBase::Fitted);
+        let at = |x: f32| e.level_at_note(x * 1_000.0, Some(1_000.0), 0.0, 0.0, SR);
+        assert!((at(0.1) - 1.0).abs() < 1e-5);
+        assert!((at(0.3) - 0.5).abs() < 1e-5);
+        assert!((at(0.65) - 0.25).abs() < 1e-5, "mid-release, while gated");
+        assert!(at(1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn a_retrigger_mid_release_starts_from_the_level_reached_without_a_jump() {
+        for time in TimeBase::ALL {
+            let curve = match time {
+                TimeBase::Seconds => adsr_curve(0.05, 0.1, 0.6, 0.4),
+                TimeBase::Fitted => adsr_curve(0.1, 0.2, 0.6, 0.7),
+            };
+            let mut set = ModSet::with_envelopes(&[], &[env(curve, time)]);
+            let gate = 0.2 * SR;
+            let mut prev: Option<f32> = None;
+            let mut max_step = 0.0f32;
+            let mut at_retrigger = None;
+            // Note 1 for 0.3 s (released at 0.2 s, mid-release), then note 2.
+            for note in [1u32, 2] {
+                for block in 0..((0.5 * SR) as usize / BLOCK) {
+                    let age = (block * BLOCK) as f32;
+                    set.clock_envelopes_note(age, Some(gate), note, 1.0 * SR, SR);
+                    let v = set.env_value(1).unwrap();
+                    assert!((-1.0..=1.0).contains(&v));
+                    if let Some(p) = prev {
+                        let step = (v - p).abs();
+                        if block == 0 && note == 2 {
+                            at_retrigger = Some(step);
+                        } else {
+                            max_step = max_step.max(step);
+                        }
+                    }
+                    prev = Some(v);
+                    if age > 0.3 * SR {
+                        break;
+                    }
+                }
+            }
+            assert!(
+                at_retrigger.unwrap() < 1e-5,
+                "{time:?}: the new note jumped by {at_retrigger:?}"
+            );
+            // A fitted attack is a tenth of a 0.2 s gate, so one block of it
+            // climbs about 0.53 of the range; a jump would be the whole gap.
+            assert!(max_step < 0.6, "{time:?}: blocks differ by {max_step}");
+        }
+    }
+
+    #[test]
+    fn a_curve_that_overshoots_still_modulates_within_one() {
+        let p = |x: f32, y: f32| CurvePoint {
+            x,
+            y,
+            basis: Basis::CatmullRom,
+            tension: 0.0,
+        };
+        let curve = EnvCurve {
+            points: vec![
+                p(0.0, 0.0),
+                p(0.2, 0.0),
+                p(0.4, 1.0),
+                p(0.6, 1.0),
+                p(1.0, 0.0),
+            ],
+            sustain: Some(3),
+        };
+        let raw_max = (0..=1000)
+            .map(|i| curve.evaluate(i as f32 / 1000.0))
+            .fold(f32::MIN, f32::max);
+        let raw_min = (0..=1000)
+            .map(|i| curve.evaluate(i as f32 / 1000.0))
+            .fold(f32::MAX, f32::min);
+        assert!(raw_max > 1.0 || raw_min < 0.0, "the curve should overshoot");
+        for time in TimeBase::ALL {
+            let e = env(curve.clone(), time);
+            for i in 0..=400 {
+                let age = i as f32 * 0.005 * SR;
+                for v in [
+                    e.level_at(age, 0.8 * SR, true, SR),
+                    e.level_at_note(age, None, 0.8 * SR, 0.3, SR),
+                    e.level_at_note(age, Some(0.5 * SR), 0.8 * SR, 1.0, SR),
+                ] {
+                    assert!((0.0..=1.0).contains(&v), "{time:?} gave {v}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_time_base_has_one_name_and_comes_back_from_it() {
+        for t in TimeBase::ALL {
+            assert_eq!(TimeBase::from_name(t.name()), Some(t));
+        }
+        assert_eq!(TimeBase::from_name("beats"), None);
     }
 }

@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "db64e1044540d098519e6a76198af08407cefd2fdf0dc629369c1762afa0f359"
+sha256 = "9339296f6dbdb6d43d5eb34559c8f8c84f125526f5a131544de44de0f8ad14e1"
 
 [[inputs]]
 path = "Cargo.toml"
@@ -14,7 +14,7 @@ sha256 = "28d18f796619aaf99d28c10229ff85711a3ccfa1f533373d20ec1944e0d36aaa"
 
 [[inputs]]
 path = "crates/shard-dsp/Cargo.toml"
-sha256 = "f034912f8046060608bb3b19d956fdc3c4317c1b4770e19cc93f69aff2833b48"
+sha256 = "6239f4cf93299ac993cfa41c2037732d248e0741efc1f1bc1a34f902a9673f37"
 
 [[inputs]]
 path = "crates/shard-play/Cargo.toml"
@@ -27,11 +27,11 @@ sha256 = "f3a33563a6f00ac348fee5597eb34274d3b9f469dfa19d3184da0913ad78a9d1"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "8d745810445ce66f48923b3570ab1d5f4cac8773b419f06a55f44d92c68f3a7b"
+sha256 = "f986d45b25c733aea3536d8ff74e60221b83b7f638d4a0d04eefdd16ecdd2640"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "a54a56982c2cec584073fa152ab7693ce26521736daf1f8fb5145c8f327f8377"
+sha256 = "7a6e3075f53e9464f39d8cab12a2c1fbd7726c909fbab08fb930b3b836a33bf4"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2349,6 +2349,14 @@ scope = "shipped"
 ecosystem = "cargo"
 name = "preset-app-kit"
 version = "0.1.2"
+source = "registry"
+declared = "MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
+name = "preset-math"
+version = "0.1.0"
 source = "registry"
 declared = "MIT"
 scope = "shipped"

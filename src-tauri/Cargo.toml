@@ -30,6 +30,8 @@ rhizome-pom = "0.1.4"
 # Menus, undo titles, files and relaunch, shared with the family (epic 32, story 4).
 preset-app-kit = "0.1.2"
 shard-dsp.workspace = true
+# A mod envelope is a curve, and the document holds it as JSON.
+preset-math = { version = "0.1", features = ["serde"] }
 cpal.workspace = true
 hound.workspace = true
 midir.workspace = true

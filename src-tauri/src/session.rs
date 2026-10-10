@@ -12,7 +12,7 @@
 //! reverse write the bank directly, and the mode (tracker or sound scaping)
 //! is the session's, not the document's (Georg, 2026-10-06).
 //!
-//! **Lock order:** `doc`, then `sent`, then `decoded`, then `feeding`, then the
+//! **Lock order:** `doc`, then `gesture`, then `sent`, then `decoded`, then `feeding`, then the
 //! engine's hand-off slots. Nothing here takes a controller lock; MIDI calls
 //! in with its own locks already released. Decoding a WAV never happens under
 //! `doc`: it happens before the edit that needs it.
@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use rhizome_core::{Edit, NodeId, On, Ref, Value};
+use rhizome_core::{Edit, GestureId, NodeId, On, Ref, Value};
 use rhizome_pom::{Document, FileStore, PresetRef};
 use serde::Serialize;
 use shard_dsp::arrangement;
@@ -34,7 +34,7 @@ use shard_dsp::{Generator, ModSet, ParamBank, ReadingBank};
 
 use crate::mapping::MapRef;
 use crate::materials::{self, Pool, DRONE_NAME};
-use crate::modulation::{self, Modulation, Refused, MAX_STAGE_MS};
+use crate::modulation::{self, Modulation, Refused};
 use crate::object_model::{
     self as om, arrangement_node, instance_of, locate, patch_node, to_value, Plan, Shard, ShardEdit,
 };
@@ -86,6 +86,12 @@ pub struct ApplyReport {
     pub refused: Vec<Refused>,
 }
 
+/// A gesture rhizome has open, and the envelope it edits.
+struct Open {
+    id: GestureId,
+    envelope: u64,
+}
+
 pub struct Session {
     doc: Mutex<Document<Shard>>,
     /// The plan the engine has, as last handed over.
@@ -98,6 +104,11 @@ pub struct Session {
     feeding: Mutex<[Option<Option<String>>; 2]>,
     feeds: Feeds,
     sample_rate: f32,
+    /// The envelope gesture in progress, if any. Its id cannot cross IPC, so
+    /// it sits here. **Lock order:** `doc`, then `gesture`, then the rest. It
+    /// is taken only with `doc` held, and only for the length of a read or a
+    /// take, never across `sync`.
+    gesture: Mutex<Option<Open>>,
     /// Which `Untitled-N` this is, while it has no file.
     untitled: AtomicU32,
     /// Told after every edit, undo, redo, open, new and save, with every lock
@@ -134,6 +145,7 @@ impl Session {
             feeding: Mutex::new([None, None]),
             feeds,
             sample_rate,
+            gesture: Mutex::new(None),
             untitled: AtomicU32::new(1),
             changed: OnceLock::new(),
         };
@@ -555,23 +567,108 @@ impl Session {
         Ok(())
     }
 
-    pub fn set_envelope(&self, env: modulation::EnvelopeRecord) -> Result<(), String> {
+    /// Writes an envelope's name, mode, time base and curve as one edit,
+    /// checking the record first so a bad one is a reason and not a refusal
+    /// from deep in the tree. Coalesced under `envelope:<id>` for input with no
+    /// begin and end (a slider, an arrow-key nudge); a plain edit otherwise.
+    pub fn set_envelope(
+        &self,
+        env: modulation::EnvelopeRecord,
+        coalesce: bool,
+    ) -> Result<(), String> {
         let node = self.modulator(env.id, om::MOD_ENV)?;
-        let stage = |ms: f32| Value::Float(om::float(ms.clamp(0.0, MAX_STAGE_MS)));
-        let name = modulation::valid_name(&env.name, "an envelope")?;
+        let writes = envelope_writes(&env)?;
         let key = format!("envelope:{}", env.id);
-        self.edit("Change envelope", Some(&key), |tx| {
-            tx.put(node, "mod-env.label", Value::Text(name))?;
-            tx.put(node, "mod-env.attack", stage(env.attack))?;
-            tx.put(node, "mod-env.decay", stage(env.decay))?;
-            tx.put(
-                node,
-                "mod-env.sustain",
-                Value::Float(om::float(env.sustain.clamp(0.0, 1.0))),
-            )?;
-            tx.put(node, "mod-env.release", stage(env.release))
+        self.edit("Change envelope", coalesce.then_some(key.as_str()), |tx| {
+            write_envelope(tx, node, &writes)
         })?;
         Ok(())
+    }
+
+    /// Opens a gesture on an envelope: a drag of a curve point, a handle or a
+    /// slider. Its applies are visible at once and cut one undo step at
+    /// `envelope_gesture_end`.
+    ///
+    /// A gesture already open (a drag whose end never came) is ended first, so
+    /// what it did is kept as its own step, rather than cancelled: the user
+    /// saw those changes land.
+    pub fn envelope_gesture_begin(&self, id: u64) -> Result<(), String> {
+        self.modulator(id, om::MOD_ENV)?;
+        let mut doc = lock(&self.doc);
+        let mut slot = lock(&self.gesture);
+        if let Some(old) = slot.take() {
+            let _ = doc.end(old.id);
+        }
+        let g = doc.begin("Change envelope").map_err(err)?;
+        *slot = Some(Open {
+            id: g,
+            envelope: id,
+        });
+        Ok(())
+    }
+
+    /// Writes the envelope inside the open gesture, and hands the engine what
+    /// changed. Nothing is cut into history until the gesture ends.
+    pub fn envelope_gesture_apply(&self, env: modulation::EnvelopeRecord) -> Result<(), String> {
+        let writes = envelope_writes(&env)?;
+        let mut doc = lock(&self.doc);
+        let g = self.open_gesture(env.id)?;
+        let node = doc
+            .projection()
+            .node_of(env.id)
+            .ok_or_else(|| format!("there is no envelope {}", env.id))?;
+        let (_, commit) = doc
+            .within(g, |tx| write_envelope(tx, node, &writes))
+            .map_err(err)?;
+        if commit.is_some() {
+            self.sync(&doc, false);
+        }
+        drop(doc);
+        if commit.is_some() {
+            self.changed();
+        }
+        Ok(())
+    }
+
+    /// Closes the gesture and cuts its undo step, if it changed anything.
+    /// Ending with none open is not an error: a release that follows a cancel.
+    pub fn envelope_gesture_end(&self) -> Result<(), String> {
+        let mut doc = lock(&self.doc);
+        let Some(open) = lock(&self.gesture).take() else {
+            return Ok(());
+        };
+        doc.end(open.id).map_err(err)?;
+        drop(doc);
+        // The step now exists, so the Undo title has changed.
+        self.changed();
+        Ok(())
+    }
+
+    /// Closes the gesture and puts the envelope back as it was when the
+    /// gesture began, leaving no undo step. Edits made elsewhere while it was
+    /// open (a knob) are put back with it, because rhizome restores the whole
+    /// tree to the gesture's start.
+    pub fn envelope_gesture_cancel(&self) -> Result<(), String> {
+        let mut doc = lock(&self.doc);
+        let Some(open) = lock(&self.gesture).take() else {
+            return Ok(());
+        };
+        let commit = doc.cancel(open.id).map_err(err)?;
+        if commit.is_some() {
+            self.sync(&doc, false);
+        }
+        drop(doc);
+        self.changed();
+        Ok(())
+    }
+
+    /// The open gesture's id, if it is on envelope `envelope`.
+    fn open_gesture(&self, envelope: u64) -> Result<GestureId, String> {
+        match &*lock(&self.gesture) {
+            Some(open) if open.envelope == envelope => Ok(open.id),
+            Some(_) => Err("a gesture is open on another envelope".into()),
+            None => Err("no envelope gesture is open".into()),
+        }
     }
 
     /// The patch parameter `id` follows modulator `source`, from `lo` to `hi`
@@ -889,6 +986,8 @@ impl Session {
         {
             let mut doc = lock(&self.doc);
             *doc = fresh;
+            // A gesture belonged to the document it was opened on.
+            lock(&self.gesture).take();
             self.untitled.store(untitled, Ordering::Relaxed);
             self.sync(&doc, true);
         }
@@ -927,6 +1026,7 @@ impl Session {
         {
             let mut current = lock(&self.doc);
             *current = doc;
+            lock(&self.gesture).take();
             self.sync(&current, true);
         }
         self.changed();
@@ -936,6 +1036,41 @@ impl Session {
 
 /// An undo or redo commit's label without the word rhizome puts in front:
 /// the webview says "Undid “Set Size”".
+/// An envelope record, checked and ready to write as one edit.
+struct EnvelopeWrites {
+    name: String,
+    mode: String,
+    time: String,
+    curve: serde_json::Value,
+}
+
+fn envelope_writes(env: &modulation::EnvelopeRecord) -> Result<EnvelopeWrites, String> {
+    if !modulation::MODES.contains(&env.mode.as_str()) {
+        return Err(format!("there is no envelope mode called “{}”", env.mode));
+    }
+    if shard_dsp::TimeBase::from_name(&env.time).is_none() {
+        return Err(format!(
+            "there is no envelope time base called “{}”",
+            env.time
+        ));
+    }
+    Ok(EnvelopeWrites {
+        name: modulation::valid_name(&env.name, "an envelope")?,
+        mode: env.mode.clone(),
+        time: env.time.clone(),
+        curve: om::curve_json(&env.curve),
+    })
+}
+
+/// Label, mode, time base and curve in one go, so the node's check sees them
+/// together: a curve in seconds and a fitted time base never meet half-written.
+fn write_envelope(tx: &mut Edit<'_>, node: NodeId, w: &EnvelopeWrites) -> rhizome_core::Result<()> {
+    tx.put(node, "mod-env.label", Value::Text(w.name.clone()))?;
+    tx.put(node, "mod-env.mode", Value::Choice(w.mode.clone()))?;
+    tx.put(node, "mod-env.time", Value::Choice(w.time.clone()))?;
+    tx.put(node, "mod-env.curve", Value::Shaped(w.curve.clone()))
+}
+
 fn bare(label: &str, word: &str) -> String {
     label.strip_prefix(word).unwrap_or(label).to_string()
 }

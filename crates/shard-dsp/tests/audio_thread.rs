@@ -10,11 +10,12 @@
 use std::hint::black_box;
 use std::sync::Mutex;
 
+use preset_math::Basis;
 use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
-    Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape, StepParams,
-    Taper, PARAMS,
+    adsr_curve, Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape,
+    StepParams, Taper, TimeBase, PARAMS,
 };
 
 #[global_allocator]
@@ -145,12 +146,33 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
     // Modulation envelopes too, retriggered by the steps below, following
     // every third row. Ids clear of the LFOs', as the document keeps them.
     let envs: Vec<EnvSpec> = (0..4u64)
-        .map(|i| EnvSpec {
-            id: 100 + i,
-            attack_ms: i as f32 * 7.0,
-            decay_ms: 20.0 + i as f32 * 30.0,
-            sustain: i as f32 * 0.3,
-            release_ms: i as f32 * 11.0,
+        .map(|i| {
+            let mut curve = adsr_curve(
+                i as f32 * 0.007,
+                0.02 + i as f32 * 0.03,
+                i as f32 * 0.3,
+                i as f32 * 0.011,
+            );
+            // One of each, so the sweep reaches both time bases, and a curve
+            // with a smooth basis and no sustain mark as well.
+            if i == 2 {
+                curve
+                    .points
+                    .iter_mut()
+                    .for_each(|p| p.basis = Basis::CatmullRom);
+            }
+            if i == 3 {
+                curve.sustain = None;
+            }
+            EnvSpec {
+                id: 100 + i,
+                curve,
+                time: if i % 2 == 0 {
+                    TimeBase::Seconds
+                } else {
+                    TimeBase::Fitted
+                },
+            }
         })
         .collect();
     let build = |lfos: &[LfoSpec], envs: &[EnvSpec]| {

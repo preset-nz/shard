@@ -18,8 +18,11 @@ rather than working around it.
 Three crates, and the boundary around the first is the important part.
 
 - `crates/shard-dsp` — the engine. **No audio device, no file I/O, no UI, no
-  async, no dependencies.** If something here needs a crate, it probably
-  belongs in the layer above. Everything is `cargo test`able with no sound
+  async, and one dependency: `preset-math`** (Georg, 2026-10-05), for the
+  modulation envelopes' curves. It has none of its own and its `evaluate`
+  never allocates; curves are built on the command thread and cross in the
+  modulation swap. If anything else here needs a crate, it probably belongs in
+  the layer above. Everything is `cargo test`able with no sound
   card.
 - `crates/shard-play` — a CLI that makes the engine audible. Owns cpal, hound
   and argument parsing.

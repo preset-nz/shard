@@ -2970,6 +2970,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "preset-math"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fe3baf1afd6b593dcb778411c5c38f8c5ef5e7325cd461d69b476aedd8869670"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "proc-macro-crate"
 version = "1.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3564,6 +3573,7 @@ dependencies = [
  "hound",
  "midir",
  "preset-app-kit",
+ "preset-math",
  "rhizome-core",
  "rhizome-pom",
  "serde",
@@ -3579,6 +3589,9 @@ dependencies = [
 [[package]]
 name = "shard-dsp"
 version = "0.2.0"
+dependencies = [
+ "preset-math",
+]
 
 [[package]]
 name = "shard-play"

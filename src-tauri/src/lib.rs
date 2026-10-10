@@ -654,13 +654,45 @@ fn remove_envelope(state: tauri::State<'_, Audio>, id: u64) -> Result<Modulation
     Ok(modulation_view(&state))
 }
 
-/// Change a modulation envelope's name and stages.
+/// Change a modulation envelope's name, mode, time base and curve. `coalesce`
+/// is for input with no begin and end (a nudge), which shares one undo step;
+/// a drag uses the gesture commands below.
 #[tauri::command]
 fn set_envelope(
     state: tauri::State<'_, Audio>,
     envelope: modulation::EnvelopeRecord,
+    coalesce: bool,
 ) -> Result<ModulationView, String> {
-    state.session.set_envelope(envelope)?;
+    state.session.set_envelope(envelope, coalesce)?;
+    Ok(modulation_view(&state))
+}
+
+/// Start dragging an envelope: until the end, its changes are one undo step.
+#[tauri::command]
+fn envelope_gesture_begin(state: tauri::State<'_, Audio>, id: u64) -> Result<(), String> {
+    state.session.envelope_gesture_begin(id)
+}
+
+/// A step of the drag: the envelope as it now stands.
+#[tauri::command]
+fn envelope_gesture_apply(
+    state: tauri::State<'_, Audio>,
+    envelope: modulation::EnvelopeRecord,
+) -> Result<ModulationView, String> {
+    state.session.envelope_gesture_apply(envelope)?;
+    Ok(modulation_view(&state))
+}
+
+/// Let go: the drag becomes one undo step.
+#[tauri::command]
+fn envelope_gesture_end(state: tauri::State<'_, Audio>) -> Result<(), String> {
+    state.session.envelope_gesture_end()
+}
+
+/// Escape: the envelope goes back to where the drag began, with no undo step.
+#[tauri::command]
+fn envelope_gesture_cancel(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
+    state.session.envelope_gesture_cancel()?;
     Ok(modulation_view(&state))
 }
 
@@ -1801,6 +1833,10 @@ pub fn run() {
             add_envelope,
             remove_envelope,
             set_envelope,
+            envelope_gesture_begin,
+            envelope_gesture_apply,
+            envelope_gesture_end,
+            envelope_gesture_cancel,
             link_param,
             unlink_param,
             get_heard,
@@ -2104,7 +2140,7 @@ mod tests {
         for key in ["id", "name", "rate", "shape", "phase"] {
             assert!(view["lfos"][0].get(key).is_some(), "LfoRecord lost `{key}`");
         }
-        for key in ["id", "name", "attack", "decay", "sustain", "release"] {
+        for key in ["id", "name", "mode", "time", "curve"] {
             assert!(
                 view["envelopes"][0].get(key).is_some(),
                 "EnvelopeRecord lost `{key}`"

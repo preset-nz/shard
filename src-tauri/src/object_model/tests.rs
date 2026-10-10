@@ -374,7 +374,7 @@ fn links_follow_the_rules_the_engine_has() {
     doc.edit("Link", |tx| tx.link(patch, "patch.hold", env, 0.0, 1.0))
         .unwrap();
     assert!(
-        doc.edit("Link", |tx| tx.link(env, "mod-env.attack", lfo, 0.0, 1.0))
+        doc.edit("Link", |tx| tx.link(env, "mod-env.curve", lfo, 0.0, 1.0))
             .is_err(),
         "a modulator's own settings are not parameters the engine can link"
     );

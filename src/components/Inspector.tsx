@@ -7,7 +7,7 @@ import type {
   MaterialView,
   ParamInfo,
 } from '@/audio';
-import { EnvelopeEditor } from '@/components/EnvelopeEditor';
+import { EnvelopeEditor, type EnvelopeGesture } from '@/components/EnvelopeEditor';
 import { LfoEditor } from '@/components/LfoEditor';
 import { MaterialEditor } from '@/components/MaterialEditor';
 import { isNodeOn, NodeHeader, WithNodePresets } from '@/components/NodeCard';
@@ -36,6 +36,7 @@ export function Inspector({
   onSelect,
   onLfoChange,
   onEnvelopeChange,
+  envelopeGesture,
   onError,
   onNote,
   onPresetApplied,
@@ -51,7 +52,8 @@ export function Inspector({
   linkedCounts: Map<number, number>;
   onSelect: (next: Selection) => void;
   onLfoChange: (next: LfoRecord) => void;
-  onEnvelopeChange: (next: EnvelopeRecord) => void;
+  onEnvelopeChange: (next: EnvelopeRecord, coalesce: boolean) => void;
+  envelopeGesture: EnvelopeGesture;
   onError: (message: string | null) => void;
   onNote: (message: string | null) => void;
   onPresetApplied: () => void;
@@ -82,6 +84,7 @@ export function Inspector({
         limits={limits}
         linked={linkedCounts.get(envelope.id) ?? 0}
         onChange={onEnvelopeChange}
+        gesture={envelopeGesture}
       />
     );
   }
@@ -156,6 +159,7 @@ export function Inspector({
               compact
               onOpen={() => onSelect({ kind: 'envelope', id: e.id })}
               onChange={onEnvelopeChange}
+              gesture={envelopeGesture}
             />
           ))}
         </div>

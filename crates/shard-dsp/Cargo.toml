@@ -4,7 +4,10 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# No dependencies, on purpose. This crate must build and test with no audio
-# device, no file I/O and no async runtime. If something here needs a crate,
-# it probably belongs in shard-play or the Tauri shell instead.
+# One dependency, on purpose: preset-math, for the modulation envelopes'
+# curves. It has none of its own and its evaluation never allocates. This
+# crate must still build and test with no audio device, no file I/O and no
+# async runtime; anything else that needs a crate probably belongs in
+# shard-play or the Tauri shell instead.
 [dependencies]
+preset-math = "0.1"
