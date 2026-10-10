@@ -567,7 +567,7 @@ impl Session {
         Ok(())
     }
 
-    /// Writes an envelope's name, mode, time base and curve as one edit,
+    /// Writes an envelope's name, mode and curve as one edit,
     /// checking the record first so a bad one is a reason and not a refusal
     /// from deep in the tree. Coalesced under `envelope:<id>` for input with no
     /// begin and end (a slider, an arrow-key nudge); a plain edit otherwise.
@@ -1040,7 +1040,6 @@ impl Session {
 struct EnvelopeWrites {
     name: String,
     mode: String,
-    time: String,
     curve: serde_json::Value,
 }
 
@@ -1048,26 +1047,18 @@ fn envelope_writes(env: &modulation::EnvelopeRecord) -> Result<EnvelopeWrites, S
     if !modulation::MODES.contains(&env.mode.as_str()) {
         return Err(format!("there is no envelope mode called “{}”", env.mode));
     }
-    if shard_dsp::TimeBase::from_name(&env.time).is_none() {
-        return Err(format!(
-            "there is no envelope time base called “{}”",
-            env.time
-        ));
-    }
     Ok(EnvelopeWrites {
         name: modulation::valid_name(&env.name, "an envelope")?,
         mode: env.mode.clone(),
-        time: env.time.clone(),
         curve: om::curve_json(&env.curve),
     })
 }
 
-/// Label, mode, time base and curve in one go, so the node's check sees them
-/// together: a curve in seconds and a fitted time base never meet half-written.
+/// Label, mode and curve in one go, so the node's check sees the mode and the
+/// curve together: an ADSR mode and a free curve never meet half-written.
 fn write_envelope(tx: &mut Edit<'_>, node: NodeId, w: &EnvelopeWrites) -> rhizome_core::Result<()> {
     tx.put(node, "mod-env.label", Value::Text(w.name.clone()))?;
     tx.put(node, "mod-env.mode", Value::Choice(w.mode.clone()))?;
-    tx.put(node, "mod-env.time", Value::Choice(w.time.clone()))?;
     tx.put(node, "mod-env.curve", Value::Shaped(w.curve.clone()))
 }
 

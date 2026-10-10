@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shard_dsp::{adsr_curve, EnvSpec, LfoSpec, ModSet, Shape, TimeBase};
+use shard_dsp::{adsr_curve, EnvSpec, LfoSpec, ModSet, Shape};
 
 /// Long enough for anything typed into the tree, short enough to stay a label.
 const MAX_NAME: usize = 60;
@@ -27,15 +27,6 @@ const MAX_NAME: usize = 60;
 /// A new LFO wanders slowly: the movement drift used to give.
 pub(crate) const NEW_RATE_HZ: f32 = 0.1;
 pub(crate) const NEW_SHAPE: &str = "smooth-random";
-
-/// The longest envelope stage, in ms: what an ADSR slider spans. The webview
-/// reads it.
-pub const MAX_STAGE_MS: f32 = 10_000.0;
-
-/// The longest a curve measured in seconds may run: an ADSR's three stages at
-/// their longest. The engine fits a curve to the pass anyway; this only keeps
-/// a typed number sane.
-pub const MAX_CURVE_SECONDS: f32 = 3.0 * MAX_STAGE_MS / 1000.0;
 
 /// How an envelope is edited: `adsr` is four sliders over a curve of fixed
 /// shape, `free` is any curve. The engine plays the curve either way.
@@ -69,14 +60,12 @@ pub struct EnvelopeRecord {
     /// One of `MODES`. In `adsr` the curve must be the shape `adsr_curve`
     /// draws; the mode is how the editor shows it.
     pub mode: String,
-    /// One of `TimeBase::NAMES`: whether the curve's x is seconds or 0 to 1
-    /// stretched over the pass.
-    pub time: String,
+    /// x runs 0 to 1: the share of the note, or of the pass, that has gone.
     pub curve: preset_math::Curve,
 }
 
 /// A new envelope is a pluck, the shape a filter envelope most often has:
-/// an ADSR in seconds. The tree's defaults say the same; this is the record
+/// an ADSR that fills the note. The tree's defaults say the same; this is the record
 /// the tests compare them with.
 #[cfg(test)]
 pub(crate) fn new_envelope(id: u64) -> EnvelopeRecord {
@@ -84,14 +73,14 @@ pub(crate) fn new_envelope(id: u64) -> EnvelopeRecord {
         id,
         name: format!("Mod envelope {id}"),
         mode: "adsr".into(),
-        time: TimeBase::Seconds.name().into(),
         curve: pluck_curve(),
     }
 }
 
-/// The pluck's curve: 5 ms up, 300 ms down to 0.2, 100 ms to rest.
+/// The pluck's curve, as shares of the note: 2% up, 38% down to 0.6, and the
+/// rest of the note (60%) to rest.
 pub(crate) fn pluck_curve() -> preset_math::Curve {
-    adsr_curve(0.005, 0.3, 0.2, 0.1)
+    adsr_curve(0.02, 0.38, 0.2, 0.6)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
@@ -174,20 +163,9 @@ impl Modulation {
                 });
                 continue;
             }
-            let Some(time) = TimeBase::from_name(&env.time) else {
-                refused.push(Refused {
-                    id: format!("envelope:{}", env.id),
-                    reason: format!(
-                        "envelope {} has a time base this build does not know, “{}”",
-                        env.id, env.time
-                    ),
-                });
-                continue;
-            };
             envs.push(EnvSpec {
                 id: env.id,
                 curve: env.curve.clone(),
-                time,
             });
         }
 

@@ -181,9 +181,13 @@ fn the_bass_is_acid_its_filter_plucked_on_every_note() {
     let unplucked = render(&still, bass, 2);
     let latency = Engine::new(SR, 1).latency();
     let ms = |t: f32| (t * 0.001 * SR) as usize;
+    // The curve spans the note, so the late window is a share of the note's
+    // length (two steps held), after the pluck has fallen to rest at 0.69 of it.
+    let gate = 2.0 * step_len(&bass);
+    let share = |f: f32| (f * gate) as usize;
     let fall = |out: &[f32], at: usize| {
         brightness(out, at + ms(5.0)..at + ms(45.0))
-            / brightness(out, at + ms(200.0)..at + ms(240.0))
+            / brightness(out, at + share(0.75)..at + share(0.95))
     };
     // The two-step notes, on the root and on the fifth.
     for k in [0usize, 10, 16, 26] {

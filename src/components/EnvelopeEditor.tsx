@@ -11,7 +11,6 @@ import {
   denormalise,
   type EnvelopeRecord,
   format,
-  type LfoLimits,
   normalise,
   type ParamInfo,
   toCurve,
@@ -40,23 +39,12 @@ export interface EnvelopeGesture {
   cancel: () => void;
 }
 
-/** The axis never shows less than this, so a short envelope is still a shape. */
-const MIN_AXIS_S = 0.5;
-/** Headroom past the curve's end, so its last point can still be dragged out. */
-const HEADROOM = 1.2;
-
-/** A tidy axis ceiling (1, 2, 5 times a power of ten) above `end` plus headroom. */
-function tidyCeiling(end: number): number {
-  const want = Math.max(MIN_AXIS_S, end * HEADROOM);
-  const mag = 10 ** Math.floor(Math.log10(want));
-  for (const m of [1, 2, 5, 10]) if (m * mag >= want - 1e-9) return m * mag;
-  return 10 * mag;
-}
+/** The curve spans the note, so x is always 0 to 1. */
+const X_DOMAIN: [number, number] = [0, 1];
 
 const curveEnd = (curve: Curve) => curve.points[curve.points.length - 1]?.x ?? 0;
 
-const formatSeconds = (x: number) => (x < 1 ? `${Math.round(x * 1000)} ms` : `${x.toFixed(2)} s`);
-const formatFitted = (x: number) => `${Math.round(x * 100)}% of the note`;
+const formatX = (x: number) => `${Math.round(x * 100)}% of the note`;
 const formatLevel = (y: number) => `${Math.round(y * 100)}%`;
 
 /**
@@ -65,7 +53,7 @@ const formatLevel = (y: number) => `${Math.round(y * 100)}%`;
  * the point after the peak, else half. A curve with no points after the peak
  * gets short stages, which the user then drags to taste.
  */
-function snapToAdsr(curve: Curve, time: 'seconds' | 'fitted'): Adsr {
+function snapToAdsr(curve: Curve): Adsr {
   const pts = curve.points;
   const fallback = 0.1;
   let peak = 0;
@@ -80,7 +68,7 @@ function snapToAdsr(curve: Curve, time: 'seconds' | 'fitted'): Adsr {
   const release = sus ? Math.max(0, curveEnd(curve) - sus.x) : fallback;
   const snapped = { attack, decay, sustain: sus ? sus.y : 0.5, release };
   const total = attack + decay + release;
-  if (time === 'fitted' && total > 1) {
+  if (total > 1) {
     return {
       ...snapped,
       attack: attack / total,
@@ -95,10 +83,9 @@ function snapToAdsr(curve: Curve, time: 'seconds' | 'fitted'): Adsr {
  * The selected modulation envelope: name, a curve, and for an ADSR its four
  * sliders.
  *
- * The curve is drawn and edited with ux-kit's `CurveEditor`. In seconds its x
- * is real time from the step that starts it; fitted, x runs 0 to 1 across the
- * note (or the pass), so it stretches with the step. At rest a linked row sits
- * on its low end, at the peak on its high end.
+ * The curve is drawn and edited with ux-kit's `CurveEditor`. Its x runs 0 to 1
+ * across the note (or the pass), so it stretches with the step. At rest a
+ * linked row sits on its low end, at the peak on its high end.
  *
  * An ADSR is four points with the sustain mark on the third; the sliders and
  * the editor both write those points. Free is any curve. Plain controls
@@ -111,7 +98,6 @@ function snapToAdsr(curve: Curve, time: 'seconds' | 'fitted'): Adsr {
  */
 export function EnvelopeEditor({
   envelope,
-  limits,
   linked = 0,
   compact = false,
   onOpen,
@@ -119,7 +105,6 @@ export function EnvelopeEditor({
   gesture,
 }: {
   envelope: EnvelopeRecord;
-  limits: LfoLimits;
   /** How many parameters follow this envelope. */
   linked?: number;
   compact?: boolean;
@@ -130,32 +115,25 @@ export function EnvelopeEditor({
   gesture: EnvelopeGesture;
 }) {
   const [name, setName] = useState(envelope.name);
-  // The axis ceiling held while a drag is in flight, so it does not jump
-  // under the pointer as the curve's end moves.
-  const [heldCeiling, setHeldCeiling] = useState<number | null>(null);
   const [askSnap, setAskSnap] = useState(false);
 
   const curve = toCurve(envelope.curve);
-  const fitted = envelope.time === 'fitted';
-  const maxStageS = limits.max_stage_ms / 1000;
-  const ceiling = fitted ? 1 : (heldCeiling ?? tidyCeiling(curveEnd(curve)));
   const adsr = envelope.mode === 'adsr' ? adsrOf(curve) : null;
 
   const edit = (next: Partial<EnvelopeRecord>, coalesce = false) =>
     onChange({ ...envelope, curve, ...next }, coalesce);
 
-  // Shaped like table rows so the same tapers and formatting apply. A stage
-  // at 1 ms is as good as none, and an exponential taper needs a floor above
-  // zero. Fitted stages are a share of the note, linear.
+  // Shaped like table rows so the same formatting applies. A stage is a
+  // share of the note, linear.
   const stage = (id: string, label: string): ParamInfo => ({
     id: `envelope.${id}`,
     name: label,
-    min: fitted ? 0 : 1,
-    max: fitted ? 1 : limits.max_stage_ms,
-    default: 100,
-    taper: fitted ? 'linear' : 'exponential',
+    min: 0,
+    max: 1,
+    default: 0.1,
+    taper: 'linear',
     steps: null,
-    unit: fitted ? '%' : 'ms',
+    unit: '%',
     smooth_ms: 0,
   });
   const sustain: ParamInfo = {
@@ -178,23 +156,23 @@ export function EnvelopeEditor({
     else setName(envelope.name);
   };
 
-  /** Write one ADSR field from a slider. Fitted stages share one note, so the moved one yields. */
+  /** Write one ADSR field from a slider. The stages share one note, so the moved one yields. */
   const setStage = (key: keyof Adsr, v: number) => {
     if (!adsr) return;
     const next = { ...adsr };
     if (key === 'sustain') next.sustain = v;
-    else if (fitted) {
+    else {
       const others = (['attack', 'decay', 'release'] as const)
         .filter((k) => k !== key)
         .reduce((sum, k) => sum + adsr[k], 0);
       next[key] = Math.max(0, Math.min(v, 1 - others));
-    } else next[key] = v / 1000;
+    }
     edit({ curve: adsrCurve(next) }, true);
   };
 
   const row = (def: ParamInfo, key: keyof Adsr) => {
     if (!adsr) return null;
-    const v = key === 'sustain' || fitted ? adsr[key] : adsr[key] * 1000;
+    const v = adsr[key];
     return (
       <div className="space-y-1">
         <div className="flex items-baseline gap-2">
@@ -222,16 +200,12 @@ export function EnvelopeEditor({
       mode="envelope"
       aria-label={`${envelope.name} envelope`}
       className={compact ? 'h-28' : undefined}
-      xDomain={[0, ceiling]}
-      formatX={fitted ? formatFitted : formatSeconds}
+      xDomain={X_DOMAIN}
+      formatX={formatX}
       formatY={formatLevel}
-      constrain={envelope.mode === 'adsr' ? constrainAdsr(fitted ? 1 : 3 * maxStageS) : undefined}
-      onGestureStart={() => {
-        setHeldCeiling(ceiling);
-        gesture.begin(envelope.id);
-      }}
+      constrain={envelope.mode === 'adsr' ? constrainAdsr(1) : undefined}
+      onGestureStart={() => gesture.begin(envelope.id)}
       onGestureEnd={(committed) => {
-        setHeldCeiling(null);
         if (committed) gesture.end();
         else gesture.cancel();
       }}
@@ -265,19 +239,6 @@ export function EnvelopeEditor({
     // Free to ADSR keeps the curve when it already is one; otherwise ask.
     if (mode === 'adsr' && !adsrOf(curve)) setAskSnap(true);
     else edit({ mode });
-  };
-
-  // Seconds to fitted puts the end on 1; fitted to seconds reads x as seconds,
-  // so a whole note becomes one second.
-  const switchTime = (time: EnvelopeRecord['time']) => {
-    if (time === envelope.time) return;
-    const end = curveEnd(curve);
-    const scale = time === 'fitted' ? (end > 0 ? 1 / end : 1) : 1;
-    const scaled: Curve = {
-      ...curve,
-      points: curve.points.map((p) => ({ ...p, x: p.x * scale })),
-    };
-    edit({ time, curve: scaled });
   };
 
   const pick =
@@ -318,17 +279,6 @@ export function EnvelopeEditor({
           <ToggleGroupItem value="adsr">ADSR</ToggleGroupItem>
           <ToggleGroupItem value="free">Free</ToggleGroupItem>
         </ToggleGroup>
-        <ToggleGroup
-          aria-label="Envelope time base"
-          variant="outline"
-          size="sm"
-          spacing={0}
-          value={[envelope.time]}
-          onValueChange={pick<EnvelopeRecord['time']>(switchTime)}
-        >
-          <ToggleGroupItem value="seconds">Seconds</ToggleGroupItem>
-          <ToggleGroupItem value="fitted">Fitted</ToggleGroupItem>
-        </ToggleGroup>
       </div>
       {adsr && (
         <>
@@ -339,8 +289,9 @@ export function EnvelopeEditor({
         </>
       )}
       <p className="text-[11px] text-muted-foreground">
-        Each step starts it, and it rests between steps. Seconds runs in real time. Fitted spans the
-        note, so it stretches with it; under Hold the whole curve, release too, fits the held time.{' '}
+        Each step starts it, and it rests between steps. The curve spans the note, or one pass of
+        the sample under Sample and Loop; under Hold the whole curve, release too, fits the held
+        time.{' '}
         {linked === 0
           ? 'Nothing follows it yet. Right-click a parameter to link it.'
           : `${linked} parameter${linked === 1 ? '' : 's'} follow${linked === 1 ? 's' : ''} it.`}
@@ -361,7 +312,7 @@ export function EnvelopeEditor({
             <Button
               onClick={() => {
                 setAskSnap(false);
-                edit({ mode: 'adsr', curve: adsrCurve(snapToAdsr(curve, envelope.time)) });
+                edit({ mode: 'adsr', curve: adsrCurve(snapToAdsr(curve)) });
               }}
             >
               Snap

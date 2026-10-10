@@ -322,7 +322,6 @@ fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulati
                 id,
                 name: text(&node, "mod-env.label"),
                 mode: text(&node, "mod-env.mode"),
-                time: text(&node, "mod-env.time"),
                 curve: match node.value("mod-env.curve") {
                     Some(Value::Shaped(j)) => serde_json::from_value(j).unwrap_or_default(),
                     _ => Default::default(),

@@ -591,8 +591,6 @@ pub struct LfoLimits {
     pub shapes: Vec<&'static str>,
     pub min_rate: f32,
     pub max_rate: f32,
-    /// The longest envelope stage, in ms.
-    pub max_stage_ms: f32,
 }
 
 #[tauri::command]
@@ -601,7 +599,6 @@ fn lfo_limits() -> LfoLimits {
         shapes: shard_dsp::Shape::NAMES.to_vec(),
         min_rate: shard_dsp::modulation::MIN_RATE_HZ,
         max_rate: shard_dsp::modulation::MAX_RATE_HZ,
-        max_stage_ms: modulation::MAX_STAGE_MS,
     }
 }
 
@@ -654,7 +651,7 @@ fn remove_envelope(state: tauri::State<'_, Audio>, id: u64) -> Result<Modulation
     Ok(modulation_view(&state))
 }
 
-/// Change a modulation envelope's name, mode, time base and curve. `coalesce`
+/// Change a modulation envelope's name, mode and curve. `coalesce`
 /// is for input with no begin and end (a nudge), which shares one undo step;
 /// a drag uses the gesture commands below.
 #[tauri::command]
@@ -2134,13 +2131,13 @@ mod tests {
         }
 
         let limits = serde_json::to_value(lfo_limits()).expect("LfoLimits is serialisable");
-        for key in ["shapes", "min_rate", "max_rate", "max_stage_ms"] {
+        for key in ["shapes", "min_rate", "max_rate"] {
             assert!(limits.get(key).is_some(), "LfoLimits lost `{key}`");
         }
         for key in ["id", "name", "rate", "shape", "phase"] {
             assert!(view["lfos"][0].get(key).is_some(), "LfoRecord lost `{key}`");
         }
-        for key in ["id", "name", "mode", "time", "curve"] {
+        for key in ["id", "name", "mode", "curve"] {
             assert!(
                 view["envelopes"][0].get(key).is_some(),
                 "EnvelopeRecord lost `{key}`"

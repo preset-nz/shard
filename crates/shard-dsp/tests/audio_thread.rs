@@ -15,7 +15,7 @@ use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
     adsr_curve, Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape,
-    StepParams, Taper, TimeBase, PARAMS,
+    StepParams, Taper, PARAMS,
 };
 
 #[global_allocator]
@@ -153,8 +153,7 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
                 i as f32 * 0.3,
                 i as f32 * 0.011,
             );
-            // One of each, so the sweep reaches both time bases, and a curve
-            // with a smooth basis and no sustain mark as well.
+            // A curve with a smooth basis, and one with no sustain mark.
             if i == 2 {
                 curve
                     .points
@@ -164,15 +163,7 @@ fn modulation_and_swapping_its_set_never_touch_the_allocator() {
             if i == 3 {
                 curve.sustain = None;
             }
-            EnvSpec {
-                id: 100 + i,
-                curve,
-                time: if i % 2 == 0 {
-                    TimeBase::Seconds
-                } else {
-                    TimeBase::Fitted
-                },
-            }
+            EnvSpec { id: 100 + i, curve }
         })
         .collect();
     let build = |lfos: &[LfoSpec], envs: &[EnvSpec]| {

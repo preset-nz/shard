@@ -31,13 +31,13 @@ use serde_json::{json, Value as Json};
 use shard_dsp::arrangement;
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::HIT_MAX;
-use shard_dsp::modulation::{Shape as LfoShape, TimeBase, MAX_RATE_HZ, MIN_RATE_HZ};
+use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
 use shard_dsp::params::{ParamDef, Taper, GENERATORS, PARAMS};
 use shard_dsp::sources::OCTAVE_RANGE;
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
 
 use crate::materials::Pool;
-use crate::modulation::{pluck_curve, MAX_CURVE_SECONDS, MODES, NEW_RATE_HZ, NEW_SHAPE};
+use crate::modulation::{pluck_curve, MODES, NEW_RATE_HZ, NEW_SHAPE};
 use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX, TEMPO_MAX, TEMPO_MIN};
 
 mod compile;
@@ -351,8 +351,8 @@ pub fn curve_json(curve: &preset_math::Curve) -> Json {
     Json::Object(o)
 }
 
-/// A mod envelope's curve must be one the engine can play: sorted, inside the
-/// time base's span, in 0 to 1, and with a sustain mark that exists. In ADSR
+/// A mod envelope's curve must be one the engine can play: sorted, with x and
+/// y both in 0 to 1, and with a sustain mark that exists. In ADSR
 /// mode it must also be the shape the four sliders draw, because the editor
 /// shows sliders for it and a slider cannot say anything else.
 fn envelope_holds(node: &Node<'_>) -> std::result::Result<(), String> {
@@ -361,9 +361,7 @@ fn envelope_holds(node: &Node<'_>) -> std::result::Result<(), String> {
     };
     let curve: preset_math::Curve =
         serde_json::from_value(json).map_err(|e| format!("the curve is not readable: {e}"))?;
-    let fitted = matches!(node.value("mod-env.time"), Some(Value::Choice(t)) if t == "fitted");
     let adsr = matches!(node.value("mod-env.mode"), Some(Value::Choice(m)) if m == "adsr");
-    let span = if fitted { 1.0 } else { MAX_CURVE_SECONDS };
 
     let pts = &curve.points;
     if pts.is_empty() {
@@ -380,12 +378,8 @@ fn envelope_holds(node: &Node<'_>) -> std::result::Result<(), String> {
                 p.x
             ));
         }
-        if p.x > span {
-            let unit = if fitted { "" } else { " seconds" };
-            return Err(format!(
-                "point {i} is past the end, x {} of {span}{unit}",
-                p.x
-            ));
+        if p.x > 1.0 {
+            return Err(format!("point {i} is past the end of the note (x {})", p.x));
         }
         if !(0.0..=1.0).contains(&p.y) {
             return Err(format!("point {i} is outside 0 to 1 (y {})", p.y));
@@ -554,7 +548,6 @@ pub fn kinds() -> Vec<KindDecl> {
         .in_categories(&[PATCHES])
         .text("mod-env.label", "")
         .choice("mod-env.mode", &MODES, MODES[0])
-        .choice("mod-env.time", &TimeBase::NAMES, TimeBase::Seconds.name())
         .value(curve)
         .bindable(link_values());
     push(

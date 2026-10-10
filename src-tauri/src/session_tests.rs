@@ -639,7 +639,7 @@ fn undoing_back_to_what_was_saved_clears_the_unsaved_mark() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
-// Mod envelopes: a curve, a mode and a time base (epic 32, story 6).
+// Mod envelopes: a curve and a mode, fitted to the note (epic 32, story 6).
 
 use crate::modulation::EnvelopeRecord;
 use preset_math::{Basis, Curve, CurvePoint};
@@ -663,7 +663,7 @@ fn free_curve() -> Curve {
             pt(0.013, 0.9, Basis::CatmullRom, 0.0),
             pt(0.4, 0.35, Basis::Linear, -0.3),
             pt(0.7, 0.35, Basis::Monotone, 0.0),
-            pt(1.1, 0.0, Basis::Linear, 0.0),
+            pt(1.0, 0.0, Basis::Linear, 0.0),
         ],
         sustain: Some(3),
     }
@@ -681,19 +681,19 @@ fn engine_level(r: &Rig, held: &mut Option<shard_dsp::ModSet>) -> f32 {
     }
     let set = held.as_mut().expect("the engine has a set");
     let id = first_envelope(r).id;
-    set.clock_envelopes(960.0, 48_000.0, true, 48_000.0);
+    set.clock_envelopes(960.0, 48_000.0, true);
     set.env_value(id).unwrap()
 }
 
 #[test]
-fn a_new_envelope_is_the_pluck_in_adsr_mode_in_seconds() {
+fn a_new_envelope_is_the_pluck_in_adsr_mode() {
     let r = rig();
     r.session.add_envelope().unwrap();
     let mut e = first_envelope(&r);
     let want = crate::modulation::new_envelope(e.id);
     e.name = want.name.clone();
     assert_eq!(e, want);
-    assert_eq!((e.mode.as_str(), e.time.as_str()), ("adsr", "seconds"));
+    assert_eq!(e.mode, "adsr");
 }
 
 #[test]
@@ -812,7 +812,7 @@ fn a_gesture_meeting_other_edits_neither_deadlocks_nor_panics() {
 }
 
 #[test]
-fn mode_and_time_edits_round_trip_and_nudges_coalesce() {
+fn mode_edits_round_trip_and_nudges_coalesce() {
     let r = rig();
     r.session.add_envelope().unwrap();
     let mut e = first_envelope(&r);
@@ -822,8 +822,7 @@ fn mode_and_time_edits_round_trip_and_nudges_coalesce() {
     r.session.set_envelope(e.clone(), false).unwrap();
     assert_eq!(first_envelope(&r), e);
 
-    // Fitted needs a curve that spans 0 to 1, so time and curve go together.
-    e.time = "fitted".into();
+    // A free curve with a smooth middle and no sustain mark.
     e.curve = Curve {
         points: vec![
             pt(0.0, 0.0, Basis::Linear, 0.0),
@@ -848,7 +847,7 @@ fn mode_and_time_edits_round_trip_and_nudges_coalesce() {
     r.session.undo().unwrap();
     assert_eq!(first_envelope(&r).curve.points[1].y, 1.0);
     r.session.undo().unwrap();
-    assert_eq!(first_envelope(&r).time, "seconds");
+    assert_eq!(first_envelope(&r).curve, free_curve());
 }
 
 #[test]
@@ -893,9 +892,8 @@ fn an_envelope_the_tree_would_refuse_is_refused_with_its_reason() {
         curve: Curve { points, sustain },
         ..base.clone()
     };
-    let free = |time: &str, points: Vec<CurvePoint>, sustain: Option<usize>| EnvelopeRecord {
+    let free = |points: Vec<CurvePoint>, sustain: Option<usize>| EnvelopeRecord {
         mode: "free".into(),
-        time: time.into(),
         curve: Curve { points, sustain },
         ..base.clone()
     };
@@ -951,51 +949,38 @@ fn an_envelope_the_tree_would_refuse_is_refused_with_its_reason() {
             ),
             "release does not end at 0",
         ),
-        (
-            "no points",
-            free("seconds", vec![], None),
-            "at least one point",
-        ),
+        ("no points", free(vec![], None), "at least one point"),
         (
             "points out of order",
-            free("seconds", vec![l(0.0, 0.0), l(0.5, 1.0), l(0.2, 0.0)], None),
+            free(vec![l(0.0, 0.0), l(0.5, 1.0), l(0.2, 0.0)], None),
             "before the one ahead of it",
         ),
         (
             "a point before the start",
-            free("seconds", vec![l(-0.1, 0.0), l(0.5, 1.0)], None),
+            free(vec![l(-0.1, 0.0), l(0.5, 1.0)], None),
             "before the start",
         ),
         (
-            "fitted past 1",
-            free("fitted", vec![l(0.0, 0.0), l(1.5, 1.0)], None),
-            "past the end",
-        ),
-        (
-            "seconds past 30",
-            free("seconds", vec![l(0.0, 0.0), l(31.0, 1.0)], None),
+            "past the end of the note",
+            free(vec![l(0.0, 0.0), l(1.5, 1.0)], None),
             "past the end",
         ),
         (
             "a level above 1",
-            free("seconds", vec![l(0.0, 0.0), l(0.5, 1.2)], None),
+            free(vec![l(0.0, 0.0), l(0.5, 1.2)], None),
             "outside 0 to 1",
         ),
         (
             "a sustain mark off the end",
-            free("seconds", vec![l(0.0, 0.0), l(0.5, 1.0)], Some(2)),
+            free(vec![l(0.0, 0.0), l(0.5, 1.0)], Some(2)),
             "sustain mark",
         ),
         (
-            "seconds curve filed as fitted",
-            EnvelopeRecord {
-                time: "fitted".into(),
-                curve: Curve {
-                    points: vec![l(0.0, 0.0), l(1.0, 1.0), l(3.0, 0.4), l(5.0, 0.0)],
-                    sustain: Some(2),
-                },
-                ..base.clone()
-            },
+            "an adsr drawn over more than the note",
+            adsr(
+                vec![l(0.0, 0.0), l(1.0, 1.0), l(3.0, 0.4), l(5.0, 0.0)],
+                Some(2),
+            ),
             "past the end",
         ),
     ];
@@ -1020,10 +1005,6 @@ fn an_envelope_the_tree_would_refuse_is_refused_with_its_reason() {
             ..base.clone()
         },
         EnvelopeRecord {
-            time: "beats".into(),
-            ..base.clone()
-        },
-        EnvelopeRecord {
             name: " ".into(),
             ..base.clone()
         },
@@ -1043,7 +1024,7 @@ fn an_envelope_as_the_webview_sends_it_is_accepted() {
     r.session.add_envelope().unwrap();
     let id = first_envelope(&r).id;
     let adsr: crate::modulation::EnvelopeRecord = serde_json::from_value(serde_json::json!({
-        "id": id, "name": "Pluck", "mode": "adsr", "time": "seconds",
+        "id": id, "name": "Pluck", "mode": "adsr",
         "curve": {"points": [
             {"x": 0.0, "y": 0.0, "basis": "linear"},
             {"x": 0.01, "y": 1.0, "basis": "linear"},
@@ -1056,7 +1037,7 @@ fn an_envelope_as_the_webview_sends_it_is_accepted() {
     assert_eq!(first_envelope(&r).curve, adsr.curve);
 
     let free: crate::modulation::EnvelopeRecord = serde_json::from_value(serde_json::json!({
-        "id": id, "name": "Pluck", "mode": "free", "time": "fitted",
+        "id": id, "name": "Pluck", "mode": "free",
         "curve": {"points": [
             {"x": 0.0, "y": 0.0, "basis": "monotone"},
             {"x": 1.0, "y": 1.0, "basis": "catmull-rom"}
@@ -1065,6 +1046,6 @@ fn an_envelope_as_the_webview_sends_it_is_accepted() {
     .unwrap();
     r.session.set_envelope(free.clone(), false).unwrap();
     let got = first_envelope(&r);
-    assert_eq!((got.mode.as_str(), got.time.as_str()), ("free", "fitted"));
+    assert_eq!(got.mode, "free");
     assert_eq!(got.curve, free.curve);
 }

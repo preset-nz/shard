@@ -750,14 +750,12 @@ impl Engine {
                     self.player.elapsed(),
                     self.pass_len,
                     self.player.sounding(),
-                    self.sample_rate,
                 ),
                 Length::Loop | Length::Hold => self.mods.clock_envelopes_note(
                     self.note.age as f32,
                     (length == Length::Hold).then_some(self.note.gate as f32),
                     self.note.id,
                     self.pass_len,
-                    self.sample_rate,
                 ),
             }
         }
@@ -2294,11 +2292,19 @@ mod tests {
             let mut e = Engine::new(48_000.0, 64);
             e.set_source(tone(48_000));
             if swell {
-                // 900 ms of attack across a one-second pass.
+                // A ramp across the whole one-second pass.
+                let point = |x: f32, y: f32| preset_math::CurvePoint {
+                    x,
+                    y,
+                    basis: preset_math::Basis::Linear,
+                    tension: 0.0,
+                };
                 let rise = crate::modulation::EnvSpec {
                     id: 3,
-                    curve: crate::modulation::adsr_curve(0.9, 0.0, 1.0, 0.0),
-                    time: crate::modulation::TimeBase::Seconds,
+                    curve: preset_math::Curve {
+                        points: vec![point(0.0, 0.0), point(1.0, 1.0)],
+                        sustain: None,
+                    },
                 };
                 let mut set = ModSet::with_envelopes(&[], &[rise]);
                 set.link("fx.1.crush.mix", 3, 0.0, 1.0).unwrap();
@@ -2816,12 +2822,12 @@ mod tests {
         assert!(render(false) == render(true));
     }
 
-    /// A pluck: fast up, down to half, released at the end of the pass.
+    /// A pluck: fast up, down to half by the middle of the pass, and away to
+    /// nothing at its end.
     fn pluck(id: u64) -> crate::modulation::EnvSpec {
         crate::modulation::EnvSpec {
             id,
-            curve: crate::modulation::adsr_curve(0.01, 0.05, 0.5, 0.02),
-            time: crate::modulation::TimeBase::Seconds,
+            curve: crate::modulation::adsr_curve(0.04, 0.46, 0.5, 0.5),
         }
     }
 
@@ -2885,9 +2891,9 @@ mod tests {
             &v[..10]
         );
         assert!(
-            (0.45..0.55).contains(&v[40]),
-            "not at its sustain mid-pass: {}",
-            v[40]
+            (0.45..0.55).contains(&v[25]),
+            "not half way down mid-pass: {}",
+            v[25]
         );
         assert!(rest(60..398), "moved between the steps");
         assert!(most(400..410) > 0.8, "no peak on the next bar");
@@ -2909,14 +2915,14 @@ mod tests {
         // amplitude envelope does, so it follows the material's octave.
         let down = cutoff_under_a_pluck(true, 0.0, 60);
         let up = cutoff_under_a_pluck(true, 1.0, 60);
-        assert!(down[35] > 0.4, "the pass should still be sounding");
-        assert!((up[35] - 0.1).abs() < 1e-4, "an octave up should be over");
+        assert!(down[25] > 0.4, "the pass should still be sounding");
+        assert!((up[30] - 0.1).abs() < 1e-4, "an octave up should be over");
     }
 
     #[test]
     fn under_hold_a_mod_envelope_follows_the_note_not_the_sample() {
-        // Held 100 ms and released over 20: at rest by 150 ms, at any octave,
-        // where under Sample it would ride the quarter-second pass.
+        // The whole curve spans the 100 ms hold: at rest by 150 ms, at any
+        // octave, where under Sample it would ride the quarter-second pass.
         for octave in [0.0, 2.0] {
             let v = cutoff_under_a_pluck_at(2.0, true, octave, 480);
             let most = v[0..10].iter().copied().fold(0.0, f32::max);

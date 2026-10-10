@@ -308,8 +308,7 @@ export interface EnvelopeRecord {
   name: string;
   /** 'adsr': four points, sustain on the third, sliders; 'free': any curve. */
   mode: 'adsr' | 'free';
-  /** 'seconds': x in seconds, real time. 'fitted': x 0..1 spans the note or pass. */
-  time: 'seconds' | 'fitted';
+  /** x runs 0 to 1 across the note, or the pass. */
   curve: Curve;
 }
 
@@ -352,8 +351,6 @@ export interface LfoLimits {
   shapes: string[];
   min_rate: number;
   max_rate: number;
-  /** The longest envelope stage, in ms. */
-  max_stage_ms: number;
 }
 
 /** Anything a parameter can follow, LFOs first, as the link menu lists them. */

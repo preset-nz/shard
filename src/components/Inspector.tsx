@@ -76,12 +76,11 @@ export function Inspector({
 
   if (selection.kind === 'envelope') {
     const envelope = ctx.mod.envelopes.find((e) => e.id === selection.id);
-    if (!envelope || !limits) return null;
+    if (!envelope) return null;
     return (
       <EnvelopeEditor
         key={envelope.id}
         envelope={envelope}
-        limits={limits}
         linked={linkedCounts.get(envelope.id) ?? 0}
         onChange={onEnvelopeChange}
         gesture={envelopeGesture}
@@ -155,7 +154,6 @@ export function Inspector({
             <EnvelopeEditor
               key={e.id}
               envelope={e}
-              limits={limits}
               compact
               onOpen={() => onSelect({ kind: 'envelope', id: e.id })}
               onChange={onEnvelopeChange}
