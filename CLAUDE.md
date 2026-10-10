@@ -95,7 +95,8 @@ patch without it.
   `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
   plain sample (`material`), the cloud (`grain`) and two-operator FM
   (`fm`). Generators are summed.
-- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix".
+- An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix", defaulting to 0: an added effect is silent until
+  its Mix is raised (Georg, 2026-10-10).
 - `amp.gain` is the master gain, after everything.
 - No row's name repeats its node's name, because the header already says it.
 - The panel draws rows in table order, so order in `params.rs` is layout.
