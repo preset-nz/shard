@@ -829,6 +829,20 @@ mod tests {
         repeats_no_node_name(&PARAMS, "");
     }
 
+    /// An added effect is silent until its Mix is raised (Georg, 2026-10-10),
+    /// in the patch and in the arrangement.
+    #[test]
+    fn every_effect_comes_in_with_its_mix_at_zero() {
+        let rows = PARAMS.iter().chain(crate::arrangement::params());
+        let mixes: Vec<_> = rows
+            .filter(|p| p.id.contains("fx.") && p.id.ends_with(".mix"))
+            .collect();
+        assert!(!mixes.is_empty());
+        for p in mixes {
+            assert_eq!(p.default, 0.0, "{}", p.id);
+        }
+    }
+
     #[test]
     fn bank_starts_at_defaults() {
         let bank = ParamBank::new();

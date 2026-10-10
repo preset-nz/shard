@@ -3663,6 +3663,7 @@ mod tests {
         let bank = ParamBank::new();
         for (id, v) in [
             ("fx.0.drive.on", 1.0),
+            ("fx.0.drive.mix", 1.0),
             ("fx.0.drive.amount", 18.0),
             ("fx.1.crush.on", 1.0),
             ("fx.1.crush.mix", 0.7),
