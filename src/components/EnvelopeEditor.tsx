@@ -1,5 +1,4 @@
 import type { Curve } from '@preset.nz/math';
-import { ToggleGroup, ToggleGroupItem } from '@preset.nz/ux-kit';
 import {
   type Adsr,
   adsrCurve,
@@ -28,6 +27,7 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Slider } from '@/components/ui/slider';
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 
 /**
  * How a curve drag reaches Rust: one drag is one undo step, so the editor

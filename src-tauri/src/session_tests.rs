@@ -1034,3 +1034,37 @@ fn an_envelope_the_tree_would_refuse_is_refused_with_its_reason() {
     assert_eq!(first_envelope(&r), base);
     assert_eq!(r.session.undo().unwrap().as_deref(), Some("Add envelope"));
 }
+
+#[test]
+fn an_envelope_as_the_webview_sends_it_is_accepted() {
+    // The JSON `EnvelopeEditor` sends: ux-kit's `adsrCurve` writes no
+    // `tension`, and a free curve may have no `sustain` key at all.
+    let r = rig();
+    r.session.add_envelope().unwrap();
+    let id = first_envelope(&r).id;
+    let adsr: crate::modulation::EnvelopeRecord = serde_json::from_value(serde_json::json!({
+        "id": id, "name": "Pluck", "mode": "adsr", "time": "seconds",
+        "curve": {"points": [
+            {"x": 0.0, "y": 0.0, "basis": "linear"},
+            {"x": 0.01, "y": 1.0, "basis": "linear"},
+            {"x": 0.2, "y": 0.4, "basis": "linear"},
+            {"x": 0.5, "y": 0.0, "basis": "linear"}
+        ], "sustain": 2}
+    }))
+    .unwrap();
+    r.session.set_envelope(adsr.clone(), false).unwrap();
+    assert_eq!(first_envelope(&r).curve, adsr.curve);
+
+    let free: crate::modulation::EnvelopeRecord = serde_json::from_value(serde_json::json!({
+        "id": id, "name": "Pluck", "mode": "free", "time": "fitted",
+        "curve": {"points": [
+            {"x": 0.0, "y": 0.0, "basis": "monotone"},
+            {"x": 1.0, "y": 1.0, "basis": "catmull-rom"}
+        ]}
+    }))
+    .unwrap();
+    r.session.set_envelope(free.clone(), false).unwrap();
+    let got = first_envelope(&r);
+    assert_eq!((got.mode.as_str(), got.time.as_str()), ("free", "fitted"));
+    assert_eq!(got.curve, free.curve);
+}
