@@ -244,6 +244,10 @@ pub enum Edit {
     PasteBar { bar: usize, steps: Vec<Step> },
     /// Copy bar `from` over every other bar within the track's length.
     RepeatBar { from: usize },
+    /// Play the pattern twice: copy the steps within the track's length after
+    /// themselves and double the length. A track already at `STEPS` is left
+    /// alone.
+    Duplicate,
     /// Slide the steps within the track's length by `by` places, wrapping
     /// round: positive is later.
     Rotate { by: i32 },
@@ -261,6 +265,7 @@ impl Tracker {
             Edit::ClearBar { .. } => "Clear a bar",
             Edit::PasteBar { .. } => "Paste a bar",
             Edit::RepeatBar { .. } => "Repeat a bar",
+            Edit::Duplicate => "Duplicate the pattern",
             Edit::Rotate { .. } => "Rotate the steps",
             Edit::Transpose { .. } => "Transpose the steps",
         }
@@ -291,6 +296,11 @@ impl Tracker {
                 for bar in (0..bars).filter(|bar| bar != from) {
                     t.steps[span(bar)].copy_from_slice(&source);
                 }
+            }
+            Edit::Duplicate if (t.length as usize) * 2 <= STEPS => {
+                let n = t.length as usize;
+                t.steps.copy_within(..n, n);
+                t.length *= 2;
             }
             Edit::Rotate { by } => {
                 let n = (t.length as usize).min(STEPS);
@@ -585,6 +595,20 @@ mod tests {
                 steps: source.clone(),
             });
         assert_eq!(&t.tracks[0].steps[16..32], &source[..]);
+    }
+
+    #[test]
+    fn duplicating_plays_the_pattern_twice_and_stops_at_the_longest_track() {
+        let one_bar = counted(16);
+        let t = one_bar.clone().apply(&Edit::Duplicate);
+        assert_eq!(t.tracks[0].length, 32);
+        assert_eq!(&t.tracks[0].steps[16..32], &one_bar.tracks[0].steps[..16]);
+        assert_eq!(&t.tracks[0].steps[..16], &one_bar.tracks[0].steps[..16]);
+        let short = counted(4).apply(&Edit::Duplicate);
+        assert_eq!(short.tracks[0].length, 8);
+        assert_eq!(&short.tracks[0].steps[4..8], &short.tracks[0].steps[..4]);
+        let full = counted(64);
+        assert_eq!(full.clone().apply(&Edit::Duplicate), full);
     }
 
     #[test]

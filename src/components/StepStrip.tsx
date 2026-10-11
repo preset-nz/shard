@@ -97,6 +97,9 @@ export function StepStrip({
       case 'repeat':
         onEdit({ op: 'repeat_bar', from: bar });
         break;
+      case 'duplicate':
+        onEdit({ op: 'duplicate' });
+        break;
       case 'clear':
         onEdit({ op: 'clear_bar', bar });
         break;
@@ -155,7 +158,7 @@ export function StepStrip({
       const keys: Record<string, string> = {
         c: 'copy',
         v: 'paste',
-        d: 'repeat',
+        d: 'duplicate',
         backspace: 'clear',
         arrowup: e.shiftKey ? 'octave-up' : 'up',
         arrowdown: e.shiftKey ? 'octave-down' : 'down',
@@ -279,7 +282,7 @@ export function StepStrip({
 
       <span
         className="font-mono text-[10px] tabular-nums"
-        title="Keys: A W S E D F T G Y H U J K play C to C in this octave and enter the note on the focused step, then move on. Z and X change octave. Arrows move between steps. [ and ] rotate the steps. The Pattern menu copies, pastes, repeats, clears and transposes the bar of the step last focused (⌥⌘C, ⌥⌘V, ⌘D, ⌥⌘⌫, ⌃⌘↑ and ⌃⌘↓), and rotates the track (⌘[ and ⌘]). Delete clears a step."
+        title="Keys: A W S E D F T G Y H U J K play C to C in this octave and enter the note on the focused step, then move on. Z and X change octave. Arrows move between steps. [ and ] rotate the steps. The Pattern menu copies, pastes, repeats, clears and transposes the bar of the step last focused (⌥⌘C, ⌥⌘V, ⌥⌘D, ⌥⌘⌫, ⌃⌘↑ and ⌃⌘↓), duplicates the pattern to twice its length (⌘D), and rotates the track (⌘[ and ⌘]). Delete clears a step."
       >
         keys C{keyOctave}
       </span>

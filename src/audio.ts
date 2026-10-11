@@ -482,6 +482,7 @@ export type TrackerEdit =
   | { op: 'clear_bar'; bar: number }
   | { op: 'paste_bar'; bar: number; steps: Step[] }
   | { op: 'repeat_bar'; from: number }
+  | { op: 'duplicate' }
   | { op: 'rotate'; by: number }
   | { op: 'transpose'; semis: number; bar: number | null };
 export const editTracker = (edit: TrackerEdit) => invoke<Tracker>('edit_tracker', { edit });
