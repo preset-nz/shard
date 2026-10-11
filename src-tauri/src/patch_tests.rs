@@ -712,3 +712,30 @@ fn a_copy_of_a_patch_missing_from_the_order_still_sits_after_it() {
     r.session.duplicate_patch(first).unwrap();
     assert_eq!(names(&r), ["Patch 1", "Patch 1 copy", "Patch 2"]);
 }
+
+#[test]
+fn a_pick_made_before_the_mode_switch_still_ends_on_the_tracks_patch() {
+    // The track row's picker: the Plays pick reaches Rust while the patch
+    // being shaped is current, and the switch to tracker mode after it.
+    let r = rig();
+    r.session.set_param("fm.on", 1.0).unwrap();
+    r.session.set_param("material.on", 0.0).unwrap();
+    let first = r.session.patches()[0].id;
+    let second = r.session.new_patch().unwrap();
+    r.session.select_patch(first).unwrap();
+    assert!(
+        !r.session.set_track_patch(second).unwrap(),
+        "not tracking yet"
+    );
+    assert_eq!(get(&r, "fm.on"), 1.0, "still shaping the first");
+
+    r.session.set_mode(true);
+    assert_eq!(current(&r).id, second);
+    assert_eq!(get(&r, "fm.on"), 0.0, "the track's patch plays");
+    assert_eq!(get(&r, "material.on"), 1.0);
+    assert_eq!(
+        undo_label(&r).as_deref(),
+        Some("Set Plays"),
+        "no step of its own"
+    );
+}

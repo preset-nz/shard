@@ -495,10 +495,29 @@ impl Session {
     }
 
     /// Tracker mode or sound scaping. Not an edit.
+    ///
+    /// Entering tracker mode plays the patch the track plays, whatever was
+    /// being shaped: the webview's mode switch and a *Plays* pick can arrive
+    /// in either order, and the engine must end on the track's patch.
     pub fn set_mode(&self, tracking: bool) {
-        if self.tracking.swap(tracking, Ordering::Relaxed) != tracking {
-            self.store_steps(&lock(&self.sent));
+        if self.tracking.swap(tracking, Ordering::Relaxed) == tracking {
+            return;
         }
+        if tracking {
+            let mut doc = lock(&self.doc);
+            let played = om::track_patch(doc.tree()).map(|p| p.id());
+            if played.is_some() && played != self.current() {
+                // A gesture on the patch being left ends with it.
+                let ended = self.end_gesture(&mut doc);
+                lock(&self.sent).current = played;
+                self.sync(&doc, false);
+                drop(doc);
+                if ended {
+                    self.changed();
+                }
+            }
+        }
+        self.store_steps(&lock(&self.sent));
     }
 
     /// Replaces the tracker. The first track's switch sets the mode and is not

@@ -226,6 +226,8 @@ export default function App() {
       const played = await setTracker(next);
       // Only the newest answer, or a slow one would undo a quicker click.
       if (seq === trackerSeq.current) setTrackerView(played);
+      // Entering tracker mode moves the engine to the track's patch.
+      setPatches(await listPatches());
     } catch (e) {
       setError(String(e));
     }
