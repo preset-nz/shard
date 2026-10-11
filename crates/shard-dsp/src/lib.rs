@@ -48,6 +48,7 @@ pub mod shift;
 pub mod smooth;
 pub mod sources;
 pub mod steps;
+mod voice;
 pub mod wear;
 
 pub use chorus::{Chorus, ChorusParams, ChorusType};
