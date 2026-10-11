@@ -22,6 +22,7 @@ export function GeneratorTree({
   onSelect,
   onAdd,
   onRemove,
+  nested = false,
 }: {
   /** Every generator type, in work-area order, and whether it is in the patch. */
   generators: Array<{ node: NodeInfo; on: boolean }>;
@@ -29,12 +30,21 @@ export function GeneratorTree({
   onSelect: (id: string | null) => void;
   onAdd: (id: string) => void;
   onRemove: (node: NodeInfo) => void;
+  /**
+   * Drawn as a child of the patch in the scene view: indented under its row,
+   * with a quieter heading.
+   */
+  nested?: boolean;
 }) {
   const present = generators.filter((g) => g.on);
   return (
-    <div className="py-2">
+    <div className={nested ? 'ml-4 border-l border-border py-1' : 'py-2'}>
       <div className="flex items-center pr-2 pl-3 pb-1">
-        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span
+          className={`flex-1 text-[11px] text-muted-foreground ${
+            nested ? 'font-medium' : 'font-semibold uppercase tracking-wider'
+          }`}
+        >
           Generators
         </span>
         <AddMenu

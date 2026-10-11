@@ -44,6 +44,7 @@ import {
   learnMidi,
   lfoLimits,
   linkParam,
+  listPatches,
   type MappingsView,
   type MaterialsView,
   type MaterialView,
@@ -54,6 +55,7 @@ import {
   modulatorsOf,
   newPatch,
   type ParamInfo,
+  type PatchInfo,
   type PatchPreview as PatchPreviewData,
   paramDefs,
   patchPreview,
@@ -66,6 +68,7 @@ import {
   removeMaterial,
   resetSound,
   type SourceInfo,
+  selectPatch,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -87,6 +90,7 @@ import { ModulatorTree } from '@/components/ModulatorTree';
 import { isNodeOn, NodeCard } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
 import { PatchPreview } from '@/components/PatchPreview';
+import { SceneView } from '@/components/SceneView';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { StepStrip } from '@/components/StepStrip';
 import { Waveform } from '@/components/Waveform';
@@ -124,22 +128,11 @@ const GRAIN_SCROLLBACK = 200;
  * freely so it can be heard the whole time it is shaped. Remembered across
  * launches as UI state, and written to the track's switch, which stays the one
  * thing that decides whether steps play.
+ *
+ * Since epic 10 the scene view picks the mode: selecting the track is tracker,
+ * selecting a patch is sound scaping. There is no switch for it.
  */
-const MODES = [
-  {
-    id: 'tracker',
-    label: 'Tracker',
-    title:
-      'Play the steps, through the arrangement: the patch at its fader, and the arrangement’s own effects and output over it. (⌘1)',
-  },
-  {
-    id: 'soundscape',
-    label: 'Sound scaping',
-    title:
-      'Loop the patch freely and shape it, heard alone without the arrangement. The steps rest. (⌘2)',
-  },
-] as const;
-type Mode = (typeof MODES)[number]['id'];
+type Mode = 'tracker' | 'soundscape';
 
 export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
@@ -196,6 +189,8 @@ export default function App() {
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
+  /** The session's patches, in order, as the scene view lists them. */
+  const [patches, setPatches] = useState<PatchInfo[]>([]);
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
   /** The active controller map, as the rows draw it. */
@@ -282,6 +277,7 @@ export default function App() {
         setMod(await readModulation());
         setLimits(await lfoLimits());
         setTrackerView(await getTracker());
+        setPatches(await listPatches());
       } catch (e) {
         setError(String(e));
       }
@@ -523,6 +519,7 @@ export default function App() {
         setWaves({});
         setPool(await readMaterials());
         setMod(await readModulation());
+        setPatches(await listPatches());
         // The document's tracker replaces the one on screen, and no answer to
         // an edit made before the load may put the old one back.
         trackerSeq.current++;
@@ -684,6 +681,7 @@ export default function App() {
         setTrackerView(await getTracker());
         setMod(await readModulation());
         setPool(await readMaterials());
+        setPatches(await listPatches());
         setNote(`${e.payload.undid ? 'Undid' : 'Redid'} “${e.payload.label}”.`);
       } catch (err) {
         setError(String(err));
@@ -721,7 +719,7 @@ export default function App() {
       }
       if ((e.metaKey || e.ctrlKey) && (e.key === '1' || e.key === '2')) {
         e.preventDefault();
-        setMode(e.key === '1' ? 'tracker' : 'soundscape');
+        menuRef.current(e.key === '1' ? 'view-tracker' : 'view-soundscape');
         return;
       }
       const t = e.target as HTMLElement | null;
@@ -783,13 +781,32 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, setBrake, setReverse, setShowDebugger, setMode, moveEffect, removeEffect]);
+  }, [togglePlay, setBrake, setReverse, setShowDebugger, moveEffect, removeEffect]);
 
   // The native menu bar: app-kit's, with Shard's commands (`menu.rs`). Each
   // item arrives as app-kit's `command` event carrying its id and runs the
   // same function the keyboard fallback above calls. Read through a ref, so
   // the bindings are made once. The tracker's Pattern items are the strip's
   // own. Undo and Redo, in a text field too, are app-kit's.
+  // The scene view's selections decide the mode (epic 10). None of them edits
+  // the document. The track shows the tracker and plays its steps; a patch
+  // becomes the current one if it is not, then shows its lanes and loops.
+  const selectTrack = () => setMode('tracker');
+  const selectPatchRow = async (id: number) => {
+    try {
+      if (!patches.find((p) => p.id === id)?.current) await selectPatch(id);
+      setMode('soundscape');
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const newPatchRow = () => {
+    // The panels read the new patch along `document-opened`.
+    void newPatch()
+      .then(() => setMode('soundscape'))
+      .catch((e) => setError(String(e)));
+  };
+
   const menuRef = useRef<(id: string) => void>(() => {});
   menuRef.current = (id) => {
     if (id.startsWith('fx-add:')) {
@@ -806,8 +823,7 @@ export default function App() {
         void pickFiles();
         break;
       case 'file-new-patch':
-        // The panels read the new patch along `document-opened`.
-        void newPatch().catch((e) => setError(String(e)));
+        newPatchRow();
         break;
       case 'file-reset-sound':
         void resetSound()
@@ -829,11 +845,14 @@ export default function App() {
         if (node?.fx) moveEffect(node, 1);
         break;
       case 'view-tracker':
-        setMode('tracker');
+        selectTrack();
         break;
-      case 'view-soundscape':
-        setMode('soundscape');
+      case 'view-soundscape': {
+        const current = patches.find((p) => p.current);
+        if (current) void selectPatchRow(current.id);
+        else setMode('soundscape');
         break;
+      }
       case 'view-inspector':
         setShowDebugger((v) => !v);
         break;
@@ -950,32 +969,85 @@ export default function App() {
             Rewind
           </button>
 
-          <fieldset className="flex rounded border border-border p-0.5" aria-label="Mode">
-            {MODES.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                aria-pressed={mode === m.id}
-                title={m.title}
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setMode(m.id)}
-                className={`rounded-sm px-2 py-0.5 text-xs ${
-                  mode === m.id
-                    ? 'bg-primary/15 text-primary'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </fieldset>
           <span className="text-sm font-semibold tracking-tight">Shard</span>
           <span className="text-xs text-muted-foreground">{document_?.title ?? 'Untitled-1'}</span>
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {mode === 'soundscape' && (
-            <nav className="w-48 shrink-0 overflow-y-auto border-r border-border">
+          {/* The scene view: the track, the patches and the materials, in
+            both what were the modes. Its selection decides the mode. The
+            current patch carries its generators and modulators. */}
+          <SceneView
+            patches={patches}
+            trackSelected={mode === 'tracker'}
+            selectedPatch={
+              mode === 'soundscape' ? (patches.find((p) => p.current)?.id ?? null) : null
+            }
+            onSelectTrack={selectTrack}
+            onSelectPatch={(id) => void selectPatchRow(id)}
+            onNewPatch={newPatchRow}
+            patchChildren={
+              <>
+                <GeneratorTree
+                  nested
+                  generators={generators}
+                  selected={selection?.kind === 'node' ? selection.id : null}
+                  onSelect={(id) => {
+                    if (id === null) return clear();
+                    select({ kind: 'node', id });
+                    setMode('soundscape');
+                  }}
+                  onAdd={(id) => {
+                    void setParam(`${id}.on`, 1).catch((e) => setError(String(e)));
+                    select({ kind: 'node', id });
+                    setMode('soundscape');
+                  }}
+                  onRemove={(node) => {
+                    void setParam(`${node.id}.on`, 0).catch((e) => setError(String(e)));
+                    const now = useSelection.getState().selection;
+                    if (now?.kind === 'node' && now.id === node.id) clear();
+                  }}
+                />
+                <ModulatorTree
+                  nested
+                  modulators={modulatorsOf(mod)}
+                  selected={selectedModulator}
+                  linked={linkedCounts}
+                  onSelect={(next) => {
+                    if (next === null) return clear();
+                    select(next);
+                    setMode('soundscape');
+                  }}
+                  onAdd={(kind) =>
+                    void editMod(async () => {
+                      setMode('soundscape');
+                      const view = kind === 'lfo' ? await addLfo() : await addEnvelope();
+                      // The new one is last; select it so it can be set up at once.
+                      const list = kind === 'lfo' ? view.lfos : view.envelopes;
+                      const added = list[list.length - 1];
+                      if (added) select({ kind, id: added.id });
+                      return view;
+                    })
+                  }
+                  onRemove={(m) =>
+                    void editMod(async () => {
+                      const view =
+                        m.kind === 'lfo' ? await removeLfo(m.id) : await removeEnvelope(m.id);
+                      const now = useSelection.getState().selection;
+                      if (now?.kind === m.kind && now.id === m.id) clear();
+                      const orphaned = linkedCounts.get(m.id) ?? 0;
+                      if (orphaned > 0) {
+                        setNote(
+                          `Removed ${m.name}. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
+                        );
+                      }
+                      return view;
+                    })
+                  }
+                />
+              </>
+            }
+            materials={
               <MaterialTree
                 pool={pool}
                 selected={selection?.kind === 'material' ? selection.id : null}
@@ -991,53 +1063,8 @@ export default function App() {
                   })
                 }
               />
-              <GeneratorTree
-                generators={generators}
-                selected={selection?.kind === 'node' ? selection.id : null}
-                onSelect={(id) => (id === null ? clear() : select({ kind: 'node', id }))}
-                onAdd={(id) => {
-                  void setParam(`${id}.on`, 1).catch((e) => setError(String(e)));
-                  select({ kind: 'node', id });
-                }}
-                onRemove={(node) => {
-                  void setParam(`${node.id}.on`, 0).catch((e) => setError(String(e)));
-                  const now = useSelection.getState().selection;
-                  if (now?.kind === 'node' && now.id === node.id) clear();
-                }}
-              />
-              <ModulatorTree
-                modulators={modulatorsOf(mod)}
-                selected={selectedModulator}
-                linked={linkedCounts}
-                onSelect={(next) => (next === null ? clear() : select(next))}
-                onAdd={(kind) =>
-                  void editMod(async () => {
-                    const view = kind === 'lfo' ? await addLfo() : await addEnvelope();
-                    // The new one is last; select it so it can be set up at once.
-                    const list = kind === 'lfo' ? view.lfos : view.envelopes;
-                    const added = list[list.length - 1];
-                    if (added) select({ kind, id: added.id });
-                    return view;
-                  })
-                }
-                onRemove={(m) =>
-                  void editMod(async () => {
-                    const view =
-                      m.kind === 'lfo' ? await removeLfo(m.id) : await removeEnvelope(m.id);
-                    const now = useSelection.getState().selection;
-                    if (now?.kind === m.kind && now.id === m.id) clear();
-                    const orphaned = linkedCounts.get(m.id) ?? 0;
-                    if (orphaned > 0) {
-                      setNote(
-                        `Removed ${m.name}. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
-                      );
-                    }
-                    return view;
-                  })
-                }
-              />
-            </nav>
-          )}
+            }
+          />
 
           <main className="flex min-w-0 flex-1 flex-col gap-4 p-4">
             {/* The waveform follows the selection. Its title selects the

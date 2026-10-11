@@ -70,8 +70,8 @@ pub fn commands() -> Vec<Command> {
         file("file-new-patch", "New Patch", 1),
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Import…", 1),
-        view("view-tracker", "Tracker", 0),
-        view("view-soundscape", "Sound Scaping", 0),
+        view("view-tracker", "Track", 0),
+        view("view-soundscape", "Patch", 0),
         view("view-inspector", "Grain Inspector", 1),
     ];
     // The process lane's palette (`design/effect-palette.md`).

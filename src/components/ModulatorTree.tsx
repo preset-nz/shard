@@ -23,6 +23,7 @@ export function ModulatorTree({
   onSelect,
   onAdd,
   onRemove,
+  nested = false,
 }: {
   /** LFOs first, then envelopes. */
   modulators: Modulator[];
@@ -32,11 +33,20 @@ export function ModulatorTree({
   onSelect: (next: { kind: Kind; id: number } | null) => void;
   onAdd: (kind: Kind) => void;
   onRemove: (m: Modulator) => void;
+  /**
+   * Drawn as a child of the patch in the scene view: indented under its row,
+   * with a quieter heading.
+   */
+  nested?: boolean;
 }) {
   return (
-    <div className="py-2">
+    <div className={nested ? 'ml-4 border-l border-border py-1' : 'py-2'}>
       <div className="flex items-center gap-1 pr-2 pl-3 pb-1">
-        <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
+        <span
+          className={`flex-1 text-[11px] text-muted-foreground ${
+            nested ? 'font-medium' : 'font-semibold uppercase tracking-wider'
+          }`}
+        >
           Modulators
         </span>
         <AddMenu<Kind>
