@@ -140,6 +140,8 @@ export interface PatchInfo {
   current: boolean;
   /** The patch the track plays. */
   played: boolean;
+  /** Whether Delete may take it: not the last patch, nor the one the track plays. */
+  deletable: boolean;
 }
 
 /** The session's patches, in order. */
@@ -158,6 +160,24 @@ export const selectPatch = (id: number) => invoke<void>('select_patch', { id });
  * `document-opened`, because the engine moves to that patch.
  */
 export const setTrackPatch = (id: number) => invoke<void>('set_track_patch', { id });
+
+/**
+ * Rename a patch. One step of Undo, "Rename Patch 2"; an empty or unchanged
+ * name makes none. Answers whether it changed. Reread `listPatches` after.
+ */
+export const renamePatch = (id: number, name: string) =>
+  invoke<boolean>('rename_patch', { id, name });
+/**
+ * Delete a patch. One step of Undo, "Delete Patch 2". Refused for the last
+ * patch and the one the track plays. When it was current, Rust emits
+ * `document-opened`; reread `listPatches` either way.
+ */
+export const deletePatch = (id: number) => invoke<void>('delete_patch', { id });
+/**
+ * Duplicate a patch, straight after it, and make the copy current. One step
+ * of Undo, "Duplicate Patch 2". Followed by `document-opened`.
+ */
+export const duplicatePatch = (id: number) => invoke<number>('duplicate_patch', { id });
 
 export const meters = () => invoke<Meters>('meters');
 

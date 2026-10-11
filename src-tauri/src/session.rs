@@ -95,6 +95,9 @@ pub struct PatchInfo {
     pub current: bool,
     /// The patch the track plays.
     pub played: bool,
+    /// Whether Delete may take it: not the last patch, and not the one the
+    /// track plays.
+    pub deletable: bool,
 }
 
 /// What applying a preset did.
@@ -1004,8 +1007,9 @@ impl Session {
             let tree = d.tree();
             let current = patch_node(tree, self.current()).map(|n| n.id());
             let played = om::track_patch(tree).map(|n| n.id());
-            om::patches(tree)
-                .iter()
+            let all = om::patches(tree);
+            let several = all.len() > 1;
+            all.iter()
                 .enumerate()
                 .filter_map(|(i, p)| {
                     Some(PatchInfo {
@@ -1013,6 +1017,7 @@ impl Session {
                         name: om::patch_name(p, i),
                         current: Some(p.id()) == current,
                         played: Some(p.id()) == played,
+                        deletable: several && Some(p.id()) != played,
                     })
                 })
                 .collect()
@@ -1043,19 +1048,110 @@ impl Session {
         id.ok_or_else(|| "the new patch did not compile".to_string())
     }
 
+    /// Renames a patch: its `patch.label`, trimmed. One undo step named for
+    /// the name it had, "Rename Patch 2". An empty name, or the name it
+    /// already shows, changes nothing and makes no step. Answers whether it
+    /// changed.
+    pub fn rename_patch(&self, id: u64, name: &str) -> Result<bool, String> {
+        let (node, old) = self.read(|d| {
+            let node = patch_of(d, id)?;
+            Ok::<_, String>((node, display_name(d.tree(), node)))
+        })?;
+        if name.trim().is_empty() || name.trim() == old {
+            return Ok(false);
+        }
+        let name = modulation::valid_name(name, "a patch")?;
+        let (_, changed) = self.edit(&format!("Rename {old}"), None, |tx| {
+            tx.set_value(node, om::PATCH_LABEL, Value::Text(name))
+        })?;
+        Ok(changed)
+    }
+
+    /// Deletes a patch and everything in it: its chain, modulators and links.
+    /// One undo step, "Delete Patch 2", and undo brings it back as it was, in
+    /// its place. Refused for the last patch and for the one the track plays.
+    /// When it was current, the track's patch becomes current. Answers
+    /// whether the current patch changed.
+    pub fn delete_patch(&self, id: u64) -> Result<bool, String> {
+        let mut doc = lock(&self.doc);
+        let node = patch_of(&doc, id)?;
+        let name = display_name(doc.tree(), node);
+        if om::patches(doc.tree()).len() <= 1 {
+            return Err(format!("{name} is the only patch, so it can't be deleted"));
+        }
+        if om::track_patch(doc.tree()).map(|p| p.id()) == Some(node) {
+            return Err(format!(
+                "the track plays {name}; pick another patch for it to play first"
+            ));
+        }
+        let was_current = patch_node(doc.tree(), self.current()).map(|n| n.id()) == Some(node);
+        // A gesture on the patch going ends first, as its own step.
+        let ended = was_current && self.end_gesture(&mut doc);
+        let (_, commit) = doc
+            .edit(&format!("Delete {name}"), |tx| tx.remove(node))
+            .map_err(err)?;
+        if commit.is_some() {
+            // The current patch has gone, so `sync` falls back to the track's.
+            self.sync(&doc, false);
+        }
+        drop(doc);
+        if commit.is_some() || ended {
+            self.changed();
+        }
+        Ok(was_current && commit.is_some())
+    }
+
+    /// Duplicates a patch: a deep copy straight after it in the order, named
+    /// "Patch 2 copy", with its chain, modulators, links (onto the copy's own
+    /// modulators), materials' wiring and controller map. One undo step,
+    /// "Duplicate Patch 2", and the copy becomes current. Presets are kept
+    /// per kind, not per patch, so the copy offers the same ones.
+    pub fn duplicate_patch(&self, id: u64) -> Result<u64, String> {
+        let mut doc = lock(&self.doc);
+        let node = patch_of(&doc, id)?;
+        let name = display_name(doc.tree(), node);
+        let copy_name = copy_name(doc.tree(), &name);
+        // A gesture on the patch being left ends first, as its own step.
+        self.end_gesture(&mut doc);
+        let (copy, commit) = doc
+            .edit(&format!("Duplicate {name}"), |tx| {
+                let category = format!("/{}", om::PATCHES);
+                let mut order: Vec<NodeId> = tx
+                    .at(category.as_str())
+                    .map(|c| om::patches_in(c).iter().map(|p| p.id()).collect())
+                    .unwrap_or_default();
+                // rhizome's copy points the copy's links at its own
+                // modulators and its chain and modulators orders at its own
+                // nodes; a material stays the same material. A generator whose
+                // material was removed reads the same nothing.
+                let copy = tx.copy(node, category.as_str())?;
+                tx.set_value(copy, om::PATCH_LABEL, Value::Text(copy_name))?;
+                // The whole order, so the copy sits straight after the
+                // original even when the original was missing from it.
+                let at = order
+                    .iter()
+                    .position(|p| *p == node)
+                    .map_or(order.len(), |i| i + 1);
+                order.insert(at, copy);
+                tx.set_order(category.as_str(), om::PATCH_ORDER, order)?;
+                Ok(copy)
+            })
+            .map_err(err)?;
+        lock(&self.sent).current = Some(copy);
+        if commit.is_some() {
+            self.sync(&doc, false);
+        }
+        let id = doc.projection().id_of(copy);
+        drop(doc);
+        self.changed();
+        id.ok_or_else(|| "the copy did not compile".to_string())
+    }
+
     /// Makes another patch current. Not an edit: no undo step, no unsaved
     /// mark. The engine is handed the whole patch, here on the command thread.
     pub fn select_patch(&self, id: u64) -> Result<(), String> {
         let mut doc = lock(&self.doc);
-        let node = doc
-            .projection()
-            .node_of(id)
-            .filter(|n| {
-                doc.tree()
-                    .get(*n)
-                    .is_some_and(|p| p.type_name() == om::PATCH)
-            })
-            .ok_or_else(|| format!("there is no patch {id}"))?;
+        let node = patch_of(&doc, id)?;
         if self.current() == Some(node) {
             return Ok(());
         }
@@ -1079,15 +1175,7 @@ impl Session {
     /// for.
     pub fn set_track_patch(&self, id: u64) -> Result<bool, String> {
         let mut doc = lock(&self.doc);
-        let node = doc
-            .projection()
-            .node_of(id)
-            .filter(|n| {
-                doc.tree()
-                    .get(*n)
-                    .is_some_and(|p| p.type_name() == om::PATCH)
-            })
-            .ok_or_else(|| format!("there is no patch {id}"))?;
+        let node = patch_of(&doc, id)?;
         let track = om::arrangement_node(doc.tree())
             .and_then(|a| a.order(om::TRACKS).into_iter().next())
             .map(|t| t.id())
@@ -1215,6 +1303,45 @@ impl Session {
         self.changed();
         Ok(report)
     }
+}
+
+/// The patch a runtime id names.
+fn patch_of(doc: &Document<Shard>, id: u64) -> Result<NodeId, String> {
+    doc.projection()
+        .node_of(id)
+        .filter(|n| {
+            doc.tree()
+                .get(*n)
+                .is_some_and(|p| p.type_name() == om::PATCH)
+        })
+        .ok_or_else(|| format!("there is no patch {id}"))
+}
+
+/// A patch's name as the scene view shows it.
+fn display_name(tree: &rhizome_core::Tree, patch: NodeId) -> String {
+    om::patches(tree)
+        .iter()
+        .enumerate()
+        .find(|(_, p)| p.id() == patch)
+        .map_or_else(|| "Patch".to_string(), |(i, p)| om::patch_name(p, i))
+}
+
+/// "Patch 2 copy", or "Patch 2 copy 2" when that is taken, as the Finder
+/// names a duplicate.
+fn copy_name(tree: &rhizome_core::Tree, name: &str) -> String {
+    let taken: Vec<String> = om::patches(tree)
+        .iter()
+        .enumerate()
+        .map(|(i, p)| om::patch_name(p, i))
+        .collect();
+    let first = format!("{name} copy");
+    if !taken.contains(&first) {
+        return first;
+    }
+    (2..)
+        .map(|n| format!("{name} copy {n}"))
+        .find(|c| !taken.contains(c))
+        .unwrap_or(first)
 }
 
 /// An undo or redo commit's label without the word rhizome puts in front:

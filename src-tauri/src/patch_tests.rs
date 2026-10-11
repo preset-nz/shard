@@ -410,3 +410,305 @@ fn outside_tracker_mode_set_plays_leaves_what_is_heard() {
     r.session.undo().unwrap();
     assert_eq!(current(&r).id, first);
 }
+
+// Story d: Rename, Delete and Duplicate.
+
+fn undo_label(r: &Rig) -> Option<String> {
+    r.session.history().0
+}
+
+/// A patch with something in every part a copy must carry: a value, an
+/// effect, an LFO and an envelope, a link onto each (one from a fixed node,
+/// one from the effect), and a controller map.
+fn dressed(r: &Rig) -> u64 {
+    r.session.set_param("grain.size", 80.0).unwrap();
+    let n = r.session.fx_add("patch", "chorus").unwrap();
+    r.session
+        .set_param(&format!("fx.{n}.chorus.mix"), 0.4)
+        .unwrap();
+    r.session.add_lfo().unwrap();
+    r.session.add_envelope().unwrap();
+    let m = r.session.modulation().0;
+    r.session
+        .link_param("grain.size", m.lfos[0].id, 0.25, 0.75)
+        .unwrap();
+    r.session
+        .link_param(&format!("fx.{n}.chorus.mix"), m.envelopes[0].id, 0.0, 0.5)
+        .unwrap();
+    r.session
+        .set_controller_map(Some(&crate::mapping::MapRef {
+            id: 7,
+            name: "LPD8".into(),
+        }))
+        .unwrap();
+    current(r).id
+}
+
+/// What a patch sounds like, ids and all, for comparing two patches: its
+/// values, its modulation with the modulator ids taken out (each patch has
+/// its own), and its controller map.
+fn sound(r: &Rig) -> (Vec<f32>, String, Option<String>) {
+    let plan = r.session.plan();
+    let mut m = plan.modulation.clone();
+    let ids: Vec<u64> = m
+        .lfos
+        .iter()
+        .map(|l| l.id)
+        .chain(m.envelopes.iter().map(|e| e.id))
+        .collect();
+    for l in &mut m.lfos {
+        l.id = 0;
+    }
+    for e in &mut m.envelopes {
+        e.id = 0;
+    }
+    for link in m.links.values_mut() {
+        // Which of the patch's own modulators, by place.
+        link.source = ids.iter().position(|i| *i == link.source).unwrap() as u64;
+    }
+    (
+        plan.patch,
+        serde_json::to_string(&m).unwrap(),
+        r.session.controller_map().map(|m| m.name),
+    )
+}
+
+#[test]
+fn rename_is_one_step_named_for_the_old_name_and_undo_restores_it() {
+    let r = rig();
+    let id = current(&r).id;
+    assert!(r.session.rename_patch(id, "  Bass  ").unwrap());
+    assert_eq!(names(&r), ["Bass"], "trimmed");
+    assert_eq!(undo_label(&r).as_deref(), Some("Rename Patch 1"));
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Rename Patch 1"));
+    assert_eq!(names(&r), ["Patch 1"]);
+    assert_eq!(undo_label(&r), None, "it was one step");
+}
+
+#[test]
+fn an_empty_or_unchanged_name_makes_no_step() {
+    let r = rig();
+    let id = current(&r).id;
+    let before = r.session.history_labels();
+    assert!(!r.session.rename_patch(id, "").unwrap());
+    assert!(!r.session.rename_patch(id, "   ").unwrap());
+    assert!(!r.session.rename_patch(id, "Patch 1").unwrap());
+    assert!(!r.session.rename_patch(id, " Patch 1 ").unwrap());
+    assert_eq!(r.session.history_labels(), before);
+    assert_eq!(names(&r), ["Patch 1"]);
+    assert!(r.session.rename_patch(u64::MAX, "x").is_err());
+}
+
+#[test]
+fn delete_is_one_step_and_undo_brings_the_patch_back_whole_in_its_place() {
+    let r = rig();
+    let first = current(&r).id;
+    r.session.new_patch().unwrap();
+    let doomed = dressed(&r);
+    let kept = sound(&r);
+    r.session.new_patch().unwrap();
+    r.session.select_patch(doomed).unwrap();
+    assert_eq!(names(&r), ["Patch 1", "Patch 2", "Patch 3"]);
+
+    assert!(r.session.delete_patch(doomed).unwrap(), "it was current");
+    assert_eq!(names(&r), ["Patch 1", "Patch 3"]);
+    assert_eq!(undo_label(&r).as_deref(), Some("Delete Patch 2"));
+    assert_eq!(current(&r).id, first, "the track's patch takes over");
+    assert_eq!(get(&r, "grain.size"), default_of("grain.size"));
+    assert!(shard_dsp::fx::order_of(&r.bank).is_empty());
+
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Delete Patch 2"));
+    assert_eq!(names(&r), ["Patch 1", "Patch 2", "Patch 3"], "in its place");
+    let back = listed(&r)[1].id;
+    r.session.select_patch(back).unwrap();
+    assert_eq!(sound(&r), kept, "with its chain, modulators and links");
+    assert_eq!(get(&r, "grain.size"), 80.0);
+    assert_eq!(undo_label(&r).as_deref(), Some("New Patch"), "one step");
+
+    assert_eq!(r.session.redo().unwrap().as_deref(), Some("Delete Patch 2"));
+    assert_eq!(names(&r), ["Patch 1", "Patch 3"], "redo deletes it again");
+    assert_eq!(current(&r).id, first);
+}
+
+#[test]
+fn deleting_a_patch_that_is_not_current_leaves_the_current_one() {
+    let r = rig();
+    let second = r.session.new_patch().unwrap();
+    let third = r.session.new_patch().unwrap();
+    r.session.set_param("grain.size", 120.0).unwrap();
+    assert!(!r.session.delete_patch(second).unwrap());
+    assert_eq!(current(&r).id, third);
+    assert_eq!(get(&r, "grain.size"), 120.0);
+}
+
+#[test]
+fn the_last_patch_and_the_played_patch_cannot_be_deleted() {
+    let r = rig();
+    let first = current(&r).id;
+    assert!(!listed(&r)[0].deletable);
+    assert!(r.session.delete_patch(first).is_err(), "the last patch");
+    let second = r.session.new_patch().unwrap();
+    let before = r.session.history_labels();
+    assert!(r.session.delete_patch(first).is_err(), "the track plays it");
+    assert_eq!(r.session.history_labels(), before, "and no step");
+    let all = listed(&r);
+    assert!(!all[0].deletable && all[1].deletable);
+
+    r.session.set_track_patch(second).unwrap();
+    let all = listed(&r);
+    assert!(all[0].deletable && !all[1].deletable);
+    assert!(r.session.delete_patch(second).is_err());
+    r.session.delete_patch(first).unwrap();
+    assert_eq!(names(&r), ["Patch 2"]);
+}
+
+#[test]
+fn duplicate_is_one_step_a_copy_after_the_original_and_becomes_current() {
+    let r = rig();
+    let original = dressed(&r);
+    let theirs = sound(&r);
+    r.session.new_patch().unwrap();
+    r.session.select_patch(original).unwrap();
+
+    let copy = r.session.duplicate_patch(original).unwrap();
+    assert_eq!(names(&r), ["Patch 1", "Patch 1 copy", "Patch 2"]);
+    assert_eq!(current(&r).id, copy, "the copy is current");
+    assert_eq!(undo_label(&r).as_deref(), Some("Duplicate Patch 1"));
+    assert_eq!(sound(&r), theirs, "the same sound");
+
+    // The copy's links follow its own modulators, never the original's.
+    let plan = r.session.plan();
+    let own: Vec<u64> = plan
+        .modulation
+        .lfos
+        .iter()
+        .map(|l| l.id)
+        .chain(plan.modulation.envelopes.iter().map(|e| e.id))
+        .collect();
+    r.session.select_patch(original).unwrap();
+    let orig = r.session.plan().modulation;
+    for link in plan.modulation.links.values() {
+        assert!(own.contains(&link.source), "{link:?} is not the copy's");
+    }
+    assert!(orig.lfos.iter().all(|l| !own.contains(&l.id)));
+    assert_eq!(plan.modulation.links.len(), 2);
+
+    assert_ne!(r.session.duplicate_patch(original).unwrap(), copy);
+    assert_eq!(names(&r)[1], "Patch 1 copy 2", "a second copy is numbered");
+    r.session.undo().unwrap();
+
+    assert_eq!(
+        r.session.undo().unwrap().as_deref(),
+        Some("Duplicate Patch 1")
+    );
+    assert_eq!(names(&r), ["Patch 1", "Patch 2"]);
+    assert_eq!(
+        r.session.redo().unwrap().as_deref(),
+        Some("Duplicate Patch 1")
+    );
+    assert_eq!(names(&r), ["Patch 1", "Patch 1 copy", "Patch 2"], "redo");
+}
+
+#[test]
+fn a_patch_whose_material_was_removed_duplicates_reading_nothing() {
+    let r = rig();
+    let original = current(&r).id;
+    let drone = r.session.pool().materials[0].id;
+    r.session.remove_material(drone).unwrap();
+    let wires = r.session.pool().wires;
+    assert_eq!((wires.material, wires.grain), (None, None));
+
+    r.session.duplicate_patch(original).unwrap();
+    assert_eq!(names(&r), ["Patch 1", "Patch 1 copy"]);
+    let wires = r.session.pool().wires;
+    assert_eq!(
+        (wires.material, wires.grain),
+        (None, None),
+        "the same nothing"
+    );
+}
+
+#[test]
+fn a_copy_reads_the_same_materials() {
+    let r = rig();
+    let original = current(&r).id;
+    let before = r.session.pool().wires;
+    assert!(before.material.is_some() && before.grain.is_some());
+    r.session.duplicate_patch(original).unwrap();
+    assert_eq!(r.session.pool().wires, before);
+    assert_eq!(r.session.pool().materials.len(), 1, "no material copied");
+}
+
+#[test]
+fn editing_the_copy_leaves_the_original_alone() {
+    let r = rig();
+    let original = dressed(&r);
+    let theirs = sound(&r);
+    let copy = r.session.duplicate_patch(original).unwrap();
+
+    r.session.set_param("grain.size", 200.0).unwrap();
+    r.session.fx_add("patch", "delay").unwrap();
+    let lfo = r.session.modulation().0.lfos[0].clone();
+    r.session
+        .set_lfo(crate::modulation::LfoRecord {
+            rate: 3.0,
+            ..lfo.clone()
+        })
+        .unwrap();
+    r.session.unlink_param("grain.size").unwrap();
+    r.session
+        .remove_envelope(r.session.modulation().0.envelopes[0].id)
+        .unwrap();
+    r.session.set_controller_map(None).unwrap();
+    assert_ne!(sound(&r), theirs);
+
+    r.session.select_patch(original).unwrap();
+    assert_eq!(sound(&r), theirs, "the original is as it was");
+    assert_eq!(get(&r, "grain.size"), 80.0);
+    r.session.select_patch(copy).unwrap();
+    assert_eq!(get(&r, "grain.size"), 200.0);
+}
+
+#[test]
+fn both_patches_save_and_open_as_they_were() {
+    let path = temp("duplicate");
+    let a = rig();
+    let original = dressed(&a);
+    let theirs = sound(&a);
+    a.session.new_patch().unwrap();
+    a.session.duplicate_patch(original).unwrap();
+    a.session.set_param("grain.size", 150.0).unwrap();
+    let copied = sound(&a);
+    a.session.save(&path).unwrap();
+
+    let b = rig();
+    let report = b.session.open(&path).unwrap();
+    assert!(report.unknown.is_empty(), "{:?}", report.unknown);
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+    assert_eq!(names(&b), ["Patch 1", "Patch 1 copy", "Patch 2"]);
+    let all = listed(&b);
+    b.session.select_patch(all[0].id).unwrap();
+    assert_eq!(sound(&b), theirs);
+    b.session.select_patch(all[1].id).unwrap();
+    assert_eq!(sound(&b), copied);
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_copy_of_a_patch_missing_from_the_order_still_sits_after_it() {
+    let r = rig();
+    let first = current(&r).id;
+    r.session.new_patch().unwrap();
+    // A file from before patches had an order.
+    r.session
+        .edit("Forget the order", None, |tx| {
+            tx.set_order(
+                format!("/{}", om::PATCHES).as_str(),
+                om::PATCH_ORDER,
+                Vec::<rhizome_core::NodeId>::new(),
+            )
+        })
+        .unwrap();
+    r.session.duplicate_patch(first).unwrap();
+    assert_eq!(names(&r), ["Patch 1", "Patch 1 copy", "Patch 2"]);
+}

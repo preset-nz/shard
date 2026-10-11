@@ -6,6 +6,7 @@ import {
   useCommandTable,
   useDocument,
   useDocumentNotes,
+  useTextFocus,
 } from '@preset.nz/app-kit/core';
 import { dismissNotification, notify, SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
 import { listen } from '@tauri-apps/api/event';
@@ -21,6 +22,8 @@ import {
   auditionGrain,
   type ChainLevel,
   cancelLearn,
+  deletePatch,
+  duplicatePatch,
   EMPTY_MAPPINGS,
   editTracker,
   envelopeCurve,
@@ -66,6 +69,7 @@ import {
   removeEnvelope,
   removeLfo,
   removeMaterial,
+  renamePatch,
   resetSound,
   type SourceInfo,
   selectPatch,
@@ -829,6 +833,52 @@ export default function App() {
       .catch((e) => setError(String(e)));
   };
 
+  // The patch whose name is being edited in the scene view, by id, so a
+  // reread of the list (selecting emits `document-opened`) keeps the field
+  // open, and Edit › Rename can open it.
+  const [renaming, setRenaming] = useState<number | null>(null);
+  // Story d's patch commands. Each is one undo step named for the patch.
+  // Duplicate and a Delete of the current patch move the engine, and Rust
+  // says so along `document-opened`; the list is read again here either way.
+  const renamePatchRow = async (id: number, name: string) => {
+    try {
+      if (await renamePatch(id, name)) setPatches(await listPatches());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const duplicatePatchRow = async (id: number) => {
+    try {
+      await duplicatePatch(id);
+      setMode('soundscape');
+      setPatches(await listPatches());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const deletePatchRow = async (id: number) => {
+    try {
+      await deletePatch(id);
+      setPatches(await listPatches());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  // Edit's Rename, Duplicate and Delete act on the selection (menu
+  // standard): with the track selected Duplicate doubles the pattern, with a
+  // patch selected it copies the patch. Delete takes a selected effect, as
+  // Backspace does, and the patch only when nothing in it is selected, so a
+  // card selected in the inspector never takes its whole patch with it.
+  const currentPatch = patches.find((p) => p.current);
+  const selectedFx = selection?.kind === 'node' ? (nodeById(selection.id)?.fx ?? null) : null;
+  const patchSelected = mode === 'soundscape' ? (currentPatch ?? null) : null;
+  const deletablePatch = selection === null && patchSelected?.deletable ? patchSelected : null;
+  // Cmd+D reaches the menu even while a name is being typed.
+  const typing = useTextFocus();
+  const canRename = !typing && patchSelected !== null;
+  const canDuplicate = !typing && (mode === 'tracker' ? tracker !== null : patchSelected !== null);
+  const canDelete = selectedFx !== null || deletablePatch !== null;
+
   const menuRef = useRef<(id: string) => void>(() => {});
   menuRef.current = (id) => {
     if (id.startsWith('fx-add:')) {
@@ -857,6 +907,17 @@ export default function App() {
           })
           .catch((e) => setError(String(e)));
         break;
+      case 'edit.duplicate':
+        if (mode === 'tracker') void editTrackerView({ op: 'duplicate' });
+        else if (patchSelected) void duplicatePatchRow(patchSelected.id);
+        break;
+      case 'edit.rename':
+        if (patchSelected) setRenaming(patchSelected.id);
+        break;
+      case 'edit.delete':
+        if (node?.fx) removeEffect(node);
+        else if (deletablePatch) void deletePatchRow(deletablePatch.id);
+        break;
       case 'fx-remove':
         if (node?.fx) removeEffect(node);
         break;
@@ -883,13 +944,19 @@ export default function App() {
     }
   };
   const commandTable = useCommandTable();
-  const bindings = useMemo(
-    () =>
-      Object.fromEntries(
-        (commandTable ?? []).map((c) => [c.id, { run: () => menuRef.current(c.id) }]),
-      ),
-    [commandTable],
-  );
+  const bindings = useMemo(() => {
+    const enabled: Record<string, boolean> = {
+      'edit.rename': canRename,
+      'edit.duplicate': canDuplicate,
+      'edit.delete': canDelete,
+    };
+    return Object.fromEntries(
+      (commandTable ?? []).map((c) => [
+        c.id,
+        { run: () => menuRef.current(c.id), enabled: enabled[c.id] ?? true },
+      ]),
+    );
+  }, [commandTable, canRename, canDuplicate, canDelete]);
   useCommands(bindings);
 
   // How many parameters follow each modulator, for the tree and the editors.
@@ -1009,6 +1076,11 @@ export default function App() {
             onPlays={(id) => void pickPlays(id)}
             onSelectPatch={(id) => void selectPatchRow(id)}
             onNewPatch={newPatchRow}
+            renaming={renaming}
+            onRenaming={setRenaming}
+            onRename={(id, name) => void renamePatchRow(id, name)}
+            onDuplicate={(id) => void duplicatePatchRow(id)}
+            onDelete={(id) => void deletePatchRow(id)}
             patchChildren={
               <>
                 <GeneratorTree

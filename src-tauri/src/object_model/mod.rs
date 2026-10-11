@@ -542,7 +542,7 @@ pub fn kinds() -> Vec<KindDecl> {
         }),
         Role::Fixed,
         // Added and removed whole. Keeping the last one, and the one a track
-        // plays, is the Delete command's (story d), not the tree's.
+        // plays, is `Session::delete_patch`'s, not the tree's.
         false,
         None,
     );

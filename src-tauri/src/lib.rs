@@ -755,6 +755,42 @@ fn select_patch(
     Ok(())
 }
 
+/// Renames a patch. One step of Undo, "Rename Patch 2"; an empty or
+/// unchanged name makes none. Answers whether it changed.
+#[tauri::command]
+fn rename_patch(state: tauri::State<'_, Audio>, id: u64, name: String) -> Result<bool, String> {
+    state.session.rename_patch(id, &name)
+}
+
+/// Deletes a patch, refused for the last one and the one the track plays.
+/// One step of Undo, "Delete Patch 2". When it was current the track's patch
+/// takes over, and the webview reads everything again along
+/// `document-opened`.
+#[tauri::command]
+fn delete_patch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Audio>,
+    id: u64,
+) -> Result<(), String> {
+    if state.session.delete_patch(id)? {
+        state.replaced(&app, session::LoadReport::default());
+    }
+    Ok(())
+}
+
+/// Duplicates a patch, straight after it, and makes the copy current. One
+/// step of Undo, "Duplicate Patch 2". Read again as after New Patch.
+#[tauri::command]
+fn duplicate_patch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Audio>,
+    id: u64,
+) -> Result<u64, String> {
+    let copy = state.session.duplicate_patch(id)?;
+    state.replaced(&app, session::LoadReport::default());
+    Ok(copy)
+}
+
 /// Sets the patch the track plays (the *Plays* picker): one step of Undo,
 /// "Set Plays". In tracker mode the engine follows, so the webview reads
 /// everything again as after selecting a patch.
@@ -1857,6 +1893,9 @@ pub fn run() {
             new_patch,
             select_patch,
             set_track_patch,
+            rename_patch,
+            delete_patch,
+            duplicate_patch,
             meters,
             set_playing,
             tracker,

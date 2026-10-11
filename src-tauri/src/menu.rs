@@ -27,6 +27,9 @@ pub const MENU_CONFIG: &str = include_str!("../menu.toml");
 /// else, and held unique by a test.
 pub const SHORTCUTS: &[(&str, &str)] = &[
     ("file-new-patch", "CmdOrCtrl+Shift+N"),
+    // One Duplicate, on the selection: the pattern with the track selected,
+    // the patch with a patch selected (epic 10, story d).
+    ("edit.duplicate", "CmdOrCtrl+D"),
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
     ("file-add-material", "CmdOrCtrl+Shift+I"),
     ("view-tracker", "CmdOrCtrl+1"),
@@ -37,7 +40,6 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("fx-later", "CmdOrCtrl+Alt+Down"),
     ("pattern-copy", "CmdOrCtrl+Alt+C"),
     ("pattern-paste", "CmdOrCtrl+Alt+V"),
-    ("pattern-duplicate", "CmdOrCtrl+D"),
     ("pattern-repeat", "CmdOrCtrl+Alt+D"),
     ("pattern-clear", "CmdOrCtrl+Alt+Backspace"),
     ("pattern-up", "CmdOrCtrl+Ctrl+Up"),
@@ -60,6 +62,7 @@ fn item(id: &str, label: &str) -> Command {
 /// Every command Shard adds to app-kit's.
 pub fn commands() -> Vec<Command> {
     let file = |id, label, section| item(id, label).menu(MenuName::File).section(section);
+    let edit = |id, label| item(id, label).menu(MenuName::Edit).section(1);
     let view = |id, label, section| item(id, label).menu(MenuName::View).section(section);
     let effect = |id, label| item(id, label).domain("Effect").section(1);
     let pattern = |id, label, section| item(id, label).domain("Pattern").section(section);
@@ -70,6 +73,13 @@ pub fn commands() -> Vec<Command> {
         file("file-new-patch", "New Patch", 1),
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Import…", 1),
+        // The menu standard's Edit-level commands, ids reserved there (and
+        // Rename beside them), on the selection. Delete has no key in the menu: a bare Backspace there
+        // would be taken from every text field. The scene view's patch row
+        // and the selected effect take Backspace themselves.
+        edit("edit.rename", "Rename"),
+        edit("edit.duplicate", "Duplicate"),
+        edit("edit.delete", "Delete"),
         view("view-tracker", "Track", 0),
         view("view-soundscape", "Patch", 0),
         view("view-inspector", "Grain Inspector", 1),

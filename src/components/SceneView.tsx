@@ -2,6 +2,13 @@ import { Icons } from '@preset.nz/ux-kit';
 import { type ReactNode, useRef, useState } from 'react';
 import type { PatchInfo } from '@/audio';
 import { PlaysPicker } from '@/components/PlaysPicker';
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuTrigger,
+} from '@/components/ui/context-menu';
 
 /**
  * The scene view (epic 10): the left panel, in both what were the modes. It
@@ -17,7 +24,10 @@ import { PlaysPicker } from '@/components/PlaysPicker';
  * Keyboard: focus the panel (Tab, or click a row), then Up and Down move a
  * cursor through the track and the patches and Return selects the row under
  * it. Moving the cursor does not select, because selecting a patch changes
- * what you hear.
+ * what you hear. Return on the patch already selected renames it, as Return
+ * on a selected item does in the Finder, and so does a double-click. Delete
+ * takes the patch under the cursor, when it may go. Right-click a patch for
+ * Rename, Duplicate and Delete.
  */
 export function SceneView({
   patches,
@@ -27,6 +37,11 @@ export function SceneView({
   onSelectPatch,
   onPlays,
   onNewPatch,
+  renaming,
+  onRenaming,
+  onRename,
+  onDuplicate,
+  onDelete,
   patchChildren,
   materials,
 }: {
@@ -40,6 +55,15 @@ export function SceneView({
   /** The track now plays this patch (the *Plays* picker). */
   onPlays: (id: number) => void;
   onNewPatch: () => void;
+  /** The patch whose name is being edited in place, by id. */
+  renaming: number | null;
+  /** Opens the name field on a patch, or closes it with null. */
+  onRenaming: (id: number | null) => void;
+  /** A patch's new name, as typed. Rust trims it and ignores an empty one. */
+  onRename: (id: number, name: string) => void;
+  onDuplicate: (id: number) => void;
+  /** Only offered for a patch whose `deletable` is set. */
+  onDelete: (id: number) => void;
   /** The current patch's generators and modulators. */
   patchChildren: ReactNode;
   /** The materials section. */
@@ -100,7 +124,25 @@ export function SceneView({
           setCursor(Math.max(0, Math.min(rowCount - 1, here + (e.key === 'ArrowDown' ? 1 : -1))));
         } else if (e.key === 'Enter') {
           e.preventDefault();
-          selectRow(here);
+          const patch = here > 0 ? patches[here - 1] : undefined;
+          // On the selection, Return renames; elsewhere it selects.
+          if (patch && patch.id === selectedPatch && (cursor === null || cursor === selectedRow)) {
+            setCursor(null);
+            onRenaming(patch.id);
+          } else {
+            selectRow(here);
+          }
+        } else if (e.key === 'Backspace' || e.key === 'Delete') {
+          const patch = here > 0 ? patches[here - 1] : undefined;
+          if (!patch) return;
+          // Ours, not the selected effect's: the window's handler would
+          // take it out of its chain.
+          e.preventDefault();
+          e.stopPropagation();
+          if (patch.deletable) {
+            setCursor(null);
+            onDelete(patch.id);
+          }
         }
       }}
       className="w-48 shrink-0 overflow-y-auto border-r border-border outline-none"
@@ -145,17 +187,49 @@ export function SceneView({
         </div>
         {patches.map((p, i) => (
           <div key={p.id}>
-            <button
-              type="button"
-              title={
-                p.current ? 'Shape this patch and loop it' : 'Switch to this patch and loop it'
-              }
-              onMouseDown={focusPanel}
-              onClick={() => selectRow(i + 1)}
-              className={rowClass(i + 1, p.id === selectedPatch, p.current)}
-            >
-              <span className="flex-1 truncate">{p.name}</span>
-            </button>
+            {renaming === p.id ? (
+              <RenameField
+                name={p.name}
+                className={rowClass(i + 1, p.id === selectedPatch, p.current)}
+                onDone={(name) => {
+                  onRenaming(null);
+                  navRef.current?.focus();
+                  if (name !== null) onRename(p.id, name);
+                }}
+              />
+            ) : (
+              <ContextMenu>
+                <ContextMenuTrigger
+                  render={
+                    <button
+                      type="button"
+                      title={
+                        p.current
+                          ? 'Shape this patch and loop it. Double-click to rename.'
+                          : 'Switch to this patch and loop it. Double-click to rename.'
+                      }
+                      onMouseDown={focusPanel}
+                      onClick={() => selectRow(i + 1)}
+                      onDoubleClick={() => onRenaming(p.id)}
+                      className={rowClass(i + 1, p.id === selectedPatch, p.current)}
+                    />
+                  }
+                >
+                  <span className="flex-1 truncate">{p.name}</span>
+                </ContextMenuTrigger>
+                {/* Closing leaves focus where it is, so Rename's field keeps it. */}
+                <ContextMenuContent className="w-48" finalFocus={false}>
+                  <ContextMenuItem onClick={() => onRenaming(p.id)}>Rename</ContextMenuItem>
+                  <ContextMenuItem onClick={() => onDuplicate(p.id)}>
+                    Duplicate {p.name}
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem disabled={!p.deletable} onClick={() => onDelete(p.id)}>
+                    Delete {p.name}
+                  </ContextMenuItem>
+                </ContextMenuContent>
+              </ContextMenu>
+            )}
             {p.current && patchChildren}
           </div>
         ))}
@@ -163,5 +237,53 @@ export function SceneView({
 
       {materials}
     </nav>
+  );
+}
+
+/**
+ * A patch's name, being edited in place. Return or leaving the field keeps
+ * it; Escape puts it back. Keys stay in the field, so Return doesn't select
+ * a row and Delete doesn't delete one.
+ */
+function RenameField({
+  name,
+  className,
+  onDone,
+}: {
+  name: string;
+  className: string;
+  /** The name typed, or null when cancelled. Called once. */
+  onDone: (name: string | null) => void;
+}) {
+  const [draft, setDraft] = useState(name);
+  const done = useRef(false);
+  const finish = (value: string | null) => {
+    if (done.current) return;
+    done.current = true;
+    onDone(value);
+  };
+  return (
+    <div className={className}>
+      <input
+        aria-label="Patch name"
+        // biome-ignore lint/a11y/noAutofocus: the field opens because the user asked to rename
+        autoFocus
+        onFocus={(e) => e.currentTarget.select()}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === 'Enter') {
+            e.preventDefault();
+            finish(draft);
+          } else if (e.key === 'Escape') {
+            e.preventDefault();
+            finish(null);
+          }
+        }}
+        onBlur={() => finish(draft)}
+        className="min-w-0 flex-1 rounded-sm border border-ring bg-background px-1 text-xs text-foreground outline-none"
+      />
+    </div>
   );
 }
