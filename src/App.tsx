@@ -52,6 +52,7 @@ import {
   mapMidi,
   materialWave,
   modulatorsOf,
+  newPatch,
   type ParamInfo,
   type PatchPreview as PatchPreviewData,
   paramDefs,
@@ -803,6 +804,10 @@ export default function App() {
         break;
       case 'file-add-material':
         void pickFiles();
+        break;
+      case 'file-new-patch':
+        // The panels read the new patch along `document-opened`.
+        void newPatch().catch((e) => setError(String(e)));
         break;
       case 'file-reset-sound':
         void resetSound()

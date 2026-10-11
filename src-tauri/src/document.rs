@@ -9,7 +9,10 @@
 //! The webview polls values and meters but not materials, modulation or the
 //! tracker, so whatever replaces the document under it says so:
 //! `HISTORY_STEPPED` after an undo or redo, `DOCUMENT_OPENED` (with the load
-//! report) after open and new.
+//! report) after open and new, and after New Patch or selecting a patch
+//! changes the patch on screen. An undo that takes the current patch away
+//! falls back to the track's patch, and `HISTORY_STEPPED`'s rereading covers
+//! it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -48,7 +51,9 @@ impl Audio {
         }
     }
 
-    fn replaced<R: Runtime>(&self, app: &AppHandle<R>, mut report: LoadReport) {
+    /// The document, or the patch on screen, was replaced: the controller
+    /// map follows, and the webview reads everything again.
+    pub(crate) fn replaced<R: Runtime>(&self, app: &AppHandle<R>, mut report: LoadReport) {
         report.map_missing = self.follow(app);
         let _ = app.emit(DOCUMENT_OPENED, report);
     }

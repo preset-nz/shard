@@ -2,13 +2,16 @@
 //! `projects/shard/design/object-model.md`): its kinds, their roles and
 //! rules, and the verbs that build a session.
 //!
-//! - `/patches/<patch>`: the sound. Its fixed nodes (the generators, the
-//!   envelope, tape, filter and output) are children named for their kind.
+//! - `/patches/<patch>`: the sounds, listed in the order `order` (epic 10).
+//!   A patch's name is its `patch.label`; its fixed nodes (the generators,
+//!   the envelope, tape, filter and output) are children named for their kind.
 //!   The effects it runs are children listed in its order `chain`, its LFOs
 //!   and mod envelopes children listed in `modulators`. A link is a binding
 //!   from a parameter onto one of those, carrying `lo` and `hi`.
 //! - `/arrangements/arrangement`: the level above the patch. Tempo and swing;
-//!   tracks in the order `tracks`, each step a child named by its number and
+//!   tracks in the order `tracks`, each playing the patch its reference
+//!   `track.patch` names (the first patch when it names none), each step a
+//!   child named by its number and
 //!   made only once it differs from a blank step; the kit, its beats made the
 //!   same way; its own chain, filter and output (a `master`, named `amp`).
 //! - `/materials/<sample>`: WAVs and the built-in drone. A generator reads
@@ -55,8 +58,8 @@ pub fn float(v: f32) -> f64 {
 }
 
 pub use compile::{
-    arrangement_node, as_f32, compile, instance_of, locate, patch_node, read_tracker, to_value,
-    Plan,
+    arrangement_node, as_f32, compile, instance_of, locate, patch_node, patches, patches_in,
+    read_tracker, to_value, track_patch, Plan,
 };
 
 pub const EXTENSION: &str = "shard";
@@ -84,6 +87,16 @@ pub const MODULATORS: &str = "modulators";
 pub const TRACKS: &str = "tracks";
 /// The order of the materials, as they were added.
 pub const POOL: &str = "pool";
+/// The order of the patches, as they were added (epic 10), so "Patch 10" never
+/// sorts before "Patch 2".
+pub const PATCH_ORDER: &str = "order";
+
+/// A patch's name, as the scene view shows it. Empty in a file written
+/// before patches had names, which shows the patch's place instead.
+pub const PATCH_LABEL: &str = "patch.label";
+/// The patch a track plays, a reference to it. Unset, or naming a patch that
+/// has gone, the track plays the first patch.
+pub const TRACK_PATCH: &str = "track.patch";
 
 /// Played, not edited: a held button or a pedal writes them to the bank, and
 /// a document never stores them.
@@ -94,6 +107,43 @@ pub const PATCH_NODES: &[&str] = &["material", "grain", "fm", "env", "tape", "fi
 
 /// The generators that read a material, through `<kind>.source`.
 pub const READS_MATERIAL: &[&str] = &["material", "grain"];
+
+/// A patch's name: its label, or "Patch N" by its place when it has none.
+pub fn patch_name(patch: &Node<'_>, index: usize) -> String {
+    match patch.value(PATCH_LABEL) {
+        Some(Value::Text(t)) if !t.trim().is_empty() => t,
+        _ => format!("Patch {}", index + 1),
+    }
+}
+
+/// The first "Patch N" no patch in `category` (`/patches`) is named yet,
+/// counting on from how many there are.
+pub fn next_patch_name(category: Option<Node<'_>>) -> String {
+    let taken: Vec<String> = category
+        .map(patches_in)
+        .unwrap_or_default()
+        .iter()
+        .enumerate()
+        .map(|(i, p)| patch_name(p, i))
+        .collect();
+    let mut n = taken.len() + 1;
+    while taken.contains(&format!("Patch {n}")) {
+        n += 1;
+    }
+    format!("Patch {n}")
+}
+
+/// Whether a node is listed in its parent's order `order`.
+fn listed_in(n: &Node<'_>, order: &str) -> std::result::Result<(), String> {
+    let listed = n
+        .parent()
+        .is_some_and(|p| p.order(order).iter().any(|m| m.id() == n.id()));
+    if listed {
+        Ok(())
+    } else {
+        Err(format!("{} is missing from {order}", n.path()))
+    }
+}
 
 /// What a kind is for. Roles carry the conventions in CLAUDE.md, and
 /// `tests.rs` holds every kind to its role's.
@@ -469,26 +519,32 @@ pub fn kinds() -> Vec<KindDecl> {
     };
 
     // The patch, and its own settings: what sets a note's length, and the
-    // controller map it plays with (app data, referred to by id).
+    // controller map it plays with (app data, referred to by id). A session
+    // holds as many as it likes, listed in the order `PATCH_ORDER` (epic 10).
     let patch = with_rows(
         NodeType::new(PATCH).in_categories(&[PATCHES]),
         &patch_rows("patch"),
     )
+    .text(PATCH_LABEL, "")
     .shaped(
         "patch.map",
         Shape::optional(Shape::record([("id", Shape::Int), ("name", Shape::Text)])),
     );
     push(
+        // Not held to the order, as a sample is to the pool's: a file saved
+        // before patches had one opens and edits as it did, its patch listed
+        // after the ordered ones (`patches_in`), and the next patch added
+        // writes the whole order.
         checked(patch, Under::Category, |n| {
             order_holds(n, CHAIN, is_effect)?;
             chain_fits(n)?;
             order_holds(n, MODULATORS, is_modulator)
         }),
         Role::Fixed,
-        // One patch, made with the session and never removed, until
-        // multi-patch lifts both.
-        true,
-        Some(1),
+        // Added and removed whole. Keeping the last one, and the one a track
+        // plays, is the Delete command's (story d), not the tree's.
+        false,
+        None,
     );
 
     // A patch's fixed nodes.
@@ -587,13 +643,19 @@ pub fn kinds() -> Vec<KindDecl> {
     // the document's (Georg, 2026-10-06), so it has no switch here.
     let track = Track::default();
     let t = NodeType::new(TRACK).in_categories(&[ARRANGEMENTS]);
-    let t = with_rows(t, &arrangement_rows("track")).int(
-        "track.length",
-        4..=STEPS as i64,
-        i64::from(track.length),
-    );
+    let t = with_rows(t, &arrangement_rows("track"))
+        .int("track.length", 4..=STEPS as i64, i64::from(track.length))
+        .reference(TRACK_PATCH);
     push(
-        checked(t, Under::Arrangement, |n| length_holds(n, "track.length")),
+        checked(t, Under::Arrangement, |n| {
+            length_holds(n, "track.length")?;
+            match n.resolve(TRACK_PATCH) {
+                Some(p) if p.type_name() != PATCH => {
+                    Err(format!("a track plays a patch, not {}", p.path()))
+                }
+                _ => Ok(()),
+            }
+        }),
         Role::Structure,
         false,
         None,
@@ -692,16 +754,7 @@ pub fn kinds() -> Vec<KindDecl> {
         // The MIDI note it sounds at, when known.
         .shaped("sample.root", Shape::optional(Shape::Int));
     push(
-        checked(t, Under::Category, |n| {
-            let listed = n
-                .parent()
-                .is_some_and(|p| p.order(POOL).iter().any(|m| m.id() == n.id()));
-            if listed {
-                Ok(())
-            } else {
-                Err(format!("{} is missing from {POOL}", n.path()))
-            }
-        }),
+        checked(t, Under::Category, |n| listed_in(n, POOL)),
         Role::Structure,
         false,
         None,
@@ -735,11 +788,12 @@ impl ObjectModel for Shard {
                 kind = kind.max_per_parent(n);
             }
             // A preset is a node's sound: its values and links, never its
-            // switch, so applying one never switches a node in or out.
+            // switch, so applying one never switches a node in or out, and
+            // never a patch's name.
             if presets {
                 kind.presets(
                     NodeValues::new()
-                        .skip(|key| key.ends_with(".on"))
+                        .skip(|key| key.ends_with(".on") || key == PATCH_LABEL)
                         .with_bindings(),
                 );
             }
@@ -753,24 +807,29 @@ impl ObjectModel for Shard {
     }
 
     /// A new session: the built-in drone in both generators, one patch at
-    /// its defaults, and the arrangement as a new tracker has it.
+    /// its defaults, "Patch 1", and the arrangement as a new tracker has it,
+    /// its track playing that patch.
     fn seed(tx: &mut Edit<'_>, _: &()) -> Result<()> {
         let pool = Pool::with_drone();
         let samples = tx.add_pool(&pool)?;
-        let patch = tx.add_patch(PATCH)?;
+        let patch = tx.new_patch()?;
         for (name, wired) in [
             ("material", pool.wires.material),
             ("grain", pool.wires.grain),
         ] {
             let sample = wired.and_then(|id| samples.iter().find(|(m, _)| *m == id));
             if let Some((_, node)) = sample {
-                let generator = tx.at(patch).and_then(|p| p.child(name)).map(|n| n.id());
-                if let Some(g) = generator {
-                    tx.set_ref(g, format!("{name}.source").as_str(), Ref::here(*node))?;
-                }
+                tx.wire(patch, name, *node)?;
             }
         }
-        tx.add_arrangement(&Tracker::default())?;
+        let arr = tx.add_arrangement(&Tracker::default())?;
+        let first = tx
+            .at(arr)
+            .and_then(|a| a.order(TRACKS).into_iter().next())
+            .map(|t| t.id());
+        if let Some(track) = first {
+            tx.set_ref(track, TRACK_PATCH, Ref::here(patch))?;
+        }
         Ok(())
     }
 }
@@ -778,8 +837,16 @@ impl ObjectModel for Shard {
 /// Shard's verbs. Each composes into the caller's edit, so a verb is one undo
 /// step however many writes it makes.
 pub trait ShardEdit {
-    /// A patch at its defaults, with its fixed nodes and an empty chain.
+    /// A patch at its defaults, with its fixed nodes and an empty chain, at
+    /// the end of the patches' order. Its node is named `name`; its label is
+    /// left empty.
     fn add_patch(&mut self, name: &str) -> Result<NodeId>;
+    /// What New Patch adds: a patch at its defaults named "Patch N", the
+    /// built-in drone (when the pool still has it) in both generators that
+    /// read a material, as a new session's patch has it.
+    fn new_patch(&mut self) -> Result<NodeId>;
+    /// `generator` (`material` or `grain`) of `patch` reads `sample`.
+    fn wire(&mut self, patch: NodeId, generator: &str, sample: NodeId) -> Result<()>;
     /// An effect at the end of `owner`'s chain, a patch's or the arrangement's.
     fn add_effect(&mut self, owner: NodeId, kind: Fx) -> Result<NodeId>;
     fn add_lfo(&mut self, patch: NodeId) -> Result<NodeId>;
@@ -866,11 +933,48 @@ fn int(n: impl Into<i64>) -> Value {
 
 impl ShardEdit for Edit<'_> {
     fn add_patch(&mut self, name: &str) -> Result<NodeId> {
-        let patch = self.add_unique(format!("/{PATCHES}").as_str(), PATCH, name)?;
+        let patches = format!("/{PATCHES}");
+        let mut order: Vec<NodeId> = self
+            .at(patches.as_str())
+            .map(|c| patches_in(c).iter().map(|p| p.id()).collect())
+            .unwrap_or_default();
+        let patch = self.add_unique(patches.as_str(), PATCH, name)?;
         for kind in PATCH_NODES {
             self.add(patch, kind, kind)?;
         }
+        order.push(patch);
+        self.set_order(patches.as_str(), PATCH_ORDER, order)?;
         Ok(patch)
+    }
+
+    fn new_patch(&mut self) -> Result<NodeId> {
+        let label = next_patch_name(self.at(format!("/{PATCHES}").as_str()));
+        let patch = self.add_patch(PATCH)?;
+        self.set_value(patch, PATCH_LABEL, Value::Text(label))?;
+        // The drone is the material with no file.
+        let drone = self.at(format!("/{MATERIALS}").as_str()).and_then(|m| {
+            m.order(POOL)
+                .into_iter()
+                .find(|s| matches!(s.value("sample.path"), Some(Value::Text(p)) if p.is_empty()))
+                .map(|s| s.id())
+        });
+        if let Some(drone) = drone {
+            for g in READS_MATERIAL {
+                self.wire(patch, g, drone)?;
+            }
+        }
+        Ok(patch)
+    }
+
+    fn wire(&mut self, patch: NodeId, generator: &str, sample: NodeId) -> Result<()> {
+        let g = self
+            .at(patch)
+            .and_then(|p| p.child(generator))
+            .map(|n| n.id());
+        match g {
+            Some(g) => self.set_ref(g, format!("{generator}.source").as_str(), Ref::here(sample)),
+            None => Ok(()),
+        }
     }
 
     fn add_effect(&mut self, owner: NodeId, kind: Fx) -> Result<NodeId> {

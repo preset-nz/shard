@@ -263,8 +263,9 @@ fn every_effect_is_in_its_chain() {
 #[test]
 fn fixed_nodes_stay() {
     let mut doc = new_session();
+    // A patch itself is added and removed whole (epic 10); keeping the last
+    // one is the Delete command's.
     for path in [
-        "/patches/patch",
         "/patches/patch/filter",
         "/patches/patch/grain",
         "/arrangements/arrangement/amp",

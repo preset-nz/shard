@@ -22,7 +22,8 @@ pub(crate) struct Rig {
     pub(crate) arrangement: Arc<ParamBank>,
     pub(crate) steps: Arc<StepBank>,
     pub(crate) mod_swap: Arc<Mutex<Option<shard_dsp::ModSet>>>,
-    swap: Arc<Mutex<crate::session::SourceSlots>>,
+    pub(crate) swap: Arc<Mutex<crate::session::SourceSlots>>,
+    pub(crate) readings: Arc<ReadingBank>,
 }
 
 pub(crate) fn rig() -> Rig {
@@ -32,13 +33,14 @@ pub(crate) fn rig() -> Rig {
     let steps = Arc::new(StepBank::new(Tracker::default().params()));
     let mod_swap = Arc::new(Mutex::new(None));
     let swap = Arc::new(Mutex::new([None, None]));
+    let readings = Arc::new(ReadingBank::new());
     let feeds = Feeds {
         bank: Arc::clone(&bank),
         arrangement: Arc::clone(&arrangement),
         steps: Arc::clone(&steps),
         mod_swap: Arc::clone(&mod_swap),
         swap: Arc::clone(&swap),
-        readings: Arc::new(ReadingBank::new()),
+        readings: Arc::clone(&readings),
     };
     let drone = Arc::new(source::startup_drone(sample_rate));
     let session = Session::new(feeds, drone, sample_rate).expect("a session starts");
@@ -49,6 +51,7 @@ pub(crate) fn rig() -> Rig {
         steps,
         mod_swap,
         swap,
+        readings,
     }
 }
 

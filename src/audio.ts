@@ -131,6 +131,27 @@ export const fxMove = (layer: ChainLevel, n: number, by: number) =>
 /** Every patch parameter back to its default: the sound only. One step of Undo. */
 export const resetSound = () => invoke<boolean>('reset_sound');
 
+/** A patch as the scene view lists it (epic 10). */
+export interface PatchInfo {
+  /** Runtime id, for `selectPatch`. Never saved. */
+  id: number;
+  name: string;
+  /** The patch the engine plays and every patch command acts on. */
+  current: boolean;
+  /** The patch the track plays. */
+  played: boolean;
+}
+
+/** The session's patches, in order. */
+export const listPatches = () => invoke<PatchInfo[]>('patches');
+/**
+ * New Patch: a patch at its defaults, made current. One step of Undo. Rust
+ * emits `document-opened` afterwards, so the panels read everything again.
+ */
+export const newPatch = () => invoke<number>('new_patch');
+/** Make another patch current. Not an edit. Followed by `document-opened`. */
+export const selectPatch = (id: number) => invoke<void>('select_patch', { id });
+
 export const meters = () => invoke<Meters>('meters');
 
 /** A material as the tree and the inspector show it. */

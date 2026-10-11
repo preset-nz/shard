@@ -365,3 +365,142 @@ fn writing_a_tracker_writes_only_what_differs() {
     let track = doc.tree().get(arr).unwrap().order(TRACKS)[0];
     assert!(track.child("8").is_none(), "a blank step leaves no node");
 }
+
+// Several patches (epic 10, story a).
+
+fn first_track(doc: &Document<Shard>) -> NodeId {
+    doc.tree()
+        .at("/arrangements/arrangement")
+        .and_then(|a| a.order(TRACKS).into_iter().next())
+        .expect("a track")
+        .id()
+}
+
+#[test]
+fn a_new_session_has_one_patch_the_track_plays_named_patch_1() {
+    let doc = new_session();
+    let tree = doc.tree();
+    let all = patches(tree);
+    assert_eq!(all.len(), 1);
+    assert_eq!(patch_name(&all[0], 0), "Patch 1");
+    assert_eq!(track_patch(tree).map(|p| p.id()), Some(all[0].id()));
+    assert_eq!(doc.projection().current, Some(all[0].id()));
+}
+
+#[test]
+fn new_patches_go_at_the_end_of_the_order_and_count_on() {
+    let mut doc = new_session();
+    for _ in 0..10 {
+        doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
+    }
+    let names: Vec<String> = patches(doc.tree())
+        .iter()
+        .enumerate()
+        .map(|(i, p)| patch_name(p, i))
+        .collect();
+    let want: Vec<String> = (1..=11).map(|n| format!("Patch {n}")).collect();
+    assert_eq!(names, want, "Patch 10 comes after Patch 2");
+    let order = doc.tree().at("/patches").unwrap().order(PATCH_ORDER).len();
+    assert_eq!(order, 11, "every patch is in the order");
+}
+
+#[test]
+fn a_new_patch_is_at_its_defaults_with_the_drone_in_both_generators() {
+    let mut doc = new_session();
+    let (second, _) = doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
+    let mut plan = doc.projection().clone();
+    let first = plan.pool.wires;
+    assert!(plan.select(second));
+    assert_eq!(bits(&plan.patch), bank_bits(&ParamBank::new()));
+    assert_eq!(plan.modulation, crate::modulation::Modulation::default());
+    assert_eq!(
+        plan.pool.wires, first,
+        "the drone, as the first patch has it"
+    );
+    assert!(plan.pool.wires.material.is_some() && plan.pool.wires.grain.is_some());
+}
+
+#[test]
+fn the_plan_plays_the_patch_the_track_names_and_the_first_without_one() {
+    let mut doc = new_session();
+    let first = id(&doc, "/patches/patch");
+    let (second, _) = doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
+    let grain = doc.tree().get(second).unwrap().child("grain").unwrap().id();
+    doc.edit("Set", |tx| {
+        tx.set_value(grain, "grain.size", Value::Float(80.0))
+    })
+    .unwrap();
+    let size = index_of("grain.size").unwrap();
+    assert_eq!(doc.projection().current, Some(first));
+    assert_ne!(doc.projection().patch[size], 80.0, "the second is silent");
+
+    let track = first_track(&doc);
+    doc.edit("Plays", |tx| {
+        tx.set_ref(track, TRACK_PATCH, Ref::here(second))
+    })
+    .unwrap();
+    assert_eq!(doc.projection().current, Some(second));
+    assert_eq!(doc.projection().patch[size], 80.0);
+
+    doc.edit("Plays", |tx| tx.clear_ref(track, TRACK_PATCH))
+        .unwrap();
+    assert_eq!(
+        doc.projection().current,
+        Some(first),
+        "no reference plays the first patch"
+    );
+}
+
+#[test]
+fn a_track_plays_only_a_patch() {
+    let mut doc = new_session();
+    let track = first_track(&doc);
+    let drone = doc.tree().at("/materials").unwrap().order(POOL)[0].id();
+    let r = doc.edit("Plays", |tx| {
+        tx.set_ref(track, TRACK_PATCH, Ref::here(drone))
+    });
+    assert!(r.is_err(), "a track can't play a material");
+}
+
+#[test]
+fn a_patch_missing_from_the_order_still_plays_and_the_next_added_lists_it() {
+    // A file saved before patches had an order.
+    let mut doc = new_session();
+    let first = id(&doc, "/patches/patch");
+    doc.edit("Unlist", |tx| {
+        tx.set_order("/patches", PATCH_ORDER, Vec::<NodeId>::new())
+    })
+    .unwrap();
+    assert_eq!(doc.projection().current, Some(first));
+    let (second, _) = doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
+    let order: Vec<NodeId> = doc
+        .tree()
+        .at("/patches")
+        .unwrap()
+        .order(PATCH_ORDER)
+        .iter()
+        .map(|p| p.id())
+        .collect();
+    assert_eq!(order, vec![first, second]);
+}
+
+#[test]
+fn every_patch_saves_and_opens_with_its_order_and_the_tracks_patch() {
+    let mut doc = new_session();
+    let (second, _) = doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
+    let track = first_track(&doc);
+    doc.edit("Plays", |tx| {
+        tx.set_ref(track, TRACK_PATCH, Ref::here(second))
+    })
+    .unwrap();
+    let text = doc.tree().serialise();
+    let (back, report) = Tree::load(&text, doc.tree().registry().clone()).unwrap();
+    assert!(report.issues.is_empty(), "{:?}", report.issues);
+    let names: Vec<String> = patches(&back)
+        .iter()
+        .enumerate()
+        .map(|(i, p)| patch_name(p, i))
+        .collect();
+    assert_eq!(names, ["Patch 1", "Patch 2"]);
+    assert_eq!(track_patch(&back).map(|p| p.id()), Some(second));
+}

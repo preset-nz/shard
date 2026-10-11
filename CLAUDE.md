@@ -72,7 +72,10 @@ changed after every edit, undo, redo and open. **Every write goes through the
 session.** Nothing writes `bank` or `arrangement` directly except the played
 rows (`tape.brake`, `tape.reverse`): a direct write is reverted, silently, by
 the next edit. The mode (tracker or sound scaping) is the session's, not the
-document's. Undo is rhizome's, one step per gesture.
+document's, and so is the **current patch** (epic 10): a session holds
+several patches, the engine plays the current one, and every patch-scoped
+command acts on it (`patch_node(tree, current)`, `locate`). Undo is
+rhizome's, one step per gesture.
 
 **The table is the patch, and the tracker is the level above it.** Tempo,
 swing and tracks of steps belong to the arrangement, not to a sound, so they are not

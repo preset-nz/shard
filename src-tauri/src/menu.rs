@@ -26,6 +26,7 @@ pub const MENU_CONFIG: &str = include_str!("../menu.toml");
 /// Every accelerator Shard binds, by command id: written here and nowhere
 /// else, and held unique by a test.
 pub const SHORTCUTS: &[(&str, &str)] = &[
+    ("file-new-patch", "CmdOrCtrl+Shift+N"),
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
     ("file-add-material", "CmdOrCtrl+Shift+I"),
     ("view-tracker", "CmdOrCtrl+1"),
@@ -63,6 +64,10 @@ pub fn commands() -> Vec<Command> {
     let effect = |id, label| item(id, label).domain("Effect").section(1);
     let pattern = |id, label, section| item(id, label).domain("Pattern").section(section);
     let mut all = vec![
+        // First of Shard's File items, under app-kit's New, Open… and Open
+        // Recent: app-kit places an app's items after its own, so "straight
+        // after New" would take a change there.
+        file("file-new-patch", "New Patch", 1),
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Import…", 1),
         view("view-tracker", "Tracker", 0),

@@ -35,6 +35,8 @@ mod menu;
 mod midi;
 mod modulation;
 pub mod object_model;
+#[cfg(test)]
+mod patch_tests;
 mod profile;
 pub mod session;
 #[cfg(test)]
@@ -718,6 +720,39 @@ fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<Modulation
 #[tauri::command]
 fn reset_sound(state: tauri::State<'_, Audio>) -> Result<bool, String> {
     state.session.reset_sound()
+}
+
+/// The session's patches in order, which is current and which the track
+/// plays (epic 10). For the scene view.
+#[tauri::command]
+fn patches(state: tauri::State<'_, Audio>) -> Vec<session::PatchInfo> {
+    state.session.patches()
+}
+
+/// New Patch: a patch at its defaults, made current. One step of Undo. The
+/// webview reads everything again along `document-opened`, and the controller
+/// map follows the patch.
+#[tauri::command]
+fn new_patch(app: tauri::AppHandle, state: tauri::State<'_, Audio>) -> Result<u64, String> {
+    let id = state.session.new_patch()?;
+    state.replaced(&app, session::LoadReport::default());
+    Ok(id)
+}
+
+/// Makes another patch current: the one every patch command acts on and the
+/// engine plays. Not an edit. Read again as after New Patch.
+#[tauri::command]
+fn select_patch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Audio>,
+    id: u64,
+) -> Result<(), String> {
+    if state.session.current_patch() == Some(id) {
+        return Ok(());
+    }
+    state.session.select_patch(id)?;
+    state.replaced(&app, session::LoadReport::default());
+    Ok(())
 }
 
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
@@ -1803,6 +1838,9 @@ pub fn run() {
             fx_remove,
             fx_move,
             reset_sound,
+            patches,
+            new_patch,
+            select_patch,
             meters,
             set_playing,
             tracker,

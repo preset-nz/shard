@@ -12,6 +12,15 @@
 //! reverse write the bank directly, and the mode (tracker or sound scaping)
 //! is the session's, not the document's (Georg, 2026-10-06).
 //!
+//! **So is the current patch** (epic 10). A session holds several patches and
+//! the engine plays one: the current patch, which every patch-scoped command
+//! (a value, the chain, presets, links, materials' wiring, the controller
+//! map) acts on. It lives in `sent`, as the `Plan::current` the engine was
+//! handed, and `sync` selects it onto every new compile. Selecting another
+//! patch is not an edit; it hands the engine the whole patch, on this thread.
+//! When the current patch goes (undoing the New Patch that made it), `sync`
+//! falls back to the patch the track plays.
+//!
 //! **Lock order:** `doc`, then `gesture`, then `sent`, then `decoded`, then `feeding`, then the
 //! engine's hand-off slots. Nothing here takes a controller lock; MIDI calls
 //! in with its own locks already released. Decoding a WAV never happens under
@@ -76,6 +85,18 @@ pub struct LoadReport {
     pub map_missing: Option<String>,
 }
 
+/// A patch as the scene view lists it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PatchInfo {
+    /// Its runtime id, for `select_patch`.
+    pub id: u64,
+    pub name: String,
+    /// The patch the engine plays and every patch command acts on.
+    pub current: bool,
+    /// The patch the track plays.
+    pub played: bool,
+}
+
 /// What applying a preset did.
 #[derive(Debug, Default, PartialEq, Serialize)]
 pub struct ApplyReport {
@@ -94,7 +115,8 @@ struct Open {
 
 pub struct Session {
     doc: Mutex<Document<Shard>>,
-    /// The plan the engine has, as last handed over.
+    /// The plan the engine has, as last handed over, selected onto the
+    /// current patch.
     sent: Mutex<Plan>,
     /// Tracker mode: the first track plays. Not the document's.
     tracking: AtomicBool,
@@ -166,9 +188,16 @@ impl Session {
     }
 
     /// Hands the engine what changed since the last hand-over, or everything.
+    /// The current patch stays current while it exists; `all` (a new or
+    /// opened document) starts on the patch the track plays.
     fn sync(&self, doc: &Document<Shard>, all: bool) {
-        let plan = doc.projection();
         let mut sent = lock(&self.sent);
+        let mut plan = doc.projection().clone();
+        if let Some(current) = sent.current.filter(|_| !all) {
+            // A patch that has gone leaves the plan on the track's.
+            plan.select(current);
+        }
+        let plan = &plan;
         if all || plan.patch != sent.patch {
             plan.write_patch(&self.feeds.bank);
         }
@@ -185,6 +214,12 @@ impl Session {
             self.send_pool(&plan.pool);
         }
         *sent = plan.clone();
+    }
+
+    /// The patch every patch-scoped command acts on. Takes `sent`, so call it
+    /// holding `doc` or nothing, never `sent`.
+    fn current(&self) -> Option<NodeId> {
+        lock(&self.sent).current
     }
 
     fn store_steps(&self, plan: &Plan) {
@@ -250,8 +285,9 @@ impl Session {
         f(&lock(&self.doc))
     }
 
+    /// What the engine was last handed: the current patch's plan.
     pub fn plan(&self) -> Plan {
-        self.read(|d| d.projection().clone())
+        lock(&self.sent).clone()
     }
 
     // Values.
@@ -265,7 +301,7 @@ impl Session {
             return Ok(());
         }
         let found = self.read(|d| {
-            let (node, key) = locate(d.tree(), id)?;
+            let (node, key) = locate(d.tree(), self.current(), id)?;
             let spec = d.tree().get(node)?.node_type()?.spec(&key)?.clone();
             Some((node, key, to_value(&spec, value)?))
         });
@@ -321,7 +357,7 @@ impl Session {
 
     fn owner(&self, layer: &str) -> Result<NodeId, String> {
         self.read(|d| match layer {
-            "patch" => patch_node(d.tree()).map(|n| n.id()),
+            "patch" => patch_node(d.tree(), self.current()).map(|n| n.id()),
             "arrangement" => arrangement_node(d.tree()).map(|n| n.id()),
             _ => None,
         })
@@ -680,7 +716,7 @@ impl Session {
             ));
         }
         let (target, key) = self
-            .read(|d| locate(d.tree(), id))
+            .read(|d| locate(d.tree(), self.current(), id))
             .ok_or_else(|| format!("there is no parameter called {id}"))?;
         let source = self
             .read(|d| d.projection().node_of(source))
@@ -693,7 +729,7 @@ impl Session {
     }
 
     pub fn unlink_param(&self, id: &str) -> Result<(), String> {
-        let Some((target, key)) = self.read(|d| locate(d.tree(), id)) else {
+        let Some((target, key)) = self.read(|d| locate(d.tree(), self.current(), id)) else {
             return Ok(());
         };
         self.edit("Unlink a parameter", None, |tx| unlink(tx, target, &key))?;
@@ -706,12 +742,13 @@ impl Session {
     /// `fx.3.chorus`: patch only.
     fn preset_node(&self, node: &str) -> Result<NodeId, String> {
         self.read(|d| {
-            let patch = patch_node(d.tree())?;
+            let current = self.current();
+            let patch = patch_node(d.tree(), current)?;
             if node == om::PATCH {
                 return Some(patch.id());
             }
             if node.starts_with("fx.") {
-                return locate(d.tree(), &format!("{node}.on")).map(|(n, _)| n);
+                return locate(d.tree(), current, &format!("{node}.on")).map(|(n, _)| n);
             }
             patch.child(node).map(|n| n.id())
         })
@@ -756,8 +793,7 @@ impl Session {
             self.sync(&doc, false);
         }
         let prefix = format!("{node}.");
-        let refused = doc
-            .projection()
+        let refused = lock(&self.sent)
             .mod_set()
             .1
             .into_iter()
@@ -936,10 +972,12 @@ impl Session {
     // The controller map a patch plays with.
 
     pub fn controller_map(&self) -> Option<MapRef> {
-        self.read(|d| match patch_node(d.tree())?.value("patch.map")? {
-            Value::Shaped(j) => serde_json::from_value(j).ok(),
-            _ => None,
-        })
+        self.read(
+            |d| match patch_node(d.tree(), self.current())?.value("patch.map")? {
+                Value::Shaped(j) => serde_json::from_value(j).ok(),
+                _ => None,
+            },
+        )
     }
 
     /// Records the map the patch plays with. One step, as choosing a map is
@@ -954,6 +992,91 @@ impl Session {
             tx.put(patch, "patch.map", Value::Shaped(value))
         })?;
         Ok(())
+    }
+
+    // Patches.
+
+    /// Every patch, in order, for the scene view.
+    pub fn patches(&self) -> Vec<PatchInfo> {
+        self.read(|d| {
+            let tree = d.tree();
+            let current = patch_node(tree, self.current()).map(|n| n.id());
+            let played = om::track_patch(tree).map(|n| n.id());
+            om::patches(tree)
+                .iter()
+                .enumerate()
+                .filter_map(|(i, p)| {
+                    Some(PatchInfo {
+                        id: d.projection().id_of(p.id())?,
+                        name: om::patch_name(p, i),
+                        current: Some(p.id()) == current,
+                        played: Some(p.id()) == played,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    /// The current patch's runtime id, as `patches` lists it.
+    pub fn current_patch(&self) -> Option<u64> {
+        let sent = lock(&self.sent);
+        sent.current.and_then(|n| sent.id_of(n))
+    }
+
+    /// New Patch: a patch at its defaults, "Patch N", the drone in both
+    /// generators that read a material and an empty chain, at the end of the
+    /// order. One undo step, and it becomes the current patch.
+    pub fn new_patch(&self) -> Result<u64, String> {
+        let mut doc = lock(&self.doc);
+        // A gesture on the patch being left ends first, as its own step.
+        self.end_gesture(&mut doc);
+        let (patch, commit) = doc.edit("New Patch", |tx| tx.new_patch()).map_err(err)?;
+        lock(&self.sent).current = Some(patch);
+        if commit.is_some() {
+            self.sync(&doc, false);
+        }
+        let id = doc.projection().id_of(patch);
+        drop(doc);
+        self.changed();
+        id.ok_or_else(|| "the new patch did not compile".to_string())
+    }
+
+    /// Makes another patch current. Not an edit: no undo step, no unsaved
+    /// mark. The engine is handed the whole patch, here on the command thread.
+    pub fn select_patch(&self, id: u64) -> Result<(), String> {
+        let mut doc = lock(&self.doc);
+        let node = doc
+            .projection()
+            .node_of(id)
+            .filter(|n| {
+                doc.tree()
+                    .get(*n)
+                    .is_some_and(|p| p.type_name() == om::PATCH)
+            })
+            .ok_or_else(|| format!("there is no patch {id}"))?;
+        if self.current() == Some(node) {
+            return Ok(());
+        }
+        // A gesture on an envelope of the patch being left ends with it.
+        let ended = self.end_gesture(&mut doc);
+        lock(&self.sent).current = Some(node);
+        self.sync(&doc, false);
+        drop(doc);
+        if ended {
+            // Its step now exists, so the Undo title has changed.
+            self.changed();
+        }
+        Ok(())
+    }
+
+    /// Ends an open envelope gesture, keeping what it did as its own step.
+    /// True when one was open.
+    fn end_gesture(&self, doc: &mut Document<Shard>) -> bool {
+        let Some(old) = lock(&self.gesture).take() else {
+            return false;
+        };
+        let _ = doc.end(old.id);
+        true
     }
 
     // Files.

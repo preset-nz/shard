@@ -1,10 +1,17 @@
 //! The projection: the tree compiled into what the engine reads today
 //! (epic 32, story 2, slice B).
 //!
-//! One patch. The N-patch `Plan` in `object-model.md`, with its own bank and
-//! a crossfade on structural edits, waits for multi-patch. Until then a plan
-//! is today's inputs, rebuilt from the tree after every change:
+//! The engine plays one patch. A session holds several (epic 10), and every
+//! one is compiled, so the session can hand the engine whichever is current
+//! without compiling again; the N-patch engine in `object-model.md`, with a
+//! bank per patch, waits for several tracks. A plan is today's inputs,
+//! rebuilt from the tree after every change:
 //!
+//! - **which patch it plays,** `current`. Compiled, that is the patch the
+//!   first track plays (`track_patch`). The session's own copy is selected
+//!   onto its current patch with `Plan::select`: the projection is rhizome's
+//!   and can't hear about a selection, which is session state, not the
+//!   document's;
 //! - the patch's values, indexed as `PARAMS`, and the arrangement's, indexed
 //!   as `arrangement::params()`. An effect node plays a pool instance by its
 //!   place in the chain: the k-th of a kind is copy k, so the same tree
@@ -31,38 +38,68 @@ use shard_dsp::steps::STEPS;
 use shard_dsp::{ModSet, ParamBank, StepParams};
 
 use super::*;
-use crate::materials::{MaterialRecord, Pool};
+use crate::materials::{MaterialRecord, Pool, Wires};
 use crate::modulation::{EnvelopeRecord, LfoRecord, LinkRecord, Modulation, Refused};
 use crate::tracker::{Kit, Step, Track, Tracker};
 
 /// What the engine reads, compiled from a session.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Plan {
-    /// The patch's values, indexed as `PARAMS`.
+    /// The patch `patch`, `modulation` and the pool's wires are: the one the
+    /// first track plays, or the session's current one once it is selected.
+    pub current: Option<NodeId>,
+    /// The current patch's values, indexed as `PARAMS`.
     pub patch: Vec<f32>,
     /// The arrangement's values, indexed as `arrangement::params()`.
     pub arrangement: Vec<f32>,
+    /// The current patch's LFOs, envelopes and links.
     pub modulation: Modulation,
     pub tracker: Tracker,
+    /// Every material, wired as the current patch wires them.
     pub pool: Pool,
-    /// Runtime ids by node, for modulators and materials.
+    /// Every patch compiled, in the patches' order.
+    patches: Vec<(NodeId, PatchPlan)>,
+    /// Runtime ids by node, for patches, modulators and materials.
     ids: BTreeMap<NodeId, u64>,
+}
+
+/// One patch as the engine would play it.
+#[derive(Clone, Debug, PartialEq)]
+struct PatchPlan {
+    values: Vec<f32>,
+    modulation: Modulation,
+    wires: Wires,
 }
 
 impl Default for Plan {
     fn default() -> Self {
         Self {
+            current: None,
             patch: PARAMS.iter().map(|p| p.default).collect(),
             arrangement: arrangement::params().iter().map(|p| p.default).collect(),
             modulation: Modulation::default(),
             tracker: Tracker::default(),
             pool: Pool::default(),
+            patches: Vec::new(),
             ids: BTreeMap::new(),
         }
     }
 }
 
 impl Plan {
+    /// Makes `patch` the one this plan plays: its values, modulation and
+    /// wires. False, and nothing changes, when it compiled no such patch.
+    pub fn select(&mut self, patch: NodeId) -> bool {
+        let Some((_, p)) = self.patches.iter().find(|(n, _)| *n == patch) else {
+            return false;
+        };
+        self.patch.clone_from(&p.values);
+        self.modulation = p.modulation.clone();
+        self.pool.wires = p.wires;
+        self.current = Some(patch);
+        true
+    }
+
     /// Writes the patch's values into the live bank, all but the played rows,
     /// so a held brake stays held through an edit.
     pub fn write_patch(&self, bank: &ParamBank) {
@@ -231,7 +268,6 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
         new: BTreeMap::new(),
     };
 
-    let patch = patch_node(tree);
     let arr = arrangement_node(tree);
 
     // Materials first, so a wire can name one.
@@ -255,35 +291,20 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
         }
     }
 
-    let chain = Chain::of(patch);
-    fill(
-        &PARAMS,
-        "",
-        &chain,
-        |prefix| {
-            let p = patch?;
-            if prefix == PATCH {
-                Some(p)
-            } else {
-                p.child(prefix)
-            }
-        },
-        &mut plan.patch,
-    );
-
+    plan.patches = patches(tree)
+        .into_iter()
+        .map(|p| {
+            ids.of(p.id());
+            (p.id(), compile_patch(p, &mut ids))
+        })
+        .collect();
+    // The patch the track plays, or the defaults with no patch at all.
+    plan.patch.clear();
+    plan.patch.extend(PARAMS.iter().map(|p| p.default));
     plan.modulation = Modulation::default();
-    if let Some(p) = patch {
-        for g in READS_MATERIAL {
-            let wired = p
-                .child(g)
-                .and_then(|n| n.resolve(&format!("{g}.source")))
-                .map(|s| ids.of(s.id()));
-            match *g {
-                "material" => plan.pool.wires.material = wired,
-                _ => plan.pool.wires.grain = wired,
-            }
-        }
-        plan.modulation = modulation(p, &chain, &mut ids);
+    plan.current = None;
+    if let Some(p) = track_patch(tree) {
+        plan.select(p.id());
     }
 
     let arr_chain = Chain::of(arr);
@@ -304,6 +325,40 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
     plan.tracker = arr.map(read_tracker).unwrap_or_default();
 
     plan.ids = ids.new;
+}
+
+fn compile_patch(p: Node<'_>, ids: &mut Ids<'_>) -> PatchPlan {
+    let chain = Chain::of(Some(p));
+    let mut values = Vec::with_capacity(PARAMS.len());
+    fill(
+        &PARAMS,
+        "",
+        &chain,
+        |prefix| {
+            if prefix == PATCH {
+                Some(p)
+            } else {
+                p.child(prefix)
+            }
+        },
+        &mut values,
+    );
+    let mut wires = Wires::default();
+    for g in READS_MATERIAL {
+        let wired = p
+            .child(g)
+            .and_then(|n| n.resolve(&format!("{g}.source")))
+            .map(|s| ids.of(s.id()));
+        match *g {
+            "material" => wires.material = wired,
+            _ => wires.grain = wired,
+        }
+    }
+    PatchPlan {
+        values,
+        modulation: modulation(p, &chain, ids),
+        wires,
+    }
 }
 
 fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulation {
@@ -403,9 +458,48 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
     }
 }
 
-pub fn patch_node(tree: &Tree) -> Option<Node<'_>> {
+/// The patches in `category` (`/patches`), in their order. A patch the
+/// order misses, in a file the tree's check would refuse, still plays, after
+/// the listed ones.
+pub fn patches_in(category: Node<'_>) -> Vec<Node<'_>> {
+    let mut out: Vec<Node<'_>> = category
+        .order(PATCH_ORDER)
+        .into_iter()
+        .filter(|n| n.type_name() == PATCH)
+        .collect();
+    for c in category.children().filter(|n| n.type_name() == PATCH) {
+        if !out.iter().any(|n| n.id() == c.id()) {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// The session's patches, in their order.
+pub fn patches(tree: &Tree) -> Vec<Node<'_>> {
     tree.at(format!("/{PATCHES}").as_str())
-        .and_then(|c| c.children().find(|n| n.type_name() == PATCH))
+        .map(patches_in)
+        .unwrap_or_default()
+}
+
+/// The patch the first track plays: the one its `track.patch` names, or the
+/// first patch when it names none, or one that has gone.
+pub fn track_patch(tree: &Tree) -> Option<Node<'_>> {
+    arrangement_node(tree)
+        .and_then(|a| a.order(TRACKS).into_iter().next())
+        .and_then(|t| t.resolve(TRACK_PATCH))
+        .filter(|p| p.type_name() == PATCH)
+        .or_else(|| patches(tree).into_iter().next())
+}
+
+/// The patch an edit acts on: `current` while it is a patch in the tree, and
+/// the one the track plays otherwise (after undoing the New Patch that made
+/// it current, say).
+pub fn patch_node(tree: &Tree, current: Option<NodeId>) -> Option<Node<'_>> {
+    current
+        .and_then(|id| tree.get(id))
+        .filter(|n| n.type_name() == PATCH)
+        .or_else(|| track_patch(tree))
 }
 
 pub fn arrangement_node(tree: &Tree) -> Option<Node<'_>> {
@@ -413,13 +507,14 @@ pub fn arrangement_node(tree: &Tree) -> Option<Node<'_>> {
         .and_then(|c| c.children().find(|n| n.type_name() == ARRANGEMENT))
 }
 
-/// Where a parameter id lives: the node and its key. Patch ids and
-/// `arrangement.` ids alike. `None` for an order row, a played row, an effect
-/// instance no node plays, or an id the tree has no home for.
-pub fn locate(tree: &Tree, id: &str) -> Option<(NodeId, String)> {
+/// Where a parameter id lives: the node and its key. Patch ids (on the patch
+/// `patch_node` finds from `current`) and `arrangement.` ids alike. `None`
+/// for an order row, a played row, an effect instance no node plays, or an
+/// id the tree has no home for.
+pub fn locate(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(NodeId, String)> {
     let (owner, bare) = match id.strip_prefix(arrangement::PREFIX) {
         Some(bare) => (arrangement_node(tree)?, bare),
-        None => (patch_node(tree)?, id),
+        None => (patch_node(tree, current)?, id),
     };
     if fx::is_order_row(id) || PLAYED.contains(&bare) {
         return None;
