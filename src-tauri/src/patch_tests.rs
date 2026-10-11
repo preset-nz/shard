@@ -315,3 +315,98 @@ fn a_new_patch_in_a_session_without_the_drone_is_silent() {
     let wires = r.session.pool().wires;
     assert_eq!((wires.material, wires.grain), (None, None));
 }
+
+fn played(r: &Rig) -> PatchInfo {
+    listed(r)
+        .into_iter()
+        .find(|p| p.played)
+        .expect("a played patch")
+}
+
+#[test]
+fn set_plays_is_one_undo_step_and_undo_restores_the_previous_patch() {
+    let r = rig();
+    let first = played(&r).id;
+    let second = r.session.new_patch().unwrap();
+    let before = r.session.history_labels().0.len();
+
+    assert!(!r.session.set_track_patch(second).unwrap(), "sound scaping");
+    assert_eq!(played(&r).id, second);
+    assert_eq!(r.session.history().0.as_deref(), Some("Set Plays"));
+    assert_eq!(r.session.history_labels().0.len(), before + 1);
+    assert!(r.session.is_unsaved());
+
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Set Plays"));
+    assert_eq!(played(&r).id, first, "undo restores the reference");
+    assert_eq!(r.session.redo().unwrap().as_deref(), Some("Set Plays"));
+    assert_eq!(played(&r).id, second);
+}
+
+#[test]
+fn an_unchanged_or_refused_pick_adds_no_step() {
+    let r = rig();
+    let first = played(&r).id;
+    let second = r.session.new_patch().unwrap();
+    let history = r.session.history_labels();
+    let tree = r.session.read(|d| d.tree().serialise());
+
+    assert!(!r.session.set_track_patch(first).unwrap());
+    assert_eq!(r.session.history_labels(), history, "already played");
+
+    assert!(r.session.set_track_patch(u64::MAX).is_err());
+    // A material is a node with a runtime id, and not a patch.
+    let material = r.session.pool().materials[0].id;
+    assert!(r.session.set_track_patch(material).is_err());
+    assert_eq!(r.session.history_labels(), history);
+    assert_eq!(r.session.read(|d| d.tree().serialise()), tree);
+    assert_eq!(played(&r).id, first);
+    assert_eq!(current(&r).id, second, "and the current patch stays");
+}
+
+#[test]
+fn in_tracker_mode_the_engine_follows_what_the_track_plays() {
+    let r = rig();
+    r.session.set_param("grain.size", 80.0).unwrap();
+    let first = played(&r).id;
+    let second = r.session.new_patch().unwrap();
+    r.session.set_param("grain.size", 120.0).unwrap();
+    r.session.select_patch(first).unwrap();
+    r.session.set_mode(true);
+    assert_eq!(get(&r, "grain.size"), 80.0);
+
+    assert!(
+        r.session.set_track_patch(second).unwrap(),
+        "the current patch moved"
+    );
+    assert_eq!(current(&r).id, second);
+    assert_eq!(get(&r, "grain.size"), 120.0, "the engine plays the pick");
+    assert_eq!(
+        r.session
+            .plan()
+            .current
+            .and_then(|n| r.session.plan().id_of(n)),
+        Some(second)
+    );
+
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Set Plays"));
+    assert_eq!(current(&r).id, first);
+    assert_eq!(get(&r, "grain.size"), 80.0, "undo returns the engine too");
+    r.session.redo().unwrap();
+    assert_eq!(current(&r).id, second);
+    assert_eq!(get(&r, "grain.size"), 120.0);
+}
+
+#[test]
+fn outside_tracker_mode_set_plays_leaves_what_is_heard() {
+    let r = rig();
+    r.session.set_param("grain.size", 80.0).unwrap();
+    let first = played(&r).id;
+    let second = r.session.new_patch().unwrap();
+    r.session.select_patch(first).unwrap();
+
+    r.session.set_track_patch(second).unwrap();
+    assert_eq!(current(&r).id, first, "the patch being shaped stays");
+    assert_eq!(get(&r, "grain.size"), 80.0);
+    r.session.undo().unwrap();
+    assert_eq!(current(&r).id, first);
+}

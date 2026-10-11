@@ -152,6 +152,13 @@ export const newPatch = () => invoke<number>('new_patch');
 /** Make another patch current. Not an edit. Followed by `document-opened`. */
 export const selectPatch = (id: number) => invoke<void>('select_patch', { id });
 
+/**
+ * The patch the track plays (the *Plays* picker). One step of Undo, "Set
+ * Plays". Reread `listPatches` afterwards; in tracker mode Rust also emits
+ * `document-opened`, because the engine moves to that patch.
+ */
+export const setTrackPatch = (id: number) => invoke<void>('set_track_patch', { id });
+
 export const meters = () => invoke<Meters>('meters');
 
 /** A material as the tree and the inspector show it. */

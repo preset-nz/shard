@@ -1,6 +1,7 @@
 import { Icons } from '@preset.nz/ux-kit';
 import { type ReactNode, useRef, useState } from 'react';
 import type { PatchInfo } from '@/audio';
+import { PlaysPicker } from '@/components/PlaysPicker';
 
 /**
  * The scene view (epic 10): the left panel, in both what were the modes. It
@@ -24,6 +25,7 @@ export function SceneView({
   selectedPatch,
   onSelectTrack,
   onSelectPatch,
+  onPlays,
   onNewPatch,
   patchChildren,
   materials,
@@ -35,6 +37,8 @@ export function SceneView({
   selectedPatch: number | null;
   onSelectTrack: () => void;
   onSelectPatch: (id: number) => void;
+  /** The track now plays this patch (the *Plays* picker). */
+  onPlays: (id: number) => void;
   onNewPatch: () => void;
   /** The current patch's generators and modulators. */
   patchChildren: ReactNode;
@@ -47,7 +51,6 @@ export function SceneView({
   // means "on the selection".
   const [cursor, setCursor] = useState<number | null>(null);
 
-  const played = patches.find((p) => p.played);
   const rowCount = 1 + patches.length;
   const selectedRow = trackSelected
     ? 0
@@ -64,7 +67,7 @@ export function SceneView({
   };
 
   const rowClass = (row: number, selected: boolean, emphasised = false) =>
-    `flex w-full items-baseline gap-1.5 px-3 py-1 text-left text-xs ${
+    `flex w-full items-center gap-1.5 px-3 py-1 text-left text-xs ${
       selected
         ? 'bg-accent text-foreground'
         : emphasised
@@ -108,23 +111,20 @@ export function SceneView({
             Tracks
           </span>
         </div>
-        <button
-          type="button"
-          title="Play this track's steps, through the arrangement"
-          onMouseDown={focusPanel}
-          onClick={() => selectRow(0)}
-          className={rowClass(0, trackSelected)}
-        >
-          <span className="flex-1 truncate">Track 1</span>
-          {played && (
-            <span
-              title={`Plays ${played.name}`}
-              className="min-w-0 max-w-[55%] shrink-0 truncate text-[10px] text-muted-foreground"
-            >
-              {played.name}
-            </span>
-          )}
-        </button>
+        {/* The row is not one button: the name selects the track, and the
+            picker beside it chooses the patch it plays. */}
+        <div className={rowClass(0, trackSelected)}>
+          <button
+            type="button"
+            title="Play this track's steps, through the arrangement"
+            onMouseDown={focusPanel}
+            onClick={() => selectRow(0)}
+            className="min-w-0 flex-1 truncate text-left"
+          >
+            Track 1
+          </button>
+          <PlaysPicker patches={patches} onPick={onPlays} className="w-[5.5rem]" />
+        </div>
       </div>
 
       <div className="py-2">

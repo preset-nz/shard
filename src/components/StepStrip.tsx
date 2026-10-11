@@ -4,11 +4,13 @@ import {
   KIT_VOICES,
   type Kit,
   type KitVoice,
+  type PatchInfo,
   type Step,
   type Track,
   type Tracker,
   type TrackerEdit,
 } from '@/audio';
+import { PlaysPicker } from '@/components/PlaysPicker';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
 
@@ -48,6 +50,8 @@ export function StepStrip({
   step,
   kitStep,
   root,
+  patches,
+  onPlays,
   onChange,
   onEdit,
 }: {
@@ -58,6 +62,10 @@ export function StepStrip({
   kitStep: number;
   /** The Sample material's root note, a MIDI number, so pitches show as names. */
   root: number | null;
+  /** The session's patches, for the *Plays* picker. */
+  patches: PatchInfo[];
+  /** The track now plays this patch. */
+  onPlays: (id: number) => void;
   onChange: (next: Tracker) => void;
   /** A whole-pattern edit: clear, paste or repeat a bar, rotate, transpose. */
   onEdit: (edit: TrackerEdit) => void;
@@ -222,6 +230,11 @@ export function StepStrip({
       {/* No switch: the mode decides whether the steps play, and this strip
           only shows in tracker mode. */}
       <span className="text-[11px] font-semibold uppercase tracking-wider">Tracker</span>
+
+      <div className="flex items-center gap-1.5">
+        <span>Plays</span>
+        <PlaysPicker patches={patches} onPick={onPlays} />
+      </div>
 
       <label className="flex items-center gap-1">
         <input

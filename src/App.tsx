@@ -75,6 +75,7 @@ import {
   setParam,
   setPlaying,
   setTracker,
+  setTrackPatch,
   type Tracker,
   type TrackerEdit,
   unlinkParam,
@@ -191,6 +192,7 @@ export default function App() {
   const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
   /** The session's patches, in order, as the scene view lists them. */
   const [patches, setPatches] = useState<PatchInfo[]>([]);
+  const playedPatch = patches.find((p) => p.played);
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
   /** The active controller map, as the rows draw it. */
@@ -791,7 +793,27 @@ export default function App() {
   // The scene view's selections decide the mode (epic 10). None of them edits
   // the document. The track shows the tracker and plays its steps; a patch
   // becomes the current one if it is not, then shows its lanes and loops.
-  const selectTrack = () => setMode('tracker');
+  // The engine plays one patch, and with the track selected it is the one the
+  // track plays, so selecting the track moves it there first.
+  const selectTrack = async () => {
+    try {
+      const played = patches.find((p) => p.played);
+      if (played && !played.current) await selectPatch(played.id);
+      setMode('tracker');
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  // The *Plays* picker: one undo step, "Set Plays". In tracker mode Rust also
+  // moves the engine to the pick and says so along `document-opened`.
+  const pickPlays = async (id: number) => {
+    try {
+      await setTrackPatch(id);
+      setPatches(await listPatches());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   const selectPatchRow = async (id: number) => {
     try {
       if (!patches.find((p) => p.id === id)?.current) await selectPatch(id);
@@ -845,7 +867,7 @@ export default function App() {
         if (node?.fx) moveEffect(node, 1);
         break;
       case 'view-tracker':
-        selectTrack();
+        void selectTrack();
         break;
       case 'view-soundscape': {
         const current = patches.find((p) => p.current);
@@ -983,7 +1005,8 @@ export default function App() {
             selectedPatch={
               mode === 'soundscape' ? (patches.find((p) => p.current)?.id ?? null) : null
             }
-            onSelectTrack={selectTrack}
+            onSelectTrack={() => void selectTrack()}
+            onPlays={(id) => void pickPlays(id)}
             onSelectPatch={(id) => void selectPatchRow(id)}
             onNewPatch={newPatchRow}
             patchChildren={
@@ -1184,6 +1207,8 @@ export default function App() {
                 step={meter.step}
                 kitStep={meter.kit_step}
                 root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
+                patches={patches}
+                onPlays={(id) => void pickPlays(id)}
                 onEdit={(edit) => void editTrackerView(edit)}
                 onChange={(next) => void changeTracker(next)}
               />
@@ -1226,7 +1251,12 @@ export default function App() {
                     ].map((node) => (
                       <NodeCard
                         key={node.id}
-                        node={node}
+                        // The track's card is the patch it plays, by name.
+                        node={
+                          mode === 'tracker' && node.id === 'arrangement.track' && playedPatch
+                            ? { ...node, label: playedPatch.name }
+                            : node
+                        }
                         defs={defs}
                         values={values}
                         ctx={panelCtx}

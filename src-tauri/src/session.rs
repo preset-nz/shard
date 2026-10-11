@@ -434,6 +434,7 @@ impl Session {
         let mut doc = lock(&self.doc);
         let commit = doc.undo().map_err(err)?;
         if commit.is_some() {
+            self.follow_track(&doc);
             self.sync(&doc, false);
         }
         drop(doc);
@@ -447,6 +448,7 @@ impl Session {
         let mut doc = lock(&self.doc);
         let commit = doc.redo().map_err(err)?;
         if commit.is_some() {
+            self.follow_track(&doc);
             self.sync(&doc, false);
         }
         drop(doc);
@@ -1067,6 +1069,64 @@ impl Session {
             self.changed();
         }
         Ok(())
+    }
+
+    /// Sets what the track plays (the *Plays* picker, epic 10 story c) to the
+    /// patch `id` names. One undo step, "Set Plays", and none when the track
+    /// already plays it. In tracker mode what is heard is what the track
+    /// plays, so the engine moves to the new patch with it. Answers whether
+    /// the current patch changed, which the webview reads everything again
+    /// for.
+    pub fn set_track_patch(&self, id: u64) -> Result<bool, String> {
+        let mut doc = lock(&self.doc);
+        let node = doc
+            .projection()
+            .node_of(id)
+            .filter(|n| {
+                doc.tree()
+                    .get(*n)
+                    .is_some_and(|p| p.type_name() == om::PATCH)
+            })
+            .ok_or_else(|| format!("there is no patch {id}"))?;
+        let track = om::arrangement_node(doc.tree())
+            .and_then(|a| a.order(om::TRACKS).into_iter().next())
+            .map(|t| t.id())
+            .ok_or_else(|| "there is no track".to_string())?;
+        if om::track_patch(doc.tree()).map(|p| p.id()) == Some(node) {
+            return Ok(false);
+        }
+        let tracking = self.tracking.load(Ordering::Relaxed);
+        let moved = tracking && self.current() != Some(node);
+        // A gesture on the patch being left ends first, as its own step.
+        let ended = moved && self.end_gesture(&mut doc);
+        let (_, commit) = doc
+            .edit("Set Plays", |tx| {
+                tx.set_ref(track, om::TRACK_PATCH, Ref::here(node))
+            })
+            .map_err(err)?;
+        if moved {
+            lock(&self.sent).current = Some(node);
+        }
+        if commit.is_some() || moved {
+            self.sync(&doc, false);
+        }
+        drop(doc);
+        if commit.is_some() || ended {
+            self.changed();
+        }
+        Ok(moved)
+    }
+
+    /// In tracker mode the engine plays the patch the track plays, so after
+    /// a step of history moves the track's patch, the current patch follows.
+    /// Call it holding `doc`, before `sync`.
+    fn follow_track(&self, doc: &Document<Shard>) {
+        if !self.tracking.load(Ordering::Relaxed) {
+            return;
+        }
+        if let Some(played) = om::track_patch(doc.tree()) {
+            lock(&self.sent).current = Some(played.id());
+        }
     }
 
     /// Ends an open envelope gesture, keeping what it did as its own step.

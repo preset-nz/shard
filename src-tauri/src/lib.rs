@@ -755,6 +755,21 @@ fn select_patch(
     Ok(())
 }
 
+/// Sets the patch the track plays (the *Plays* picker): one step of Undo,
+/// "Set Plays". In tracker mode the engine follows, so the webview reads
+/// everything again as after selecting a patch.
+#[tauri::command]
+fn set_track_patch(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Audio>,
+    id: u64,
+) -> Result<(), String> {
+    if state.session.set_track_patch(id)? {
+        state.replaced(&app, session::LoadReport::default());
+    }
+    Ok(())
+}
+
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
@@ -1841,6 +1856,7 @@ pub fn run() {
             patches,
             new_patch,
             select_patch,
+            set_track_patch,
             meters,
             set_playing,
             tracker,
