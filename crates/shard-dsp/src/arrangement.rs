@@ -54,6 +54,7 @@ const ROWS: &[Row] = &[
     Row::Borrowed("arrangement.filter.cutoff"),
     Row::Borrowed("arrangement.filter.resonance"),
     Row::Borrowed("arrangement.filter.type"),
+    Row::Borrowed("arrangement.filter.slope"),
     Row::Borrowed("arrangement.amp.gain"),
     // The limiter, last of all (Georg, 2026-09-14), and since 2026-09-26
     // after the arrangement rather than inside the patch. It runs in sound

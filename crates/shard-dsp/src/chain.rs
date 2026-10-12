@@ -29,7 +29,7 @@ use crate::crush::{Crush, CrushParams};
 use crate::delay::{Delay, DelayParams};
 use crate::drive::{Drive, DriveParams, DriveType};
 use crate::echo::{Echo, EchoParams};
-use crate::filter::{Filter, FilterParams, FilterType};
+use crate::filter::{Filter, FilterParams, FilterSlope, FilterType};
 use crate::flanger::{Flanger, FlangerParams};
 use crate::fx::{self, Kind, Order, INSTANCES, ORDER_LEN, POOL};
 use crate::overtone::{Overtone, OvertoneParams};
@@ -70,6 +70,7 @@ pub(crate) struct ChainSlots {
     pub filter_cutoff: usize,
     pub filter_resonance: usize,
     pub filter_type: usize,
+    pub filter_slope: usize,
     pub gain: usize,
 }
 
@@ -96,6 +97,7 @@ impl ChainSlots {
             filter_cutoff: at("filter.cutoff"),
             filter_resonance: at("filter.resonance"),
             filter_type: at("filter.type"),
+            filter_slope: at("filter.slope"),
             gain: at("amp.gain"),
         }
     }
@@ -266,6 +268,7 @@ impl ChainParams {
                 cutoff_hz: value(s.filter_cutoff),
                 resonance: value(s.filter_resonance),
                 kind: FilterType::from_value(raw(s.filter_type)),
+                slope: FilterSlope::from_value(raw(s.filter_slope)),
                 mix: value(s.filter_mix),
             },
             filter_on: gate(s.filter_on),

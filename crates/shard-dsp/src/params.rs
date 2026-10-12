@@ -519,6 +519,18 @@ const BASE: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // 12 or 24 dB per octave. At 24 the resonance sits on the second of two
+    // stages; the arrangement's filter borrows this row too.
+    ParamDef {
+        id: "filter.slope",
+        name: "Slope",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
     // Off, half, full: how far the cutoff follows the step's pitch, an octave
     // per octave at full. The patch's filter only; the arrangement has no note.
     ParamDef {

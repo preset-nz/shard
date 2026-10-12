@@ -59,7 +59,7 @@ pub use drive::{Drive, DriveParams, DriveType};
 pub use echo::{Echo, EchoParams};
 pub use engine::{Engine, KITS, VOICES};
 pub use envelope::EnvParams;
-pub use filter::{Filter, FilterParams, FilterType};
+pub use filter::{Filter, FilterParams, FilterSlope, FilterType};
 pub use flanger::{Flanger, FlangerParams};
 pub use fm::{Fm, FmParams, FmType};
 pub use granular::{GrainParams, Granular, Window};
