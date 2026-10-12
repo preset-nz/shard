@@ -354,6 +354,46 @@ fn a_link_reaches_the_engine() {
 }
 
 #[test]
+fn a_link_to_a_new_modulator_is_one_undo_step() {
+    let r = rig();
+    r.session.link_new("grain.size", "lfo", 0.25, 0.75).unwrap();
+    let m = r.session.modulation().0;
+    assert_eq!(m.lfos.len(), 1);
+    assert_eq!(m.lfos[0].name, "LFO 1");
+    assert_eq!(m.links["grain.size"].source, m.lfos[0].id);
+
+    // A linked row moves to a second new modulator, and the first stays.
+    r.session
+        .link_new("grain.size", "envelope", 0.0, 1.0)
+        .unwrap();
+    let m = r.session.modulation().0;
+    assert_eq!(m.envelopes[0].name, "Mod envelope 1");
+    assert_eq!(m.links["grain.size"].source, m.envelopes[0].id);
+    assert_eq!(m.lfos.len(), 1);
+
+    assert_eq!(
+        r.session.undo().unwrap().as_deref(),
+        Some("Link to a new envelope")
+    );
+    assert_eq!(
+        r.session.undo().unwrap().as_deref(),
+        Some("Link to a new LFO")
+    );
+    let m = r.session.modulation().0;
+    assert!(m.lfos.is_empty() && m.links.is_empty());
+
+    assert!(r.session.link_new("grain.size", "drift", 0.0, 1.0).is_err());
+    assert!(r
+        .session
+        .link_new("arrangement.filter.cutoff", "lfo", 0.0, 1.0)
+        .is_err());
+    assert!(
+        r.session.modulation().0.lfos.is_empty(),
+        "a refusal adds nothing"
+    );
+}
+
+#[test]
 fn a_new_edit_after_undo_drops_redo() {
     let r = rig();
     r.session.set_param("grain.size", 10.0).unwrap();

@@ -736,6 +736,20 @@ fn link_param(
     Ok(modulation_view(&state))
 }
 
+/// Make a parameter follow a new LFO or envelope (`kind` "lfo" or
+/// "envelope"), added to the current patch for it, in one undo step.
+#[tauri::command]
+fn link_new(
+    state: tauri::State<'_, Audio>,
+    id: String,
+    kind: String,
+    lo: f32,
+    hi: f32,
+) -> Result<ModulationView, String> {
+    state.session.link_new(&id, &kind, lo, hi)?;
+    Ok(modulation_view(&state))
+}
+
 /// Stop a parameter following anything.
 #[tauri::command]
 fn unlink_param(state: tauri::State<'_, Audio>, id: String) -> Result<ModulationView, String> {
@@ -2103,6 +2117,7 @@ pub fn run() {
             envelope_gesture_end,
             envelope_gesture_cancel,
             link_param,
+            link_new,
             unlink_param,
             get_heard,
             lfo_limits,

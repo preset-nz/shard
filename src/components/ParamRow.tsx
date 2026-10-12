@@ -8,6 +8,7 @@ import {
   type MappingsView,
   type MaterialsView,
   type ModulationView,
+  type Modulator,
   modulatorsOf,
   normalise,
   type ParamInfo,
@@ -84,6 +85,7 @@ export interface ParamRowContext {
   onWire: (node: string, material: number | null) => void;
   onLink: (id: string, source: number, lo: number, hi: number) => void;
   onUnlink: (id: string) => void;
+  onLinkNew: (id: string, kind: Modulator['kind'], lo: number, hi: number) => void;
   onLearn: (id: string) => void;
   onMapMidi: (id: string, control: number) => void;
   onForgetMidi: (id: string) => void;
@@ -208,9 +210,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         </ContextMenuGroup>
         <ContextMenuSeparator />
         <ContextMenuSub>
-          <ContextMenuSubTrigger disabled={arrangement || modulators.length === 0}>
-            Link to
-          </ContextMenuSubTrigger>
+          <ContextMenuSubTrigger disabled={arrangement}>Link to</ContextMenuSubTrigger>
           <ContextMenuSubContent>
             {modulators.map((m) => (
               <ContextMenuItem
@@ -225,6 +225,19 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
                 {link?.source === m.id ? ' ✓' : ''}
               </ContextMenuItem>
             ))}
+            {modulators.length > 0 && <ContextMenuSeparator />}
+            {(['lfo', 'envelope'] as const).map((kind) => (
+              <ContextMenuItem
+                key={kind}
+                onClick={() =>
+                  link
+                    ? c.onLinkNew(def.id, kind, link.lo, link.hi)
+                    : c.onLinkNew(def.id, kind, ...around(t))
+                }
+              >
+                {kind === 'lfo' ? 'New LFO' : 'New envelope'}
+              </ContextMenuItem>
+            ))}
           </ContextMenuSubContent>
         </ContextMenuSub>
         <ContextMenuItem disabled={!link} onClick={() => c.onUnlink(def.id)}>
@@ -234,13 +247,6 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
           <ContextMenuGroup>
             <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
               The arrangement's controls follow no modulator yet.
-            </ContextMenuLabel>
-          </ContextMenuGroup>
-        )}
-        {!arrangement && modulators.length === 0 && (
-          <ContextMenuGroup>
-            <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
-              Add an LFO or envelope under Modulators first.
             </ContextMenuLabel>
           </ContextMenuGroup>
         )}

@@ -1103,24 +1103,14 @@ impl Session {
 
     pub fn add_lfo(&self) -> Result<(), String> {
         let patch = self.owner("patch")?;
-        self.edit("Add LFO", None, |tx| {
-            let lfo = tx.add_lfo(patch)?;
-            let n = count(tx, patch, om::LFO);
-            tx.set_value(lfo, "lfo.label", Value::Text(format!("LFO {n}")))
-        })?;
+        self.edit("Add LFO", None, |tx| new_lfo(tx, patch).map(|_| ()))?;
         Ok(())
     }
 
     pub fn add_envelope(&self) -> Result<(), String> {
         let patch = self.owner("patch")?;
         self.edit("Add envelope", None, |tx| {
-            let env = tx.add_mod_env(patch)?;
-            let n = count(tx, patch, om::MOD_ENV);
-            tx.set_value(
-                env,
-                "mod-env.label",
-                Value::Text(format!("Mod envelope {n}")),
-            )
+            new_envelope(tx, patch).map(|_| ())
         })?;
         Ok(())
     }
@@ -1281,6 +1271,33 @@ impl Session {
             .read(|d| d.projection().node_of(source))
             .ok_or_else(|| format!("there is no LFO or envelope {source} to link to"))?;
         self.edit("Link a parameter", Some(&format!("link:{id}")), |tx| {
+            unlink(tx, target, &key)?;
+            tx.link(target, &key, source, lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0))
+        })?;
+        Ok(())
+    }
+
+    /// The patch parameter `id` follows a new LFO (`kind` "lfo") or
+    /// envelope ("envelope"), added to the current patch for it: one undo
+    /// step, from the link menu.
+    pub fn link_new(&self, id: &str, kind: &str, lo: f32, hi: f32) -> Result<(), String> {
+        if id.starts_with(arrangement::PREFIX) {
+            return Err(format!(
+                "{id} is the arrangement's and can't follow a modulator"
+            ));
+        }
+        let (target, key) = self
+            .read(|d| locate(d.tree(), self.current(), id))
+            .ok_or_else(|| format!("there is no parameter called {id}"))?;
+        let (label, add): (_, fn(&mut Edit<'_>, NodeId) -> rhizome_core::Result<NodeId>) =
+            match kind {
+                "lfo" => ("Link to a new LFO", new_lfo),
+                "envelope" => ("Link to a new envelope", new_envelope),
+                _ => return Err(format!("there is no kind of modulator called {kind}")),
+            };
+        let patch = self.owner("patch")?;
+        self.edit(label, None, |tx| {
+            let source = add(tx, patch)?;
             unlink(tx, target, &key)?;
             tx.link(target, &key, source, lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0))
         })?;
@@ -2112,6 +2129,26 @@ fn count(tx: &Edit<'_>, patch: NodeId, kind: &str) -> usize {
 }
 
 /// Takes every link off `key` on `target`.
+/// A new LFO in `patch`, named "LFO n".
+fn new_lfo(tx: &mut Edit<'_>, patch: NodeId) -> rhizome_core::Result<NodeId> {
+    let lfo = tx.add_lfo(patch)?;
+    let n = count(tx, patch, om::LFO);
+    tx.set_value(lfo, "lfo.label", Value::Text(format!("LFO {n}")))?;
+    Ok(lfo)
+}
+
+/// A new modulation envelope in `patch`, named "Mod envelope n".
+fn new_envelope(tx: &mut Edit<'_>, patch: NodeId) -> rhizome_core::Result<NodeId> {
+    let env = tx.add_mod_env(patch)?;
+    let n = count(tx, patch, om::MOD_ENV);
+    tx.set_value(
+        env,
+        "mod-env.label",
+        Value::Text(format!("Mod envelope {n}")),
+    )?;
+    Ok(env)
+}
+
 fn unlink(tx: &mut Edit<'_>, target: NodeId, key: &str) -> rhizome_core::Result<()> {
     let sources: Vec<NodeId> = tx
         .at(target)

@@ -496,6 +496,9 @@ export const envelopeGestureEnd = () => invoke<void>('envelope_gesture_end');
 export const envelopeGestureCancel = () => invoke<ModulationView>('envelope_gesture_cancel');
 export const linkParam = (id: string, source: number, lo: number, hi: number) =>
   invoke<ModulationView>('link_param', { id, source, lo, hi });
+/** Link a parameter to a new LFO or envelope, added for it: one undo step. */
+export const linkNew = (id: string, kind: Modulator['kind'], lo: number, hi: number) =>
+  invoke<ModulationView>('link_new', { id, kind, lo, hi });
 export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param', { id });
 
 /** Every parameter as the engine last heard it, indexed as `getParams`. */
