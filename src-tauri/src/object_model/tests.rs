@@ -108,10 +108,6 @@ fn every_patch_parameter_has_a_home_at_its_default() {
             continue;
         }
         let at = patch_value(&doc, def.id);
-        if PLAYED.contains(&def.id) {
-            assert_eq!(at, None, "{} is played, not stored", def.id);
-            continue;
-        }
         assert_eq!(at, Some(def.default), "{}", def.id);
     }
 }
@@ -121,6 +117,15 @@ fn every_arrangement_parameter_has_a_home_at_its_default() {
     let doc = new_session();
     for def in arrangement::params() {
         if fx::parse_row(def.id).is_some() || fx::is_order_row(def.id) {
+            continue;
+        }
+        if PLAYED.contains(&def.id) {
+            assert_eq!(
+                arrangement_value(&doc, def.id),
+                None,
+                "{} is played, not stored",
+                def.id
+            );
             continue;
         }
         assert_eq!(

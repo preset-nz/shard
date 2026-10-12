@@ -296,11 +296,11 @@ impl Session {
     // Values.
 
     /// Sets a patch or arrangement parameter by id. A drag is one undo step,
-    /// "Set Cutoff". Brake and reverse are played: they reach the bank and
-    /// never the document.
+    /// "Set Cutoff". Brake and reverse are played: they reach the
+    /// arrangement's bank and never the document.
     pub fn set_param(&self, id: &str, value: f32) -> Result<(), String> {
         if om::PLAYED.contains(&id) {
-            self.feeds.bank.set_by_id(id, value);
+            self.feeds.arrangement.set_by_id(id, value);
             return Ok(());
         }
         let found = self.read(|d| {

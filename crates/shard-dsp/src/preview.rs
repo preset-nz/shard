@@ -35,18 +35,19 @@ const UNWIRED_S: f32 = 1.0;
 /// enough of what it settles into.
 const LOOP_S: f32 = 2.0;
 
-/// The gestures a hand makes while playing. They are not part of the patch,
-/// and a brake held while a control moves would flatten the picture.
-const GESTURES: [&str; 2] = ["tape.brake", "tape.reverse"];
+/// The gestures a hand makes while playing, on the arrangement's tape. They
+/// are not part of the patch, and a brake held while a control moves would
+/// flatten the picture.
+const GESTURES: [&str; 2] = ["arrangement.tape.brake", "arrangement.tape.reverse"];
 
 pub struct PreviewInput<'a> {
     pub sample_rate: f32,
     /// As the live engine, or the cloud steals voices differently.
     pub max_grains: usize,
-    /// The hand's values. Copied; the gestures are left out.
+    /// The hand's values. Copied.
     pub bank: &'a ParamBank,
     /// The arrangement's values. Read as sound scaping reads them: the patch
-    /// heard alone.
+    /// heard alone. Copied; the tape's gestures are left out.
     pub arrangement: &'a ParamBank,
     /// Each generator's whole material, and how it reads it.
     pub player: &'a [f32],
@@ -123,16 +124,20 @@ pub fn render_pass(input: PreviewInput) -> Preview {
     e.set_readings(player_reading, grain_reading);
     drop(e.set_modulation(input.mods));
     e.set_steps(StepParams::default());
-    e.set_arrangement(input.arrangement, true);
+    let arrangement = ParamBank::for_table(crate::arrangement::params());
+    for i in 0..arrangement.defs().len() {
+        arrangement.set(i, input.arrangement.get(i));
+    }
+    for id in GESTURES {
+        if let Some(i) = crate::arrangement::index_of_arrangement(id) {
+            arrangement.set(i, arrangement.defs()[i].default);
+        }
+    }
+    e.set_arrangement(&arrangement, true);
 
     let bank = ParamBank::new();
     for i in 0..bank.defs().len() {
         bank.set(i, input.bank.get(i));
-    }
-    for id in GESTURES {
-        if let Some(i) = index_of(id) {
-            bank.set(i, bank.defs()[i].default);
-        }
     }
 
     e.set_playing(true);
@@ -172,7 +177,20 @@ mod tests {
     }
 
     fn render(bank: &ParamBank, material: &[f32], octave: f32) -> Preview {
-        let arr = ParamBank::for_table(crate::arrangement::params());
+        render_arranged(
+            bank,
+            &ParamBank::for_table(crate::arrangement::params()),
+            material,
+            octave,
+        )
+    }
+
+    fn render_arranged(
+        bank: &ParamBank,
+        arr: &ParamBank,
+        material: &[f32],
+        octave: f32,
+    ) -> Preview {
         let reading = Reading {
             octave,
             ..Reading::default()
@@ -181,7 +199,7 @@ mod tests {
             sample_rate: SR,
             max_grains: 256,
             bank,
-            arrangement: &arr,
+            arrangement: arr,
             player: material,
             player_reading: reading,
             grain: material,
@@ -249,8 +267,10 @@ mod tests {
         let bank = ParamBank::new();
         let m = tone(24_000);
         let plain = render(&bank, &m, 0.0).samples;
-        bank.set_by_id("tape.brake", 1.0);
-        assert!(plain == render(&bank, &m, 0.0).samples);
+        let arr = ParamBank::for_table(crate::arrangement::params());
+        assert!(arr.set_by_id("arrangement.tape.brake", 1.0));
+        assert!(arr.set_by_id("arrangement.tape.reverse", 1.0));
+        assert!(plain == render_arranged(&bank, &arr, &m, 0.0).samples);
     }
 
     #[test]

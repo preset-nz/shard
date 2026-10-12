@@ -231,6 +231,11 @@ pub struct Chorus {
 
 impl Chorus {
     pub fn new(sample_rate: f32) -> Self {
+        Self::seeded(sample_rate, 0)
+    }
+
+    /// Its wander seeded with `salt` mixed in (`rng::salt`); zero is `new`.
+    pub fn seeded(sample_rate: f32, salt: u32) -> Self {
         let frames = (MAX_MS * 0.001 * sample_rate).ceil() as usize + 4;
         let d = ChorusParams::default();
         let smoother = |ms: f32, v: f32| {
@@ -265,7 +270,7 @@ impl Chorus {
                 core::array::from_fn(|v| (v as f32 * 0.382 + 0.19) % 1.0),
             ],
             wander: [[Wander::default(); MAX_VOICES]; 2],
-            rng: Rng::new(0x00C4_01E5),
+            rng: Rng::new(0x00C4_01E5 ^ salt),
             lows: [0.0; 2],
             lows_coef: 1.0 - (-core::f32::consts::TAU * EQ_CORNER_HZ / sample_rate).exp(),
             // Rate and depth move the read points, so a step in either is a

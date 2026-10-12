@@ -116,6 +116,16 @@ impl Filter {
         }
     }
 
+    /// Nothing ringing, and the smoothers where `p` puts them, as if it had
+    /// always been set so. For a voice coming back from idle.
+    pub fn reset(&mut self, p: &FilterParams) {
+        self.left = Channel::default();
+        self.right = Channel::default();
+        self.cutoff.reset(p.cutoff_hz);
+        self.resonance.reset(p.resonance);
+        self.mix.reset(p.mix);
+    }
+
     #[inline]
     pub fn process(&mut self, l: f32, r: f32, p: &FilterParams) -> (f32, f32) {
         let mix = self.mix.process(p.mix.clamp(0.0, 1.0));

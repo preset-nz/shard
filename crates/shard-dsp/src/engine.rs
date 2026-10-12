@@ -1,13 +1,31 @@
 //! The engine: the arrangement around the voices. A voice (`voice.rs`) is one
-//! track playing one patch; the engine holds the transport, the drum kit
-//! beside the tracks, the arrangement's chain over them and the limiter.
+//! track playing one patch; the engine holds a fixed pool of them, the
+//! transport they all step on, the tape they all run on, the drum kit beside
+//! them, the arrangement's chain over them and the limiter.
 //!
-//! Epic 28 (several tracks) splits it this way. Today there is exactly one
-//! voice, and every call that belongs to a track forwards to it.
+//! **The pool (epic 28).** `VOICES` voices, every buffer sized here, in
+//! `new`. Voice `i` reads its own bank (`process_voices`), modulation
+//! (`set_voice_modulation`), materials (`swap_voice_source`), readings
+//! (`set_voice_readings`) and steps (`set_voice_steps`), and is switched in
+//! and out with `set_voice_active`, which fades it. Voice 0 starts active and
+//! the rest idle; an idle voice is skipped whole and costs nothing. The calls
+//! without `voice` in their name (`process_block`, `set_steps`,
+//! `swap_source` and the rest) are the single-track shorthand: they address
+//! voice 0, and `process_block` hands every voice the same bank.
+//!
+//! **One transport** (`steps::Transport`): tempo, swing and whether the steps
+//! run are the arrangement's, set by `set_transport`. Every voice and the kit
+//! read the same position each frame, so their step ones land on the same
+//! sample and "the next bar" means one thing (`bar`).
+//!
+//! **One tape.** Brake and rewind are the arrangement's rows
+//! (`arrangement.tape.brake`, `arrangement.tape.reverse`), and slow every
+//! voice, the kit and the transport together (Georg, 2026-10-12). The slew
+//! and the flick length are still a patch's rows, read from voice 0.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
-//! logging, no file access. The only thing crossing in from outside is the
-//! atomic parameter bank, which is read once per block.
+//! logging, no file access. The only things crossing in from outside are the
+//! atomic parameter banks, each read once per block.
 
 use std::sync::Arc;
 
@@ -18,9 +36,14 @@ use crate::kit::{Kit, KitClock, KitParams, KitPattern, VOICES as KIT_VOICES};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::modulation::ModSet;
 use crate::params::ParamBank;
+use crate::smooth::OnePole;
 use crate::sources::{Generator, Reading};
-use crate::steps::StepParams;
-use crate::voice::Voice;
+use crate::steps::{StepParams, Transport};
+use crate::voice::{tape_gain, Tape, Voice};
+
+/// How many voices the engine holds: the most melody tracks that can play at
+/// once (epic 28). Fixed, so every buffer is sized when the engine is built.
+pub const VOICES: usize = 8;
 
 /// Where the arrangement's rows sit in its own table.
 struct ArrangementSlots {
@@ -32,6 +55,8 @@ struct ArrangementSlots {
     kit_decay: usize,
     limit: usize,
     ceiling: usize,
+    tape_brake: usize,
+    tape_reverse: usize,
 }
 
 impl ArrangementSlots {
@@ -49,6 +74,8 @@ impl ArrangementSlots {
             kit_decay: at("kit.decay"),
             limit: at("amp.limit"),
             ceiling: at("amp.ceiling"),
+            tape_brake: at("tape.brake"),
+            tape_reverse: at("tape.reverse"),
         }
     }
 }
@@ -65,6 +92,10 @@ struct ArrangementBlock {
     kit_gain: f32,
     kit: KitParams,
     limiter: LimiterParams,
+    /// The tape's gestures: how far the brake is down, 0 to 1, and whether
+    /// the reverse gate is held.
+    brake: f32,
+    reverse: bool,
 }
 
 impl ArrangementBlock {
@@ -79,7 +110,8 @@ impl ArrangementBlock {
         // a separate path: the arrangement's chain is emptied and both gains
         // go to unity, so the ramps fade the change in 10 ms, and once they
         // land the chain is bit-exact with no arrangement at all. The filter
-        // keeps running, so one switched back in has no stale state.
+        // keeps running, so one switched back in has no stale state. The
+        // tape is everyone's, so the patch alone still brakes.
         if patch_alone {
             fx = fx.without_effects();
             track_gain = 1.0;
@@ -98,62 +130,83 @@ impl ArrangementBlock {
                 ceiling: value(s.ceiling),
                 on: value(s.limit) >= 0.5,
             },
+            brake: value(s.tape_brake).clamp(0.0, 1.0),
+            reverse: value(s.tape_reverse) >= 0.5,
         }
     }
 }
 
-/// The arrangement's clock: whether the steps run, where they have got to,
-/// and the swing everything on the grid shares. Tempo and swing are the
-/// arrangement's, not a patch's (`steps.rs`), so the transport is the
-/// engine's and the voices and the kit read it.
-///
-/// **The a1 seam (epic 28).** Today the position is not counted here: it is
-/// the lead voice's step clock, copied in after that voice ticks each frame
-/// (`follow`). That keeps the kit's grid exactly where it was, including its
-/// one quirk: `StepClock::elapsed` counts the melody track's whole loops at
-/// its *current* length, so changing the melody's length or tempo mid-play
-/// moves the kit. Story a2 counts the position here, once a frame, and every
-/// voice's `StepClock` reads it, so "the next bar" has one meaning for every
-/// track.
-#[derive(Debug, Clone, Copy, Default)]
-struct Transport {
-    /// Whether the tracker wants the steps running, as `set_steps` last said.
-    on: bool,
-    /// Whether they are running: from the block `on` was first seen, until
-    /// it goes off or the transport stops.
-    running: bool,
-    /// Sixteenths since the steps started, as of this frame.
-    elapsed: f64,
-    /// 0 to 0.5 of a sixteenth, on every even-numbered step.
-    swing: f32,
+/// The tape every voice, the kit and the transport run on: one speed, a
+/// multiplier on tape time. Brake and reverse are two ways of asking for a
+/// different one, and they share one slew, so flipping direction slows to a
+/// stop and climbs back the other way, exactly as a reel does.
+struct Reel {
+    /// The tape's inertia. Its time constant is the patch's `tape.time`,
+    /// reset per block, so the brake's feel is a control, not a constant.
+    speed: OnePole,
+    /// Reverse, resolved from the gate. See `resolve`.
+    reversing: bool,
+    /// Samples since reverse engaged, for the flick's minimum on-time.
+    reverse_age: f32,
 }
 
-impl Transport {
-    /// The seam: the lead voice's clock is the transport's position.
-    #[inline]
-    fn follow(&mut self, lead: &crate::steps::StepClock) {
-        self.elapsed = lead.elapsed();
+impl Reel {
+    fn new() -> Self {
+        // Unity, not a parameter default: a brake's default of zero would
+        // pitch the instrument up from a standstill on every launch.
+        let mut speed = OnePole::new();
+        speed.reset(1.0);
+        Self {
+            speed,
+            reversing: false,
+            reverse_age: 0.0,
+        }
+    }
+
+    /// Turn the reverse *gate* into a direction, once per block.
+    ///
+    /// A tap and a hold are the same gesture held for different lengths, so
+    /// one rule covers both: reverse engages when the gate rises, and stays
+    /// engaged until the gate is low **and** it has run for at least `flick`.
+    /// Tap and you get a flick of a set length whatever your finger did; hold
+    /// and it stays until you let go.
+    ///
+    /// This lives here rather than in the button so that a MIDI note, a pad or
+    /// a footswitch produces exactly the same gesture with no code of its own.
+    fn resolve(&mut self, gate: bool, flick_samples: f32, frames: f32) {
+        if gate && !self.reversing {
+            self.reversing = true;
+            self.reverse_age = 0.0;
+        }
+        if self.reversing {
+            self.reverse_age += frames;
+            if !gate && self.reverse_age >= flick_samples {
+                self.reversing = false;
+            }
+        }
     }
 }
 
 pub struct Engine {
-    /// The track and the patch it plays. One today; a fixed pool in epic 28.
-    voice: Voice,
+    /// The pool. Boxed, so the engine itself stays small to move.
+    voices: Box<[Voice]>,
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
-    /// The steps' clock, shared by every track and the kit. See `Transport`.
+    /// The steps' clock, shared by every voice and the kit.
     transport: Transport,
-    /// The arrangement's chain, over the patch, and the patch's fader into it.
+    /// The tape's speed, shared the same way.
+    reel: Reel,
+    /// The arrangement's chain, over the voices, and their fader into it.
     arr_slots: ArrangementSlots,
     arr_fx: Chain,
     arr: ArrangementBlock,
-    track_gain: crate::smooth::OnePole,
-    /// The drum kit beside the patch, its grid, its place in its own loop,
+    track_gain: OnePole,
+    /// The drum kit beside the voices, its grid, its place in its own loop,
     /// and its fader. See `kit.rs`.
     kit: Kit,
     kit_pattern: KitPattern,
     kit_clock: KitClock,
-    kit_gain: crate::smooth::OnePole,
+    kit_gain: OnePole,
     /// After everything, the arrangement included.
     limiter: Limiter,
     sample_rate: f32,
@@ -165,23 +218,24 @@ impl Engine {
         let arr_defs = arrangement::params();
         let arr_slots = ArrangementSlots::resolve();
         let arr = ArrangementBlock::read(&arr_slots, |slot| arr_defs[slot].default, false);
-        let mut track_gain = crate::smooth::OnePole::new();
+        let mut track_gain = OnePole::new();
         track_gain.set_time(arr_defs[arr_slots.track_gain].smooth_ms, sample_rate);
         track_gain.reset(arr_defs[arr_slots.track_gain].default);
-        let mut kit_gain = crate::smooth::OnePole::new();
+        let mut kit_gain = OnePole::new();
         kit_gain.set_time(arr_defs[arr_slots.kit_gain].smooth_ms, sample_rate);
         kit_gain.reset(arr.kit_gain);
         let steps = StepParams::default();
+        let mut transport = Transport::new(sample_rate);
+        transport.set(&steps);
 
         Self {
-            voice: Voice::new(sample_rate, max_grains),
+            voices: (0..VOICES)
+                .map(|i| Voice::new(sample_rate, max_grains, i))
+                .collect(),
             playing: false,
-            transport: Transport {
-                on: steps.on,
-                swing: steps.swing,
-                ..Transport::default()
-            },
-            arr_fx: Chain::new(sample_rate, arr_defs, &arr_slots.fx),
+            transport,
+            reel: Reel::new(),
+            arr_fx: Chain::new(sample_rate, arr_defs, &arr_slots.fx, 0),
             arr_slots,
             arr,
             track_gain,
@@ -195,7 +249,23 @@ impl Engine {
         }
     }
 
-    /// Replace one generator's material and hand back the old buffer.
+    // The voices. `i` is below `VOICES`; anything else is a programming
+    // error and panics.
+
+    /// Switch voice `i` in or out. In, it starts clean (nothing of what it
+    /// played before) and fades in; out, it fades out and then goes idle,
+    /// where it is skipped whole. At a block boundary, like every hand-off.
+    pub fn set_voice_active(&mut self, i: usize, on: bool) {
+        self.voices[i].set_active(on);
+    }
+
+    /// Whether voice `i` is switched in. A voice switched out may still be
+    /// fading.
+    pub fn voice_active(&self, i: usize) -> bool {
+        self.voices[i].active()
+    }
+
+    /// Replace one of voice `i`'s materials and hand back the old buffer.
     ///
     /// Safe on the audio thread at a block boundary, because nothing here
     /// touches the allocator: the new buffer arrives already built, and the
@@ -206,49 +276,93 @@ impl Engine {
     /// Each generator reads its own material (Georg, 2026-09-15), so swapping
     /// one leaves the other playing: a new source for the player restarts its
     /// pass, and one for the cloud clears its grains.
+    pub fn swap_voice_source(&mut self, i: usize, which: Generator, samples: Vec<f32>) -> Vec<f32> {
+        self.voices[i].swap_source(which, samples)
+    }
+
+    /// Both of voice `i`'s generators read `samples`. For tests, the CLI and
+    /// startup: it copies the buffer and frees the old ones, so never on the
+    /// audio thread.
+    pub fn set_voice_source(&mut self, i: usize, samples: Vec<f32>) {
+        drop(self.swap_voice_source(i, Generator::Grain, samples.clone()));
+        drop(self.swap_voice_source(i, Generator::Player, samples));
+    }
+
+    /// How voice `i`'s generators read their materials: which part, at what
+    /// octave. Handed in once a block, as the steps are.
+    pub fn set_voice_readings(&mut self, i: usize, player: Reading, grain: Reading) {
+        self.voices[i].set_readings(player, grain);
+    }
+
+    /// Swap in a new set of LFOs and links for voice `i`, and hand back the
+    /// old one: built on the command thread, swapped at a block boundary, and
+    /// the old set dropped anywhere but here. LFOs in both sets keep running,
+    /// matched by id, so adding an LFO or changing a rate never restarts the
+    /// others.
+    pub fn set_voice_modulation(&mut self, i: usize, next: ModSet) -> ModSet {
+        self.voices[i].set_modulation(next)
+    }
+
+    /// What voice `i`'s track plays: whether it follows the steps, its
+    /// pattern, length, pitches, holds, velocities and nudges. Its tempo,
+    /// swing and kit grid are ignored: those are the transport's
+    /// (`set_transport`).
+    pub fn set_voice_steps(&mut self, i: usize, p: StepParams) {
+        self.voices[i].set_steps(p);
+    }
+
+    /// The arrangement's half of the steps, once a block: whether they run,
+    /// the tempo, the swing, and the kit's grid.
+    pub fn set_transport(&mut self, p: &StepParams) {
+        self.transport.set(p);
+        self.kit_pattern = p.kit;
+    }
+
+    // The single-track shorthand: voice 0.
+
+    /// `swap_voice_source` on voice 0.
     pub fn swap_source(&mut self, which: Generator, samples: Vec<f32>) -> Vec<f32> {
-        self.voice.swap_source(which, samples)
+        self.swap_voice_source(0, which, samples)
     }
 
-    /// Both generators read `samples`. For tests, the CLI and startup: it
-    /// copies the buffer and frees the old ones, so never on the audio thread.
+    /// `set_voice_source` on voice 0.
     pub fn set_source(&mut self, samples: Vec<f32>) {
-        drop(self.swap_source(Generator::Grain, samples.clone()));
-        drop(self.swap_source(Generator::Player, samples));
+        self.set_voice_source(0, samples);
     }
 
-    /// How each generator reads its material: which part, at what octave.
-    /// Handed in once a block, as the steps are. The values belong to the
-    /// materials rather than to the patch, so they are not in the bank.
+    /// `set_voice_readings` on voice 0.
     pub fn set_readings(&mut self, player: Reading, grain: Reading) {
-        self.voice.set_readings(player, grain);
+        self.set_voice_readings(0, player, grain);
     }
 
-    /// Swap in a new set of LFOs and links, and hand back the old one.
-    ///
-    /// The same contract as `swap_source`: built on the command thread, swapped
-    /// at a block boundary, and the old set dropped anywhere but here. LFOs in
-    /// both sets keep running, matched by id, so adding an LFO or changing a
-    /// rate never restarts the others.
+    /// `set_voice_modulation` on voice 0.
     pub fn set_modulation(&mut self, next: ModSet) -> ModSet {
-        self.voice.set_modulation(next)
+        self.set_voice_modulation(0, next)
     }
 
-    /// Every parameter as the engine hears it, LFOs included, written into
+    /// The tracker as one track: the transport from `p`, and `p` as voice
+    /// 0's steps.
+    pub fn set_steps(&mut self, p: StepParams) {
+        self.set_transport(&p);
+        self.set_voice_steps(0, p);
+    }
+
+    /// Every parameter as voice 0 hears it, LFOs included, written into
     /// `heard`, so the UI can draw where a linked control has been moved to.
     /// The hand's `bank` is only read. Atomic stores only, so it is safe to
     /// call from the audio callback once a block.
     pub fn publish_heard(&self, bank: &ParamBank, heard: &ParamBank) {
-        self.voice.publish_heard(bank, heard);
+        self.voices[0].publish_heard(bank, heard);
     }
 
-    /// The spawn log, for whatever wants to draw it. Cloning the handle is the
-    /// only way out of the audio thread; nothing here hands out a `&mut`.
+    /// Voice 0's spawn log, for whatever wants to draw it. Cloning the handle
+    /// is the only way out of the audio thread; nothing here hands out a
+    /// `&mut`.
     pub fn grain_log(&self) -> Arc<GrainLog> {
-        self.voice.grain_log()
+        self.voices[0].grain_log()
     }
 
-    /// Play one logged grain on its own.
+    /// Play one logged grain on its own, on voice 0.
     ///
     /// Only while stopped, which is the point — a grain auditioned into a live
     /// cloud is a grain you cannot hear. It reads the **whole** source rather
@@ -260,89 +374,100 @@ impl Engine {
         if self.playing {
             return false;
         }
-        self.voice.audition(spawn)
+        self.voices[0].audition(spawn)
     }
 
     pub fn auditioning(&self) -> bool {
-        self.voice.auditioning()
+        self.voices[0].auditioning()
     }
 
     /// Whether the tape is running backwards, which is not the same as whether
     /// the reverse gate is held. For the UI, so the button can stay lit for as
     /// long as the reel is actually turning the other way.
     pub fn reversing(&self) -> bool {
-        self.voice.reversing()
+        self.reel.reversing
     }
 
     pub fn playing(&self) -> bool {
         self.playing
     }
 
-    /// Start or stop. Stopping clears the grain pool rather than letting the
-    /// cloud ring out, so stop means stop.
+    /// Start or stop. Stopping clears every grain pool rather than letting
+    /// the clouds ring out, so stop means stop.
     pub fn set_playing(&mut self, playing: bool) {
-        self.voice.set_playing(playing, self.playing);
+        for v in self.voices.iter_mut() {
+            v.set_playing(playing, self.playing);
+        }
+        // A flick left mid-flight when the transport stopped would still be
+        // engaged when it started again, which is a surprise rather than a
+        // gesture.
+        self.reel.reversing = false;
+        self.reel.reverse_age = 0.0;
         // The steps stop with the tape, and the next block starts them again
         // from step one.
-        self.transport.running = false;
+        self.transport.stop();
         // The kit too: no drum rings on into the next play.
         self.kit.reset();
         self.kit_clock.reset();
         self.playing = playing;
     }
 
-    /// Start the pass again from the top, with nothing of the last one left:
-    /// no tail fading out and no grains in flight. Smoothers, fades, LFOs and
-    /// filter state carry on. For an offline render, which settles the patch
-    /// first and then captures one clean pass; see `preview`.
+    /// Start voice 0's pass again from the top, with nothing of the last one
+    /// left: no tail fading out and no grains in flight. Smoothers, fades,
+    /// LFOs and filter state carry on. For an offline render, which settles
+    /// the patch first and then captures one clean pass; see `preview`.
     pub fn restart_pass(&mut self) {
-        self.voice.restart_pass();
+        self.voices[0].restart_pass();
     }
 
-    /// Where plain playback has reached, 0 to 1 across the *whole* source, so
-    /// the drawn playhead lines up with the drawn waveform rather than with
-    /// the trimmed window.
+    /// Where voice 0's plain playback has reached, 0 to 1 across the *whole*
+    /// source, so the drawn playhead lines up with the drawn waveform rather
+    /// than with the trimmed window.
     pub fn play_position(&self) -> f32 {
-        self.voice.play_position()
+        self.voices[0].play_position()
     }
 
-    /// How long one generator's material is, in samples.
+    /// How long one of voice 0's materials is, in samples.
     pub fn source_len(&self, which: Generator) -> usize {
-        self.voice.source_len(which)
+        self.voices[0].source_len(which)
     }
 
     pub fn sample_rate(&self) -> f32 {
         self.sample_rate
     }
 
+    /// Grains sounding in voice 0's cloud.
     pub fn active_grains(&self) -> usize {
-        self.voice.active_grains()
+        self.voices[0].active_grains()
     }
 
-    /// The step the clock is in, or none while it is off. For the UI.
+    /// The step voice 0's track is in, or none while it is off. For the UI.
     pub fn current_step(&self) -> Option<u32> {
-        self.voice.clock().current()
+        self.voice_step(0)
+    }
+
+    /// The step voice `i`'s track is in, or none while it is off.
+    pub fn voice_step(&self, i: usize) -> Option<u32> {
+        self.voices[i].clock().current()
     }
 
     /// The step the drum kit is in, or none while the steps are off.
     pub fn current_kit_step(&self) -> Option<u32> {
-        if self.transport.running {
+        if self.transport.running() {
             self.kit_clock.current()
         } else {
             None
         }
     }
 
-    /// What the steps play, handed in once a block like the parameters.
-    /// Tempo, swing and the pattern belong to the tracker, the level above
-    /// the patch, so they arrive here rather than through the bank. The
-    /// track's pattern goes to its voice; whether the steps run, the swing
-    /// and the kit's grid stay with the arrangement.
-    pub fn set_steps(&mut self, p: StepParams) {
-        self.transport.on = p.on;
-        self.transport.swing = p.swing;
-        self.kit_pattern = p.kit;
-        self.voice.set_steps(p);
+    /// Bars of the transport completed since the steps started, or none
+    /// while they are stopped. A bar is sixteen sixteenths of the shared
+    /// clock, whatever any track's length, so "the next bar" is the same
+    /// sample for every track: the one this count changes on.
+    pub fn bar(&self) -> Option<u64> {
+        self.transport
+            .running()
+            .then(|| self.transport.beat().bar())
     }
 
     /// The arrangement's values, read from its bank once a block, like the
@@ -370,44 +495,81 @@ impl Engine {
         self.limiter.take_reduction()
     }
 
-    /// Render interleaved stereo into `out`, which must have an even length.
+    /// Render interleaved stereo into `out`, which must have an even length,
+    /// with every voice reading `bank`: the single-track shorthand, and two
+    /// voices on one patch.
     pub fn process_block(&mut self, out: &mut [f32], bank: &ParamBank) {
+        self.process_voices(out, &[bank; VOICES]);
+    }
+
+    /// Render interleaved stereo into `out`, which must have an even length.
+    /// Voice `i` reads `banks[i]`; an idle voice's bank is not read at all.
+    pub fn process_voices(&mut self, out: &mut [f32], banks: &[&ParamBank; VOICES]) {
         if !self.playing {
-            if self.voice.auditioning() {
-                self.voice.render_audition(out, bank, &mut self.peak);
+            if self.voices[0].auditioning() {
+                self.voices[0].render_audition(out, banks[0], &mut self.peak);
             } else {
                 out.fill(0.0);
             }
             return;
         }
 
-        // The steps starting: the kit's loop starts with them. Read before
-        // the voice starts its own clock.
-        if self.transport.on && !self.transport.running {
+        // The steps starting: the kit's loop starts with them, before any
+        // voice starts its own clock.
+        if self.transport.begin_block() {
             self.kit_clock.reset();
         }
-        self.transport.running = self.transport.on;
-        self.voice.begin_block(bank, out.len() / 2);
+        let frames = out.len() / 2;
+        // The voices that play this block. One that goes idle does so at
+        // the end of a block, so this holds for every frame of it.
+        let mut live = [0usize; VOICES];
+        let mut n = 0;
+        for (i, v) in self.voices.iter_mut().enumerate() {
+            if !v.idle() {
+                v.begin_block(banks[i], frames, &self.transport);
+                live[n] = i;
+                n += 1;
+            }
+        }
+        let live = &live[..n];
+
         let arr = self.arr;
+        // The tape: its gestures from the arrangement, its feel from voice 0.
+        let (time_ms, flick_ms) = self.voices[0].tape_feel(banks[0]);
+        self.reel.resolve(
+            arr.reverse,
+            flick_ms * 0.001 * self.sample_rate,
+            frames as f32,
+        );
+        let direction = if self.reel.reversing { -1.0 } else { 1.0 };
+        let speed_target = direction * (1.0 - arr.brake);
+        self.reel.speed.set_time(time_ms, self.sample_rate);
+
         // Who the arrangement's order names this block. Reorders, resets and
         // fades start here.
         self.arr_fx.prepare(&arr.fx);
         let kit_pattern = self.kit_pattern;
-        let swing = self.transport.swing;
+        let swing = self.transport.swing();
 
         for frame in out.chunks_mut(2) {
-            // The track, through its patch's chain. Its step clock ticks
-            // first, and the transport follows it (the a1 seam).
-            let (l, r) = self.voice.frame();
-            self.transport.follow(self.voice.clock());
+            let was = self.reel.speed.value();
+            let speed = self.reel.speed.process(speed_target);
+            let tape = Tape { speed, was };
+            // This frame's place, read by every voice and the kit before the
+            // transport moves on.
+            let beat = *self.transport.beat();
+            let (mut l, mut r) = (0.0, 0.0);
+            for &i in live {
+                let (vl, vr) = self.voices[i].frame(tape, &beat, swing);
+                l += vl;
+                r += vr;
+            }
             // The kit, on the same clock: it reads how far the steps have
             // run, so it stays on their grid at any length of its own. Its
             // clock runs while it is off, so switching it on lands in step.
-            if self.transport.running {
-                if let Some(k) = self
-                    .kit_clock
-                    .tick(self.transport.elapsed, &kit_pattern, swing)
-                {
+            if self.transport.running() {
+                let at = beat.elapsed(kit_pattern.length.clamp(1, crate::steps::STEPS as u32));
+                if let Some(k) = self.kit_clock.tick(at, &kit_pattern, swing) {
                     if arr.kit_on {
                         for v in 0..KIT_VOICES {
                             self.kit.hit(v, kit_pattern.hit(v, k), &arr.kit);
@@ -415,15 +577,19 @@ impl Engine {
                     }
                 }
             }
+            self.transport.advance(speed);
 
-            // Into the arrangement: the patch's fader, then the arrangement's
-            // own drive, crush, ring, chorus, filter and output. It has no pass, so
-            // its crusher has no envelope.
+            // Into the arrangement: the voices' fader, then the
+            // arrangement's own drive, crush, ring, chorus, filter and
+            // output. It has no pass, so its crusher has no envelope.
             let t = self.track_gain.process(arr.track_gain);
-            // The kit joins here, beside the patch at its fader: past the
-            // patch's envelope, velocity and brake, into the arrangement's
-            // chain. Mono, into both sides.
-            let kit = self.kit.process() * self.kit_gain.process(arr.kit_gain);
+            // The kit joins here, beside the voices at their fader: past
+            // their envelopes and velocity, into the arrangement's chain.
+            // On the tape like them, so a brake slows and fades it too.
+            // Mono, into both sides.
+            let kit = self.kit.process_at(speed.abs())
+                * tape_gain(speed)
+                * self.kit_gain.process(arr.kit_gain);
             let (l, r) = self.arr_fx.front(l * t + kit, r * t + kit, &arr.fx);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
 
@@ -442,7 +608,9 @@ impl Engine {
             }
         }
 
-        self.voice.end_block();
+        for &i in live {
+            self.voices[i].end_block();
+        }
     }
 }
 
@@ -1243,7 +1411,9 @@ mod tests {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(12_000));
         let bank = ParamBank::new();
-        bank.set_by_id("tape.reverse", 1.0);
+        let tape = ParamBank::for_table(arrangement::params());
+        set(&tape, "arrangement.tape.reverse", 1.0);
+        e.set_arrangement(&tape, false);
         e.set_playing(true);
         let mut out = vec![0.0; 480];
         // A second for the reel to come round to backwards.
@@ -1794,6 +1964,7 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        let tape = ParamBank::for_table(arrangement::params());
         set(&bank, "grain.on", 0.0);
         set(&bank, "amp.gain", 1.0);
         set(&bank, "tape.time", 200.0);
@@ -1808,7 +1979,8 @@ mod tests {
         let free_level = out.iter().fold(0.0f32, |a, s| a.max(s.abs()));
 
         // Half a brake: running slow, still clearly audible.
-        set(&bank, "tape.brake", 0.5);
+        set(&tape, "arrangement.tape.brake", 0.5);
+        e.set_arrangement(&tape, false);
         for _ in 0..80 {
             e.process_block(&mut out, &bank);
         }
@@ -1827,7 +1999,8 @@ mod tests {
         );
 
         // Full brake: the reel comes to rest and the level goes with it.
-        set(&bank, "tape.brake", 1.0);
+        set(&tape, "arrangement.tape.brake", 1.0);
+        e.set_arrangement(&tape, false);
         for _ in 0..400 {
             e.process_block(&mut out, &bank);
         }
@@ -1848,6 +2021,7 @@ mod tests {
             e.set_source(tone(48_000));
             e.set_playing(true);
             let bank = ParamBank::new();
+            let tape = ParamBank::for_table(arrangement::params());
             set(&bank, "grain.on", 0.0);
             set(&bank, "amp.gain", 1.0);
             set(&bank, "tape.time", time);
@@ -1855,7 +2029,8 @@ mod tests {
             for _ in 0..20 {
                 e.process_block(&mut out, &bank);
             }
-            set(&bank, "tape.brake", 1.0);
+            set(&tape, "arrangement.tape.brake", 1.0);
+            e.set_arrangement(&tape, false);
             let mut level = 0.0f32;
             for _ in 0..blocks {
                 e.process_block(&mut out, &bank);
@@ -2699,6 +2874,7 @@ mod tests {
         e.set_source(src);
         e.set_playing(true);
         let bank = ParamBank::new();
+        let tape = ParamBank::for_table(arrangement::params());
         set(&bank, "grain.on", 0.0);
         set(&bank, "tape.time", 20.0);
 
@@ -2710,7 +2886,8 @@ mod tests {
         e.process_block(&mut out, &bank);
         assert!(e.play_position() > before, "forwards should advance");
 
-        set(&bank, "tape.reverse", 1.0);
+        set(&tape, "arrangement.tape.reverse", 1.0);
+        e.set_arrangement(&tape, false);
         // Long enough for the slew to cross zero and settle the other way.
         for _ in 0..200 {
             e.process_block(&mut out, &bank);
@@ -2729,13 +2906,16 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        let tape = ParamBank::for_table(arrangement::params());
         set(&bank, "tape.flick", 150.0);
         let mut out = vec![0.0; 512];
 
         // A tap: gate high for one block, about 5 ms.
-        set(&bank, "tape.reverse", 1.0);
+        set(&tape, "arrangement.tape.reverse", 1.0);
+        e.set_arrangement(&tape, false);
         e.process_block(&mut out, &bank);
-        set(&bank, "tape.reverse", 0.0);
+        set(&tape, "arrangement.tape.reverse", 0.0);
+        e.set_arrangement(&tape, false);
         assert!(e.reversing(), "a tap should engage reverse");
 
         // Well inside the flick, the finger long gone.
@@ -2760,17 +2940,20 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        let tape = ParamBank::for_table(arrangement::params());
         set(&bank, "tape.flick", 150.0);
         let mut out = vec![0.0; 512];
 
-        set(&bank, "tape.reverse", 1.0);
+        set(&tape, "arrangement.tape.reverse", 1.0);
+        e.set_arrangement(&tape, false);
         // Roughly two seconds, far past the flick.
         for _ in 0..400 {
             e.process_block(&mut out, &bank);
         }
         assert!(e.reversing(), "a hold should stay engaged");
 
-        set(&bank, "tape.reverse", 0.0);
+        set(&tape, "arrangement.tape.reverse", 0.0);
+        e.set_arrangement(&tape, false);
         e.process_block(&mut out, &bank);
         assert!(
             !e.reversing(),
@@ -2786,11 +2969,14 @@ mod tests {
             e.set_source(tone(48_000));
             e.set_playing(true);
             let bank = ParamBank::new();
+            let tape = ParamBank::for_table(arrangement::params());
             set(&bank, "tape.flick", flick);
             let mut out = vec![0.0; 512];
-            set(&bank, "tape.reverse", 1.0);
+            set(&tape, "arrangement.tape.reverse", 1.0);
+            e.set_arrangement(&tape, false);
             e.process_block(&mut out, &bank);
-            set(&bank, "tape.reverse", 0.0);
+            set(&tape, "arrangement.tape.reverse", 0.0);
+            e.set_arrangement(&tape, false);
             for _ in 0..blocks {
                 e.process_block(&mut out, &bank);
             }
@@ -2807,11 +2993,14 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        let tape = ParamBank::for_table(arrangement::params());
         set(&bank, "tape.flick", 500.0);
         let mut out = vec![0.0; 512];
-        set(&bank, "tape.reverse", 1.0);
+        set(&tape, "arrangement.tape.reverse", 1.0);
+        e.set_arrangement(&tape, false);
         e.process_block(&mut out, &bank);
-        set(&bank, "tape.reverse", 0.0);
+        set(&tape, "arrangement.tape.reverse", 0.0);
+        e.set_arrangement(&tape, false);
         assert!(e.reversing());
         e.set_playing(false);
         assert!(
@@ -2827,6 +3016,7 @@ mod tests {
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = ParamBank::new();
+        let tape = ParamBank::for_table(arrangement::params());
         let mut out = vec![0.0; 512];
         for (brake, reverse, time) in [
             (1.0, 1.0, 20.0),
@@ -2835,8 +3025,10 @@ mod tests {
             (1.0, 0.0, 20.0),
             (0.0, 0.0, 20.0),
         ] {
-            set(&bank, "tape.brake", brake);
-            set(&bank, "tape.reverse", reverse);
+            set(&tape, "arrangement.tape.brake", brake);
+            e.set_arrangement(&tape, false);
+            set(&tape, "arrangement.tape.reverse", reverse);
+            e.set_arrangement(&tape, false);
             set(&bank, "tape.time", time);
             for _ in 0..80 {
                 e.process_block(&mut out, &bank);
@@ -2861,8 +3053,11 @@ mod tests {
         let mut e = Engine::new(48_000.0, 64);
         e.set_source(tone(48_000));
         let bank = ParamBank::new();
-        set(&bank, "tape.reverse", 1.0);
-        set(&bank, "tape.brake", 1.0);
+        let tape = ParamBank::for_table(arrangement::params());
+        set(&tape, "arrangement.tape.reverse", 1.0);
+        e.set_arrangement(&tape, false);
+        set(&tape, "arrangement.tape.brake", 1.0);
+        e.set_arrangement(&tape, false);
         let g = GrainSpawn {
             position: 0.25,
             rate: 1.0,
@@ -3026,5 +3221,316 @@ mod tests {
             switched < steady * 2.0 + 0.02,
             "switching jumped by {switched} against a steady {steady}"
         );
+    }
+
+    // The pool (epic 28).
+
+    /// A patch with every random source in it: a jittered cloud, drifting
+    /// FM and a chorus.
+    fn restless() -> ParamBank {
+        let bank = ParamBank::new();
+        set(&bank, "material.on", 0.0);
+        set(&bank, "grain.on", 1.0);
+        set(&bank, "grain.jitter", 0.5);
+        set(&bank, "fm.on", 1.0);
+        set(&bank, "fm.drift", 0.8);
+        set(&bank, "fm.gain", 0.3);
+        set(&bank, "fx.3.chorus.on", 1.0);
+        set(&bank, "fx.3.chorus.mix", 0.5);
+        bank
+    }
+
+    /// `frames` of voice `i` alone playing `bank`, left channel.
+    fn alone(i: usize, bank: &ParamBank, frames: usize) -> Vec<f32> {
+        let mut e = Engine::new(48_000.0, 128);
+        for v in 0..VOICES {
+            e.set_voice_source(v, tone(48_000));
+            e.set_voice_active(v, v == i);
+        }
+        e.set_playing(true);
+        let mut out = vec![0.0; 512];
+        let mut all = Vec::new();
+        while all.len() < frames {
+            e.process_block(&mut out, bank);
+            all.extend(out.iter().step_by(2));
+        }
+        all
+    }
+
+    fn correlation(a: &[f32], b: &[f32]) -> f32 {
+        let dot = |x: &[f32], y: &[f32]| x.iter().zip(y).map(|(p, q)| p * q).sum::<f32>();
+        dot(a, b) / (dot(a, a) * dot(b, b)).sqrt()
+    }
+
+    #[test]
+    fn two_voices_on_one_patch_are_not_the_same_sound() {
+        let bank = restless();
+        // Past voice 0 fading out of the second render.
+        let a = &alone(0, &bank, 96_000)[9_600..];
+        let b = &alone(1, &bank, 96_000)[9_600..];
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        assert!(rms(a) > 0.01 && rms(b) > 0.01, "{} {}", rms(a), rms(b));
+        let c = correlation(a, b);
+        assert!(c < 0.9, "two voices on one patch correlate at {c}");
+        // And each is its own every time: seeded, not random.
+        assert!(a == &alone(0, &bank, 96_000)[9_600..]);
+        assert!(b == &alone(1, &bank, 96_000)[9_600..]);
+    }
+
+    #[test]
+    fn switching_a_voice_in_and_out_mid_play_does_not_click() {
+        let worst = |toggle: bool| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(48_000));
+            let other: Vec<f32> = (0..48_000)
+                .map(|i| (core::f32::consts::TAU * 330.0 * i as f32 / 48_000.0).sin())
+                .collect();
+            e.set_voice_source(1, other);
+            e.set_voice_active(1, true);
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "material.gain", 0.4);
+            let mut out = vec![0.0; 256];
+            let (mut prev, mut worst) = (0.0f32, 0.0f32);
+            for block in 0..600 {
+                if toggle && block % 37 == 0 {
+                    e.set_voice_active(1, (block / 37) % 2 == 0);
+                }
+                e.process_block(&mut out, &bank);
+                for s in out.iter().step_by(2) {
+                    if block > 20 {
+                        worst = worst.max((s - prev).abs());
+                    }
+                    prev = *s;
+                }
+            }
+            worst
+        };
+        let steady = worst(false);
+        let toggled = worst(true);
+        assert!(
+            toggled < steady * 2.0 + 0.02,
+            "switching a voice jumped by {toggled} against a steady {steady}"
+        );
+    }
+
+    #[test]
+    fn every_voice_steps_on_the_one_transport() {
+        // Voice 1 asks for its own tempo and swing; the transport's win, so
+        // its step ones land on voice 0's samples, and a shorter loop's
+        // land on every one of them.
+        let mut e = Engine::new(48_000.0, 64);
+        for v in 0..3 {
+            e.set_voice_source(v, tone(4_800));
+            e.set_voice_active(v, true);
+        }
+        e.set_steps(StepParams {
+            on: true,
+            tempo_bpm: 240.0,
+            swing: 0.3,
+            length: 8,
+            pattern: 0xFF,
+            ..Default::default()
+        });
+        e.set_voice_steps(
+            1,
+            StepParams {
+                on: true,
+                tempo_bpm: 97.0,
+                swing: 0.0,
+                length: 8,
+                pattern: 0xFF,
+                ..Default::default()
+            },
+        );
+        e.set_voice_steps(
+            2,
+            StepParams {
+                on: true,
+                length: 4,
+                pattern: 0xF,
+                ..Default::default()
+            },
+        );
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        let mut out = [0.0f32; 2];
+        let mut ones: [Vec<usize>; 3] = Default::default();
+        let mut last = [None; 3];
+        for frame in 0..60_000 {
+            e.process_block(&mut out, &bank);
+            for v in 0..3 {
+                let now = e.voice_step(v);
+                if now == Some(0) && last[v] != Some(0) {
+                    ones[v].push(frame);
+                }
+                last[v] = now;
+            }
+        }
+        // A sixteenth at 240 is 3 000 samples; eight of them, 24 000.
+        assert_eq!(ones[0], vec![0, 24_000, 48_000]);
+        assert_eq!(ones[1], ones[0], "voice 1 kept a clock of its own");
+        assert!(ones[0].iter().all(|f| ones[2].contains(f)), "{:?}", ones[2]);
+        assert_eq!(ones[2].len(), 5);
+    }
+
+    #[test]
+    fn the_brake_slows_every_voice_and_the_kit() {
+        // The transport, every track's steps and the kit's, and a voice
+        // other than the first: all at half speed under half a brake.
+        let steps_in = |brake: f32| {
+            let mut e = Engine::new(48_000.0, 64);
+            for v in 0..2 {
+                e.set_voice_source(v, tone(4_800));
+                e.set_voice_active(v, true);
+            }
+            let arr = ParamBank::for_table(arrangement::params());
+            set(&arr, "arrangement.kit.on", 1.0);
+            set(&arr, "arrangement.tape.brake", brake);
+            e.set_arrangement(&arr, false);
+            e.set_steps(StepParams {
+                on: true,
+                ..Default::default()
+            });
+            e.set_voice_steps(
+                1,
+                StepParams {
+                    on: true,
+                    length: 4,
+                    ..Default::default()
+                },
+            );
+            let bank = ParamBank::new();
+            set(&bank, "tape.time", 20.0);
+            e.set_playing(true);
+            let mut out = vec![0.0; 128];
+            let (mut changes, mut last) = ([0usize; 3], [None; 3]);
+            // Two seconds: sixteen sixteenths at 120.
+            for _ in 0..1_500 {
+                e.process_block(&mut out, &bank);
+                let now = [e.voice_step(0), e.voice_step(1), e.current_kit_step()];
+                for k in 0..3 {
+                    changes[k] += usize::from(now[k] != last[k]);
+                }
+                last = now;
+            }
+            (changes, e.bar())
+        };
+        let (free, free_bar) = steps_in(0.0);
+        let (braked, braked_bar) = steps_in(0.5);
+        for k in 0..3 {
+            let ratio = braked[k] as f32 / free[k] as f32;
+            assert!(
+                (0.4..0.6).contains(&ratio),
+                "clock {k}: {braked:?} against {free:?}"
+            );
+        }
+        assert_eq!(free_bar, Some(1));
+        assert_eq!(braked_bar, Some(0));
+
+        // Voice 1's sound slows too: a tone read at half speed is an octave
+        // down, half the zero crossings.
+        let crossings = |brake: f32| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_voice_source(1, tone(48_000));
+            e.set_voice_active(0, false);
+            e.set_voice_active(1, true);
+            let arr = limiter_off();
+            set(&arr, "arrangement.tape.brake", brake);
+            e.set_arrangement(&arr, false);
+            let bank = ParamBank::new();
+            set(&bank, "tape.time", 20.0);
+            e.set_playing(true);
+            let mut out = vec![0.0; 480];
+            let mut all: Vec<f32> = Vec::new();
+            for _ in 0..200 {
+                e.process_block(&mut out, &bank);
+                all.extend(out.iter().step_by(2));
+            }
+            all[24_000..]
+                .windows(2)
+                .filter(|w| (w[0] < 0.0) != (w[1] < 0.0))
+                .count()
+        };
+        let ratio = crossings(0.5) as f32 / crossings(0.0) as f32;
+        assert!(
+            (0.45..0.55).contains(&ratio),
+            "voice 1 read at {ratio} of its speed"
+        );
+    }
+
+    #[test]
+    fn an_idle_voice_is_not_even_read() {
+        // Voices 1 to 7 idle, handed banks at the far end of every row: the
+        // output is the single voice's, sample for sample.
+        let render = |others: Option<&ParamBank>| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = restless();
+            let mut out = vec![0.0; 512];
+            let mut all = Vec::new();
+            for _ in 0..100 {
+                match others {
+                    Some(o) => {
+                        let mut banks = [o; VOICES];
+                        banks[0] = &bank;
+                        e.process_voices(&mut out, &banks);
+                    }
+                    None => e.process_block(&mut out, &bank),
+                }
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        let wild = ParamBank::new();
+        for (i, p) in wild.defs().iter().enumerate() {
+            wild.set(i, p.max);
+        }
+        assert!(render(None) == render(Some(&wild)));
+    }
+
+    #[test]
+    fn a_voice_woken_mid_play_waits_for_its_next_step() {
+        // Switched in half way through a step, voice 1 does not fire that
+        // step late; it comes in on the next one, with voice 0.
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_voice_source(1, tone(4_800));
+        e.set_steps(StepParams {
+            on: true,
+            tempo_bpm: 240.0,
+            length: 4,
+            pattern: 0xF,
+            ..Default::default()
+        });
+        e.set_voice_steps(
+            1,
+            StepParams {
+                on: true,
+                length: 4,
+                pattern: 0xF,
+                ..Default::default()
+            },
+        );
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        let mut out = vec![0.0; 300];
+        // 1 500 frames: half of step one.
+        for _ in 0..10 {
+            e.process_block(&mut out, &bank);
+        }
+        e.set_voice_active(1, true);
+        e.process_block(&mut out, &bank);
+        assert_eq!(e.voice_step(0), Some(0));
+        assert_eq!(e.voice_step(1), Some(0));
+        let mut out = [0.0f32; 2];
+        let mut first = None;
+        for frame in 1_650..9_000 {
+            e.process_block(&mut out, &bank);
+            if first.is_none() && e.voice_step(1) == Some(1) {
+                first = Some(frame);
+            }
+        }
+        assert_eq!(first, Some(3_000), "it joins on step two");
     }
 }

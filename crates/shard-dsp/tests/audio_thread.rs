@@ -15,7 +15,7 @@ use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
     adsr_curve, Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape,
-    StepParams, Taper, PARAMS,
+    StepParams, Taper, PARAMS, VOICES,
 };
 
 #[global_allocator]
@@ -30,7 +30,8 @@ fn tone(n: usize) -> Vec<f32> {
 }
 
 /// Every parameter at a different slow phase, reaching both ends of its range.
-/// The gates (`tape.reverse`, `tape.brake`) open and close along the way.
+/// The arrangement's tape gates open and close along the way when it is
+/// swept too.
 fn sweep(bank: &ParamBank, block: usize) {
     for (i, p) in bank.defs().iter().enumerate() {
         let t = ((block * (i + 3)) % 97) as f32 / 96.0;
@@ -272,13 +273,15 @@ fn one_shot_steps_never_touch_the_allocator() {
         }
         let bank = ParamBank::new();
         bank.set_by_id("grain.on", 1.0);
+        let arr = ParamBank::for_table(arrangement::params());
         e.set_playing(true);
         let mut out = vec![0.0f32; 512];
 
         let ((), caught) = no_alloc(|| {
             for block in 0..1_000 {
                 let reverse = if block % 400 < 200 { 0.0 } else { 1.0 };
-                bank.set_by_id("tape.reverse", reverse);
+                assert!(arr.set_by_id("arrangement.tape.reverse", reverse));
+                e.set_arrangement(&arr, false);
                 // Pitched to both ends of the range, so each pass reads at a
                 // different ratio from the tail it hands over.
                 let mut pitches = [0; shard_dsp::steps::STEPS];
@@ -566,4 +569,154 @@ fn the_drum_kit_never_touches_the_allocator() {
         }
     });
     assert_eq!(caught, 0, "the kit touched the allocator {caught} time(s)");
+}
+
+#[test]
+fn every_voice_playing_never_touches_the_allocator() {
+    // The whole pool at once (epic 28): every voice active, each on its own
+    // bank with its own chain, cloud and FM, its own steps on the shared
+    // transport, and its own LFOs. Mid-stream, sources and modulation sets
+    // are swapped on several voices, voices are switched out and back in
+    // (each wake resets the effects its chain names), and the tape brakes
+    // and rewinds.
+    use shard_dsp::fx::{self, Order, INSTANCES, POOL};
+
+    let mut e = Engine::new(SR, 256);
+    let banks: Vec<ParamBank> = (0..VOICES).map(|_| ParamBank::new()).collect();
+    for (i, bank) in banks.iter().enumerate() {
+        e.set_voice_source(i, tone(24_000 + i * 1_000));
+        e.set_voice_active(i, true);
+        bank.set_by_id("grain.on", 1.0);
+        bank.set_by_id("fm.on", 1.0);
+        bank.set_by_id("fm.drift", 0.5);
+        // A different run of the palette on every voice, the second copies
+        // included, so between them every instance in the pool is used.
+        let mut order = Order::EMPTY;
+        for k in 0..6 {
+            let n = (i * 5 + k * 3) % INSTANCES;
+            let (kind, _) = POOL[n];
+            bank.set_by_id(&format!("fx.{n}.{}.on", kind.name()), 1.0);
+            bank.set_by_id(&format!("fx.{n}.{}.mix", kind.name()), 0.7);
+            order.push(n);
+        }
+        fx::set_order(bank, &order);
+        e.set_voice_steps(
+            i,
+            StepParams {
+                on: true,
+                length: [4, 8, 16, 32][i % 4],
+                pattern: 0x5555_5555 >> (i % 3),
+                ..Default::default()
+            },
+        );
+        drop(e.set_voice_modulation(
+            i,
+            ModSet::new(&[LfoSpec {
+                id: 1,
+                rate_hz: 1.0 + i as f32,
+                shape: Shape::SmoothRandom,
+                phase: 0.0,
+            }]),
+        ));
+    }
+    let arr = ParamBank::for_table(arrangement::params());
+    arr.set_by_id("arrangement.kit.on", 1.0);
+    e.set_transport(&StepParams {
+        on: true,
+        tempo_bpm: 180.0,
+        swing: 0.2,
+        ..Default::default()
+    });
+    e.set_playing(true);
+    let refs: [&ParamBank; VOICES] = std::array::from_fn(|i| &banks[i]);
+
+    // Built out here, off the audio thread; the replaced ones come back.
+    let mut sources: Vec<Vec<f32>> = (0..12).map(|i| tone(10_000 + i * 700)).collect();
+    let mut sets: Vec<ModSet> = (0..12)
+        .map(|i| {
+            let mut set = ModSet::new(&[LfoSpec {
+                id: 1 + (i % 2) as u64,
+                rate_hz: 3.0,
+                shape: Shape::Sine,
+                phase: 0.0,
+            }]);
+            set.link("grain.position", 1 + (i % 2) as u64, 0.1, 0.9)
+                .unwrap();
+            set
+        })
+        .collect();
+    let mut retired_sources = Vec::with_capacity(16);
+    let mut retired_sets = Vec::with_capacity(16);
+    let mut out = vec![0.0f32; 512];
+
+    for block in 0..900 {
+        let ((), caught) = no_alloc(|| {
+            if block % 75 == 10 {
+                let i = (block / 75) % VOICES;
+                if let Some(buf) = sources.pop() {
+                    let g = if block % 150 == 10 {
+                        Generator::Player
+                    } else {
+                        Generator::Grain
+                    };
+                    retired_sources.push(e.swap_voice_source(i, g, buf));
+                }
+                if let Some(set) = sets.pop() {
+                    retired_sets.push(e.set_voice_modulation((i + 3) % VOICES, set));
+                }
+            }
+            // Voices out and back in, a few at a time.
+            if block % 60 == 30 {
+                e.set_voice_active((block / 60) % VOICES, false);
+            }
+            if block % 60 == 50 {
+                e.set_voice_active((block / 60) % VOICES, true);
+            }
+            // The per-block hand-offs on a couple of voices: steps,
+            // transport and readings, all moving.
+            for i in [2, 5] {
+                e.set_voice_steps(
+                    i,
+                    StepParams {
+                        on: true,
+                        length: [4, 8, 16, 32, 64][(block / 20 + i) % 5],
+                        pattern: 0xFFFF_FFFF_FFFF_FFFF >> (block % 7),
+                        ..Default::default()
+                    },
+                );
+                let t = ((block * (i + 3)) % 97) as f32 / 96.0;
+                e.set_voice_readings(
+                    i,
+                    Reading {
+                        octave: t * 4.0 - 2.0,
+                        trim_start: t * 0.5,
+                        trim_end: 1.0 - t * 0.3,
+                    },
+                    Reading::default(),
+                );
+            }
+            e.set_transport(&StepParams {
+                on: true,
+                tempo_bpm: 120.0 + (block % 120) as f32,
+                swing: (block % 50) as f32 * 0.01,
+                ..Default::default()
+            });
+            arr.set_by_id(
+                "arrangement.tape.brake",
+                if block % 300 > 200 { 1.0 } else { 0.0 },
+            );
+            arr.set_by_id(
+                "arrangement.tape.reverse",
+                if block % 400 > 330 { 1.0 } else { 0.0 },
+            );
+            e.set_arrangement(&arr, false);
+            e.process_voices(&mut out, &refs);
+        });
+        assert_eq!(
+            caught, 0,
+            "block {block} with every voice touched the allocator {caught} time(s)"
+        );
+        assert!(out.iter().all(|v| v.is_finite()), "block {block}");
+    }
+    assert!(retired_sources.len() >= 10 && retired_sets.len() >= 10);
 }

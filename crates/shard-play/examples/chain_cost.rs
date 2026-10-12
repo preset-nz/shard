@@ -7,9 +7,13 @@
 //! number behind "how many tracks": the audio callback must finish each block
 //! in the time the block lasts, with room to spare. Debug builds are far
 //! slower; use `--release`.
+//!
+//! Then the voice pool (epic 28): the full chain on one voice with the other
+//! seven idle, which should cost what one voice always did, and on every
+//! voice at once.
 
 use shard_dsp::fx::{self, Kind, Order, ORDER_LEN};
-use shard_dsp::{Engine, ParamBank};
+use shard_dsp::{Engine, ParamBank, VOICES};
 use std::time::Instant;
 
 const SR: f32 = 48_000.0;
@@ -17,6 +21,11 @@ const SECONDS: usize = 10;
 const BLOCK: usize = 256;
 
 fn share(kinds: &[Kind]) -> f64 {
+    share_on(kinds, 1)
+}
+
+/// The share of real time with `voices` voices playing, each with `kinds`.
+fn share_on(kinds: &[Kind], voices: usize) -> f64 {
     let source: Vec<f32> = (0..SR as usize * 4)
         .map(|i| {
             let t = i as f32 / SR;
@@ -25,7 +34,10 @@ fn share(kinds: &[Kind]) -> f64 {
         })
         .collect();
     let mut engine = Engine::new(SR, 256);
-    engine.set_source(source);
+    for v in 0..voices {
+        engine.set_voice_source(v, source.clone());
+        engine.set_voice_active(v, true);
+    }
     engine.set_playing(true);
     let bank = ParamBank::new();
     let mut order = Order::EMPTY;
@@ -62,5 +74,12 @@ fn main() {
         "full chain of {ORDER_LEN}: {:.2}% of real time, so about {:.0} such chains to a core",
         full * 100.0,
         1.0 / full
+    );
+    let one = share_on(&all, 1);
+    let every = share_on(&all, VOICES);
+    println!(
+        "voice pool: full chain on 1 of {VOICES} voices {:.2}%, on all {VOICES} {:.2}%",
+        one * 100.0,
+        every * 100.0
     );
 }

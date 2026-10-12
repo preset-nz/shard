@@ -247,7 +247,7 @@ fn fill<'t>(
             id.strip_prefix("fx.order.")
                 .and_then(|p| p.parse::<usize>().ok())
                 .map(|p| order[p])
-        } else if PLAYED.contains(&id) {
+        } else if PLAYED.contains(&def.id) {
             None
         } else {
             fixed(key_prefix(id))
@@ -516,7 +516,7 @@ pub fn locate(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(NodeId,
         Some(bare) => (arrangement_node(tree)?, bare),
         None => (patch_node(tree, current)?, id),
     };
-    if fx::is_order_row(id) || PLAYED.contains(&bare) {
+    if fx::is_order_row(id) || PLAYED.contains(&id) {
         return None;
     }
     if let Some((n, template)) = fx::parse_row(id) {

@@ -344,20 +344,26 @@ impl Lfo {
             phase: spec.phase.rem_euclid(1.0),
             ..spec
         };
-        // Seeded from the id, so an LFO wanders the same way every time the
-        // patch that holds it loads.
-        let mut rng = Rng::new((spec.id as u32) ^ ((spec.id >> 32) as u32) ^ 0x9E37_79B9);
-        let (from, to) = (rng.next_bipolar(), rng.next_bipolar());
         let mut lfo = Self {
             spec,
             cycle: 0.0,
             value: 0.0,
-            rng,
-            from,
-            to,
+            rng: Rng::default(),
+            from: 0.0,
+            to: 0.0,
         };
-        lfo.value = lfo.output();
+        lfo.seed(0);
         lfo
+    }
+
+    /// Seeded from the id, so an LFO wanders the same way every time the
+    /// patch that holds it loads, with `salt` mixed in (`rng::salt`).
+    fn seed(&mut self, salt: u32) {
+        let id = self.spec.id;
+        let mut rng = Rng::new((id as u32) ^ ((id >> 32) as u32) ^ 0x9E37_79B9 ^ salt);
+        (self.from, self.to) = (rng.next_bipolar(), rng.next_bipolar());
+        self.rng = rng;
+        self.value = self.output();
     }
 
     fn output(&self) -> f32 {
@@ -520,6 +526,19 @@ impl ModSet {
     /// Carry running state across from the set this one replaces, matched by
     /// id. Changing a rate or adding an LFO rebuilds the set, and that must not
     /// restart the LFOs already moving. Copies only; allocates nothing.
+    /// Mix `salt` (`rng::salt`) into every LFO's seed, so a smooth random
+    /// LFO on a second voice playing the same patch wanders its own way.
+    /// Before `inherit`, which then carries over the LFOs already running.
+    /// Zero changes nothing.
+    pub fn salt(&mut self, salt: u32) {
+        if salt == 0 {
+            return;
+        }
+        for lfo in &mut self.lfos {
+            lfo.seed(salt);
+        }
+    }
+
     pub fn inherit(&mut self, old: &ModSet) {
         for lfo in &mut self.lfos {
             if let Some(prev) = old.lfos.iter().find(|p| p.spec.id == lfo.spec.id) {

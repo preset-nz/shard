@@ -70,7 +70,8 @@ compiles the tree into what the engine reads (`compile.rs`, the `Plan`);
 `src-tauri/src/session.rs` holds the document and hands the engine only what
 changed after every edit, undo, redo and open. **Every write goes through the
 session.** Nothing writes `bank` or `arrangement` directly except the played
-rows (`tape.brake`, `tape.reverse`): a direct write is reverted, silently, by
+rows (`arrangement.tape.brake`, `arrangement.tape.reverse`, which slow every
+track): a direct write is reverted, silently, by
 the next edit. The mode (tracker or sound scaping) is the session's, not the
 document's, and so is the **current patch** (epic 10): a session holds
 several patches, the engine plays the current one, and every patch-scoped

@@ -153,6 +153,11 @@ pub struct Fm {
 
 impl Fm {
     pub fn new(sample_rate: f32) -> Self {
+        Self::seeded(sample_rate, 0)
+    }
+
+    /// Both wanders seeded with `salt` mixed in (`rng::salt`); zero is `new`.
+    pub fn seeded(sample_rate: f32, salt: u32) -> Self {
         let d = FmParams::default();
         let pole = |v: f32| {
             let mut p = OnePole::new();
@@ -170,8 +175,8 @@ impl Fm {
             index: pole(d.index),
             feedback: pole(d.feedback),
             drift: pole(d.drift),
-            carrier_wander: Wander::new(0x5EED_0001, sample_rate),
-            modulator_wander: Wander::new(0x5EED_0002, sample_rate),
+            carrier_wander: Wander::new(0x5EED_0001 ^ salt, sample_rate),
+            modulator_wander: Wander::new(0x5EED_0002 ^ salt, sample_rate),
             ty: d.ty,
         }
     }
@@ -181,6 +186,18 @@ impl Fm {
         self.carrier = 0.0;
         self.modulator = 0.0;
         self.last = [0.0; 2];
+    }
+
+    /// Reset, with every smoother already at `p`, so nothing glides from
+    /// values left over from before. For a voice coming back from idle.
+    pub fn settle(&mut self, p: &FmParams) {
+        self.reset();
+        self.freq.reset(p.freq.clamp(0.0, 20_000.0));
+        self.ratio.reset(p.ratio.max(0.0));
+        self.index.reset(p.index.max(0.0));
+        self.feedback.reset(p.feedback.clamp(0.0, 1.0));
+        self.drift.reset(p.drift.clamp(0.0, 1.0));
+        self.ty = p.ty;
     }
 
     /// One sample. `pitch` multiplies the frequency after smoothing, so a

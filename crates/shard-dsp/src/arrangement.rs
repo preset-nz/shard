@@ -125,6 +125,40 @@ const ROWS: &[Row] = &[
         unit: Unit::Percent,
         smooth_ms: 0.0,
     }),
+    // The tape's two gestures, played rather than set: a held button, a pad
+    // or a pedal writes them, and no document stores them. They slow the
+    // whole tape, every track, the kit and the transport together (Georg,
+    // 2026-10-12: brake and rewind slow everything), so they are the
+    // arrangement's rather than a patch's. The slew they share is the patch's
+    // `tape.time`.
+    Row::Own(ParamDef {
+        id: "arrangement.tape.brake",
+        name: "Brake",
+        min: 0.0,
+        max: 1.0,
+        // Continuous, not a switch, even though the button only sends 0 and 1.
+        // A pedal or a MIDI CC lands here unchanged, and half a brake is a
+        // real thing: the tape runs slow and flat instead of stopping.
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        // Not smoothed here. `tape.time` is the slew, and it is the control
+        // that decides how the gesture sounds.
+        smooth_ms: 0.0,
+    }),
+    // Reverse is a *gate*, not a state: the button holds it high, and a MIDI
+    // note or CC can do the same. What a tap means rather than a hold is
+    // decided by the engine, so both sources get the same gesture.
+    Row::Own(ParamDef {
+        id: "arrangement.tape.reverse",
+        name: "Reverse",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    }),
 ];
 
 /// The patch row an arrangement id borrows.

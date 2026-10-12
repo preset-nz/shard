@@ -209,6 +209,11 @@ impl Echo {
     }
 
     pub fn new(sample_rate: f32) -> Self {
+        Self::seeded(sample_rate, 0)
+    }
+
+    /// Its wobbles seeded with `salt` mixed in (`rng::salt`); zero is `new`.
+    pub fn seeded(sample_rate: f32, salt: u32) -> Self {
         let frames = ((ECHO_MAX_MS + HEADROOM_MS) * 0.001 * sample_rate).ceil() as usize + 4;
         let d = EchoParams::default();
         let smoother = |ms: f32, v: f32| {
@@ -224,8 +229,8 @@ impl Echo {
             sample_rate,
             // The sides start at different places in both motions.
             wobbles: [
-                Wobble::new(0x0EC0_0001, 0.0, 0.0, sample_rate),
-                Wobble::new(0x0EC0_0002, 0.31, 0.57, sample_rate),
+                Wobble::new(0x0EC0_0001 ^ salt, 0.0, 0.0, sample_rate),
+                Wobble::new(0x0EC0_0002 ^ salt, 0.31, 0.57, sample_rate),
             ],
             hp: [0.0; 2],
             lp1: [0.0; 2],

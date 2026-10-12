@@ -144,11 +144,16 @@ pub struct Granular {
 impl Granular {
     /// `max_grains` is the hard ceiling. Allocated once, here, never again.
     pub fn new(sample_rate: f32, max_grains: usize) -> Self {
+        Self::seeded(sample_rate, max_grains, 0)
+    }
+
+    /// Its scheduler seeded with `salt` mixed in (`rng::salt`); zero is `new`.
+    pub fn seeded(sample_rate: f32, max_grains: usize, salt: u32) -> Self {
         Self {
             grains: vec![Grain::default(); max_grains.max(1)],
             sample_rate,
             next_spawn: 0.0,
-            rng: Rng::new(0xC0FF_EE01),
+            rng: Rng::new(0xC0FF_EE01 ^ salt),
             window_offset: 0,
             window_total: 0,
             log: None,

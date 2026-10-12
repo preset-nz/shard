@@ -298,18 +298,19 @@ enum Proc {
 }
 
 impl Proc {
-    fn new(kind: Kind, sr: f32) -> Self {
+    /// `salt` goes into every random source (`rng::salt`).
+    fn new(kind: Kind, sr: f32, salt: u32) -> Self {
         match kind {
             Kind::Drive => Proc::Drive(Drive::new(sr)),
             Kind::Crush => Proc::Crush(Crush::new(sr)),
             Kind::Ring => Proc::Ring(RingMod::new(sr)),
-            Kind::Chorus => Proc::Chorus(Chorus::new(sr)),
+            Kind::Chorus => Proc::Chorus(Chorus::seeded(sr, salt)),
             Kind::Overtone => Proc::Overtone(Overtone::new(sr)),
             Kind::Flanger => Proc::Flanger(Flanger::new(sr)),
-            Kind::Wear => Proc::Wear(Wear::new(sr)),
+            Kind::Wear => Proc::Wear(Wear::seeded(sr, salt)),
             Kind::Delay => Proc::Delay(Delay::new(sr)),
-            Kind::Echo => Proc::Echo(Echo::new(sr)),
-            Kind::Rise => Proc::Rise(Rise::new(sr)),
+            Kind::Echo => Proc::Echo(Echo::seeded(sr, salt)),
+            Kind::Rise => Proc::Rise(Rise::seeded(sr, salt)),
             Kind::Reverb => Proc::Reverb(Reverb::new(sr)),
         }
     }
@@ -430,8 +431,9 @@ pub(crate) struct Chain {
 
 impl Chain {
     /// Settled at each row's default in `defs`, so nothing fades or glides on
-    /// launch.
-    pub fn new(sample_rate: f32, defs: &[ParamDef], s: &ChainSlots) -> Self {
+    /// launch. `salt` goes into every random source (`rng::salt`): zero for
+    /// the arrangement's chain and voice 0's.
+    pub fn new(sample_rate: f32, defs: &[ParamDef], s: &ChainSlots, salt: u32) -> Self {
         let ramp = |value: f32, ms: f32| {
             let mut r = Ramp::new(value);
             r.set_time(ms, sample_rate);
@@ -447,7 +449,7 @@ impl Chain {
             .iter()
             .enumerate()
             .map(|(n, (kind, _))| Instance {
-                proc: Proc::new(*kind, sample_rate),
+                proc: Proc::new(*kind, sample_rate, salt),
                 on: ramp(defs[s.inst[n][0]].default, BYPASS_MS),
                 presence: ramp(0.0, BYPASS_MS),
                 crush_mix: smoother(s.inst[n][1]),
@@ -510,6 +512,29 @@ impl Chain {
             }
         }
         self.run = merged;
+    }
+
+    /// Start again from nothing, for a voice coming back from idle: no effect
+    /// running, so the next `prepare` finds every effect the order names new,
+    /// resets it and fades it in, and nothing it held when the voice went
+    /// idle is heard. Only those effects are reset, so the delay lines of
+    /// effects the patch does not use are never touched. The filter forgets
+    /// its state and every smoother and switch lands where `p` puts it.
+    pub fn forget(&mut self, p: &ChainParams) {
+        for (n, inst) in self.inst.iter_mut().enumerate() {
+            inst.presence.set(0.0);
+            inst.idle = 0;
+            inst.on.set(p.inst[n].on);
+            if let FxParams::Crush(q) = &p.inst[n].p {
+                inst.crush_mix.reset(q.mix);
+            }
+        }
+        self.run = Run::EMPTY;
+        self.pending = None;
+        self.duck.set(1.0);
+        self.filter.reset(&p.filter);
+        self.filter_fade.set(p.filter_on);
+        self.gain.reset(p.gain);
     }
 
     /// The chain has gone quiet: swap to the new order. Effects that were
@@ -738,7 +763,7 @@ mod tests {
             let at = |id: &str| index_of(id).unwrap_or_else(|| panic!("no row {id}"));
             let slots = ChainSlots::resolve(at);
             Rig {
-                chain: Chain::new(48_000.0, &PARAMS, &slots),
+                chain: Chain::new(48_000.0, &PARAMS, &slots, 0),
                 slots,
                 bank: ParamBank::new(),
             }

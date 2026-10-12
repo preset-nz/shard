@@ -10,13 +10,14 @@
 //!   Its clock runs while it is off, so switching it on lands on the grid.
 //! - **Its own grid.** A row per voice and a byte per step: zero is off,
 //!   anything else is the hit's velocity. Several voices fire on one step.
-//! - **The tracker's clock.** The kit does not count time itself. It reads
-//!   how many sixteenths the steps have run (`StepClock::elapsed`), so it
-//!   stays on the melody's grid whatever its own length, and through a tempo
-//!   change. The arrangement's swing applies; nudge does not.
+//! - **The transport's clock.** The kit does not count time itself. It reads
+//!   where the shared transport is (`steps::Beat`), so it stays on every
+//!   track's grid whatever its own length, and through a tempo change. The
+//!   arrangement's swing applies; nudge does not.
 //! - **After the patch.** It joins the mix after the patch's fader and before
-//!   the arrangement's chain, so the patch's envelope, velocity, Hold and
-//!   brake never touch it, and the arrangement's effects and limiter do. In
+//!   the arrangement's chain, so the patch's envelope, velocity and Hold
+//!   never touch it, and the arrangement's effects and limiter do. It is on
+//!   the tape, so a brake slows it with everything else (`process_at`). In
 //!   sound scaping it is silent: that mode hears the patch alone.
 //!
 //! No samples: each voice is a few lines of synthesis, sized at construction,
@@ -200,6 +201,11 @@ pub struct Kit {
     tails: [Voice; VOICES],
     tail_left: [f32; VOICES],
     noise: Rng,
+    /// Tape time: how far between the last two samples the kit made the
+    /// output is, and those two samples. See `process_at`.
+    tape_at: f32,
+    tape_last: f32,
+    tape_next: f32,
     /// The one-pole coefficients the snare's and the hat's noise are
     /// highpassed with.
     snare_hp: f32,
@@ -224,6 +230,9 @@ impl Kit {
             tails: [Voice::default(); VOICES],
             tail_left: [0.0; VOICES],
             noise: Rng::new(0x005E_EDD2),
+            tape_at: 0.0,
+            tape_last: 0.0,
+            tape_next: 0.0,
             snare_hp: one_pole(1_200.0, sample_rate),
             hat_hp: one_pole(5_000.0, sample_rate),
         }
@@ -234,6 +243,31 @@ impl Kit {
         self.voices = [Voice::default(); VOICES];
         self.tails = [Voice::default(); VOICES];
         self.tail_left = [0.0; VOICES];
+        self.tape_at = 0.0;
+        self.tape_last = 0.0;
+        self.tape_next = 0.0;
+    }
+
+    /// One frame on a tape running at `rate` (0 to 1): the kit slows with
+    /// everything else, like a finger on the reel. At full speed this is
+    /// `process`, sample for sample. Slower, the kit makes its samples at
+    /// that rate and the output reads between them, so a hit drops in pitch
+    /// and rings longer as the tape slows.
+    #[inline]
+    pub fn process_at(&mut self, rate: f32) -> f32 {
+        if rate >= 1.0 {
+            self.tape_at = 0.0;
+            self.tape_last = self.tape_next;
+            self.tape_next = self.process();
+            return self.tape_next;
+        }
+        self.tape_at += rate.max(0.0);
+        while self.tape_at >= 1.0 {
+            self.tape_at -= 1.0;
+            self.tape_last = self.tape_next;
+            self.tape_next = self.process();
+        }
+        self.tape_last + (self.tape_next - self.tape_last) * self.tape_at
     }
 
     /// Whether anything is still sounding.

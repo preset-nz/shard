@@ -480,13 +480,13 @@ export default function App() {
    * The tape brake — a finger on the reel, not a mute.
    *
    * Momentary on purpose: you press it, the tape slows and garbles, you let go
-   * and it winds back up. It writes `tape.brake` through `setParam` like every
+   * and it winds back up. It writes `arrangement.tape.brake` through `setParam` like every
    * other control, which is the point — when this becomes a MIDI CC or a pedal
    * it takes exactly the same path, and a continuous value already means
    * something (half a brake is a tape running slow and flat).
    */
   const setBrake = useCallback((on: boolean) => {
-    void setParam('tape.brake', on ? 1 : 0);
+    void setParam('arrangement.tape.brake', on ? 1 : 0);
   }, []);
 
   /**
@@ -498,7 +498,7 @@ export default function App() {
    * play the same gesture without a path of its own.
    */
   const setReverse = useCallback((on: boolean) => {
-    void setParam('tape.reverse', on ? 1 : 0);
+    void setParam('arrangement.tape.reverse', on ? 1 : 0);
   }, []);
 
   const doAudition = useCallback(async (g: GrainInfo) => {
@@ -1032,7 +1032,7 @@ export default function App() {
             onPointerUp={() => setBrake(false)}
             onPointerCancel={() => setBrake(false)}
             className={`rounded px-3 py-1 text-xs font-medium ${
-              (values['tape.brake'] ?? 0) > 0.01
+              (values['arrangement.tape.brake'] ?? 0) > 0.01
                 ? 'bg-primary text-primary-foreground'
                 : 'border border-border hover:bg-accent'
             }`}

@@ -217,6 +217,11 @@ impl Rise {
     }
 
     pub fn new(sample_rate: f32) -> Self {
+        Self::seeded(sample_rate, 0)
+    }
+
+    /// Its sides seeded with `salt` mixed in (`rng::salt`); zero is `new`.
+    pub fn seeded(sample_rate: f32, salt: u32) -> Self {
         let len = (RISE_MAX_MS * 0.001 * sample_rate).ceil() as usize + GUARD + 4;
         let smoother = |ms: f32| {
             let mut p = OnePole::new();
@@ -226,8 +231,8 @@ impl Rise {
         let mut mix = Ramp::new(0.0);
         mix.set_time(20.0, sample_rate);
         let sides = [
-            Side::new(sample_rate, 0x5EED_0001, len),
-            Side::new(sample_rate, 0x5EED_0002, len),
+            Side::new(sample_rate, 0x5EED_0001 ^ salt, len),
+            Side::new(sample_rate, 0x5EED_0002 ^ salt, len),
         ];
         let latency = sides[0].shifter.latency_samples() as f32;
         Self {

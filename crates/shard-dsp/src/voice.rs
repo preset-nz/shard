@@ -3,12 +3,16 @@
 //! Everything that belongs to the patch and to the track that plays it lives
 //! here: the two materials and how each is read, the player, the cloud, FM,
 //! the patch's own chain, the envelopes, the fades, the smoothers, the
-//! modulation, the tape, the note clock, and the track's steps. The engine
-//! (`engine.rs`) holds the arrangement around it: the transport, the drum
-//! kit, the arrangement's chain and the limiter.
+//! modulation, the note clock, and the track's steps. The engine
+//! (`engine.rs`) holds the arrangement around it: the transport, the tape,
+//! the drum kit, the arrangement's chain and the limiter.
 //!
-//! Epic 28 (several tracks) splits the engine this way so that a fixed pool
-//! of voices can play side by side. Today the engine runs exactly one.
+//! Epic 28 (several tracks): the engine holds a fixed pool of these, each
+//! reading its own bank, modulation, materials and steps, all on the one
+//! transport. The tape's speed is the engine's too (brake and rewind slow
+//! everything), handed to every voice each frame. A voice is switched in and
+//! out with `set_active`, which fades it; once faded out it is idle and the
+//! engine skips it outright.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
 //! logging, no file access.
@@ -26,7 +30,7 @@ use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::smooth::{OnePole, Ramp};
 use crate::sources::{Generator, Reading};
-use crate::steps::{StepClock, StepParams};
+use crate::steps::{Beat, StepClock, StepParams, Transport};
 
 /// How long a change of velocity takes to arrive, in ms.
 const VELOCITY_MS: f32 = 3.0;
@@ -53,9 +57,7 @@ struct Slots {
     env_decay: usize,
     env_sustain: usize,
     env_release: usize,
-    tape_brake: usize,
     tape_time: usize,
-    tape_reverse: usize,
     tape_flick: usize,
     patch_length: usize,
     patch_hold: usize,
@@ -98,9 +100,7 @@ impl Slots {
             env_decay: at("env.decay"),
             env_sustain: at("env.sustain"),
             env_release: at("env.release"),
-            tape_brake: at("tape.brake"),
             tape_time: at("tape.time"),
-            tape_reverse: at("tape.reverse"),
             tape_flick: at("tape.flick"),
             patch_length: at("patch.length"),
             patch_hold: at("patch.hold"),
@@ -129,9 +129,6 @@ struct Smoothers {
     grain_gain: OnePole,
     material_gain: OnePole,
     fm_gain: OnePole,
-    /// The tape's own inertia. Its time constant is `tape.time`, reset per
-    /// block, so the brake's feel is a control rather than a constant.
-    speed: OnePole,
 }
 
 /// One ramp per switchable section. Each multiplies its section's mix and
@@ -229,7 +226,6 @@ struct Block {
     steps_off: bool,
     looping: bool,
     env: EnvParams,
-    speed_target: f32,
     grain_semis: f32,
     /// The player's window into its material, and the cloud's into its own.
     lo: usize,
@@ -245,6 +241,15 @@ struct Block {
     note_release: f64,
     note_released: f64,
     note_end: f64,
+}
+
+/// The tape on one frame, as the engine runs it for every voice: this frame's
+/// speed (negative is backwards) and the last frame's, which decides which
+/// end a step starts its pass from.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Tape {
+    pub speed: f32,
+    pub was: f32,
 }
 
 pub(crate) struct Voice {
@@ -264,10 +269,14 @@ pub(crate) struct Voice {
     log: Arc<GrainLog>,
     /// Playing one logged grain on its own, with the transport stopped.
     auditioning: bool,
-    /// Reverse, resolved from the gate. See `resolve_reverse`.
-    reversing: bool,
-    /// Samples since reverse engaged, for the flick's minimum on-time.
-    reverse_age: f32,
+    /// Whether the host wants this voice playing, and its level fading it in
+    /// and out. Once faded out it is idle: the engine skips it, and it costs
+    /// nothing. `fresh` marks one just woken, which settles at its next
+    /// block. See `set_active`.
+    active: bool,
+    level: Ramp,
+    idle: bool,
+    fresh: bool,
     /// This track's step clock: its pattern, length and triggers.
     steps: StepClock,
     /// What the steps play, from the tracker above the patch. See `set_steps`.
@@ -308,10 +317,16 @@ pub(crate) struct Voice {
     note_fade: Ramp,
     /// This block's values; see `Block`.
     block: Block,
+    /// What this voice mixes into its seeds; see `new`.
+    salt: u32,
 }
 
 impl Voice {
-    pub(crate) fn new(sample_rate: f32, max_grains: usize) -> Self {
+    /// Voice `index` of the pool. Its random sources are salted by it
+    /// (`rng::salt`), so voice 0 keeps the seeds the engine always had and
+    /// two voices on one patch differ. Voice 0 starts active; the rest idle.
+    pub(crate) fn new(sample_rate: f32, max_grains: usize, index: usize) -> Self {
+        let salt = crate::rng::salt(index);
         let slots = Slots::resolve();
         let fades = Fades::new(sample_rate, &slots);
         let mk = |ms: f32| {
@@ -331,7 +346,6 @@ impl Voice {
             grain_gain: mk(defs[slots.grain_gain].smooth_ms),
             material_gain: mk(defs[slots.material_gain].smooth_ms),
             fm_gain: mk(defs[slots.fm_gain].smooth_ms),
-            speed: mk(defs[slots.tape_time].default),
         };
         // Start settled at the defaults, otherwise every parameter glides up
         // from zero for the first few milliseconds after load.
@@ -347,13 +361,9 @@ impl Voice {
             .material_gain
             .reset(defs[slots.material_gain].default);
         smooth.fm_gain.reset(defs[slots.fm_gain].default);
-        // Unity, not a parameter default. Copying the line above would reset
-        // the tape to `tape.brake`'s default of zero and pitch the instrument
-        // up from a standstill on every launch.
-        smooth.speed.reset(1.0);
 
         let log = Arc::new(GrainLog::new());
-        let mut granular = Granular::new(sample_rate, max_grains);
+        let mut granular = Granular::seeded(sample_rate, max_grains, salt);
         granular.set_log(Arc::clone(&log));
 
         // Only a shape until the first `begin_block` fills it in.
@@ -403,7 +413,6 @@ impl Voice {
                 sustain: 0.0,
                 release_ms: 0.0,
             },
-            speed_target: 1.0,
             grain_semis: 0.0,
             lo: 0,
             hi: 0,
@@ -425,11 +434,18 @@ impl Voice {
             grain_reading: Reading::default(),
             player: Player::new(sample_rate),
             granular,
-            fm: Fm::new(sample_rate),
+            fm: Fm::seeded(sample_rate, salt),
             log,
             auditioning: false,
-            reversing: false,
-            reverse_age: 0.0,
+            active: index == 0,
+            level: {
+                let mut r = Ramp::new(if index == 0 { 1.0 } else { 0.0 });
+                r.set_time(BYPASS_MS, sample_rate);
+                r
+            },
+            idle: index != 0,
+            fresh: false,
+            salt,
             steps: StepClock::new(sample_rate),
             step_params: StepParams::default(),
             tail: Player::new(sample_rate),
@@ -443,7 +459,7 @@ impl Voice {
                 r
             },
             vel_target: 1.0,
-            fx: Chain::new(sample_rate, defs, &slots.fx),
+            fx: Chain::new(sample_rate, defs, &slots.fx, salt),
             slots,
             smooth,
             fades,
@@ -486,6 +502,7 @@ impl Voice {
     }
 
     pub(crate) fn set_modulation(&mut self, mut next: ModSet) -> ModSet {
+        next.salt(self.salt);
         next.inherit(&self.mods);
         std::mem::replace(&mut self.mods, next)
     }
@@ -512,31 +529,35 @@ impl Voice {
         self.auditioning
     }
 
-    pub(crate) fn reversing(&self) -> bool {
-        self.reversing
+    /// Switch the voice in or out. In, it wakes from idle clean (no grains,
+    /// tails or effect tails left from before, smoothers already where the
+    /// patch is) and fades in; out, it fades out and then goes idle, so it is
+    /// never cut mid-sample.
+    pub(crate) fn set_active(&mut self, on: bool) {
+        if on && self.idle {
+            self.idle = false;
+            self.fresh = true;
+        }
+        self.active = on;
     }
 
-    /// Turn the reverse *gate* into a direction, once per block.
-    ///
-    /// A tap and a hold are the same gesture held for different lengths, so
-    /// one rule covers both: reverse engages when the gate rises, and stays
-    /// engaged until the gate is low **and** it has run for at least `flick`.
-    /// Tap and you get a flick of a set length whatever your finger did; hold
-    /// and it stays until you let go.
-    ///
-    /// This lives here rather than in the button so that a MIDI note, a pad or
-    /// a footswitch produces exactly the same gesture with no code of its own.
-    fn resolve_reverse(&mut self, gate: bool, flick_samples: f32, frames: f32) {
-        if gate && !self.reversing {
-            self.reversing = true;
-            self.reverse_age = 0.0;
-        }
-        if self.reversing {
-            self.reverse_age += frames;
-            if !gate && self.reverse_age >= flick_samples {
-                self.reversing = false;
-            }
-        }
+    pub(crate) fn active(&self) -> bool {
+        self.active
+    }
+
+    /// Faded out: the engine skips it whole.
+    pub(crate) fn idle(&self) -> bool {
+        self.idle
+    }
+
+    /// The tape's feel as this voice's patch sets it, through its LFOs: how
+    /// long the brake's slew takes and how long a flick lasts, in ms. The
+    /// engine reads voice 0's (the a2 seam: the feel is still a patch's).
+    pub(crate) fn tape_feel(&self, bank: &ParamBank) -> (f32, f32) {
+        (
+            read(&self.mods, bank, self.slots.tape_time).max(0.0),
+            read(&self.mods, bank, self.slots.tape_flick).max(0.0),
+        )
     }
 
     /// One grain, windowed and panned as logged, with no cloud around it and
@@ -579,11 +600,6 @@ impl Voice {
         // Either direction cancels an audition: starting drowns it, stopping
         // has just cleared the pool out from under it.
         self.auditioning = false;
-        // A flick left mid-flight when the transport stopped would still be
-        // engaged when it started again, which is a surprise rather than a
-        // gesture.
-        self.reversing = false;
-        self.reverse_age = 0.0;
         // The steps stop with the tape, so no step stays lit, and the next
         // block starts them again from step one.
         self.steps.set_running(false);
@@ -632,7 +648,9 @@ impl Voice {
 
     /// Everything a block works out once, before its frames. Only while the
     /// transport runs; a stopped engine renders silence or an audition.
-    pub(crate) fn begin_block(&mut self, bank: &ParamBank, frames: usize) {
+    /// `transport` has begun this block. The voice follows its steps when
+    /// its own steps are on and the transport's are running.
+    pub(crate) fn begin_block(&mut self, bank: &ParamBank, frames: usize, transport: &Transport) {
         let length = Length::from_value(bank.get(self.slots.patch_length));
         // LFOs move with the transport, and once per block, before anything
         // below reads a parameter through them.
@@ -699,20 +717,57 @@ impl Voice {
         let fm_on_target = gate(self.slots.fm_on);
         let material_on_target = gate(self.slots.material_on);
         let env_on_target = gate(self.slots.env_on);
-        // The step clock, as the tracker last handed it in.
-        let steps = self.step_params;
+        // Whether this voice follows the steps: its own switch, as the
+        // tracker last handed it in, and the transport running them.
+        let stepped = self.step_params.on && transport.running();
+        // Just woken from idle: nothing of before is heard, and nothing
+        // glides in from values the patch had then.
+        if core::mem::take(&mut self.fresh) {
+            let s = &mut self.smooth;
+            s.position.reset(target.position);
+            s.jitter.reset(target.jitter);
+            s.size.reset(target.size_ms);
+            s.density.reset(target.density);
+            s.pitch.reset(target.pitch);
+            s.spread.reset(target.pitch_spread);
+            s.pan.reset(target.pan_spread);
+            s.grain_gain.reset(target.gain);
+            s.material_gain.reset(material_gain_target);
+            s.fm_gain.reset(fm_gain_target);
+            self.fades.material.set(material_on_target);
+            self.fades.grain.set(grain_on_target);
+            self.fades.fm.set(fm_on_target);
+            self.fades.env.set(env_on_target);
+            self.fades.fm_gate.set(if stepped { 0.0 } else { 1.0 });
+            self.fx.forget(&fx);
+            self.fm.settle(&fm_params);
+            self.granular.clear();
+            self.tail_left = 0.0;
+            if stepped {
+                self.player.finish();
+            } else {
+                self.player.rewind();
+            }
+            self.steps.set_running(false);
+            self.pass_ratio = 1.0;
+            self.pass_semis = 0.0;
+            self.vel.set(1.0);
+            self.vel_target = 1.0;
+            self.note_fade.set(1.0);
+            self.note.pending = true;
+        }
         // Switched on mid-pass, the steps take over from the loop: the pass
         // in flight fades out as a tail, and nothing sounds until a step does.
-        if steps.on && !self.steps.running() && self.player.sounding() {
+        if stepped && !self.steps.running() && self.player.sounding() {
             self.tail = self.player;
             self.tail_left = self.player.seam_samples();
             self.tail_ratio = self.pass_ratio;
             self.player.finish();
         }
-        self.steps.set_running(steps.on);
+        self.steps.set_running(stepped);
         // Under the steps a pass plays once (Georg, 2026-09-14); without them
         // it loops, and no step's pitch outlives them.
-        let steps_off = !steps.on;
+        let steps_off = !stepped;
         if steps_off {
             self.pass_ratio = 1.0;
             self.pass_semis = 0.0;
@@ -740,22 +795,6 @@ impl Voice {
         // it exists. `position` and the player both address the window, not
         // the file, which is what makes trimming a long sample feel like
         // loading a short one.
-        // The tape. Brake and reverse are two ways of asking for a speed, and
-        // they share one slew — so flipping direction slows to a stop and
-        // climbs back the other way, exactly as a reel does. An instant flip
-        // would be one branch here, and would not sound like tape.
-        self.resolve_reverse(
-            read(&self.mods, bank, self.slots.tape_reverse) >= 0.5,
-            read(&self.mods, bank, self.slots.tape_flick).max(0.0) * 0.001 * self.sample_rate,
-            frames as f32,
-        );
-        let direction = if self.reversing { -1.0 } else { 1.0 };
-        let brake = read(&self.mods, bank, self.slots.tape_brake).clamp(0.0, 1.0);
-        let speed_target = direction * (1.0 - brake);
-        self.smooth.speed.set_time(
-            read(&self.mods, bank, self.slots.tape_time).max(0.0),
-            self.sample_rate,
-        );
 
         // Octave is a pre-condition on the material, not a property of the
         // tape: it changes how fast the source is *read*, and nothing else.
@@ -830,7 +869,6 @@ impl Voice {
             steps_off,
             looping,
             env,
-            speed_target,
             grain_semis,
             lo,
             hi,
@@ -847,10 +885,12 @@ impl Voice {
     }
 
     /// One frame of this voice, after the patch's chain and before the
-    /// arrangement: the step clock ticked, the generators summed, the
-    /// patch's effects, envelope, filter and output.
+    /// arrangement: the step clock ticked at `beat` on the transport (which
+    /// swings by `swing`), the generators summed at the tape's speed, the
+    /// patch's effects, envelope, filter and output, and the voice's own
+    /// fade in or out.
     #[inline]
-    pub(crate) fn frame(&mut self) -> (f32, f32) {
+    pub(crate) fn frame(&mut self, tape: Tape, beat: &Beat, swing: f32) -> (f32, f32) {
         let b = &mut self.block;
         let length = b.length;
         let target = b.target;
@@ -874,7 +914,7 @@ impl Voice {
         // pass's clock from this frame, so a shaped envelope (anything
         // but flat, which is the default) still puts an edge on the tail
         // and on the cloud. Open, roadmap row 4.
-        if let Some(k) = self.steps.tick(steps) {
+        if let Some(k) = self.steps.tick(steps, beat, swing) {
             // A pass that has played out has nothing to fade, and must
             // not replace a tail that is still fading.
             if self.player.sounding() {
@@ -888,7 +928,7 @@ impl Voice {
             // sixteenths, instead of the patch's Hold time.
             let hold = steps.hold_of(k);
             if length == Length::Hold && hold > 0 {
-                let gate = f64::from(hold) * f64::from(self.steps.step_len(steps));
+                let gate = f64::from(hold) * f64::from(beat.len);
                 let released = gate + b.note_release;
                 let end = released + f64::from(BYPASS_MS) * 0.001 * sr;
                 self.note.start(gate, released, end);
@@ -897,7 +937,7 @@ impl Voice {
             }
             // A reel running backwards starts its pass from the far end,
             // or it would leave the window on its first sample.
-            if self.smooth.speed.value() < 0.0 {
+            if tape.was < 0.0 {
                 self.player.rewind_to_end(source.len());
             } else {
                 self.player.rewind();
@@ -913,14 +953,14 @@ impl Voice {
         p.pitch = self.smooth.pitch.process(target.pitch) + b.grain_semis + self.pass_semis;
         p.pitch_spread = self.smooth.spread.process(target.pitch_spread);
         p.pan_spread = self.smooth.pan.process(target.pan_spread);
-        p.speed = self.smooth.speed.process(b.speed_target);
+        p.speed = tape.speed;
 
         // Under Hold with nothing to trigger it, a note that has ended
         // starts again, the way a pass loops under Sample, so the patch
         // keeps sounding in sound scaping.
         if length == Length::Hold && b.steps_off && self.note.age >= self.note.end {
             self.note.start(b.note_gate, b.note_released, b.note_end);
-            if self.smooth.speed.value() < 0.0 {
+            if tape.speed < 0.0 {
                 self.player.rewind_to_end(source.len());
             } else {
                 self.player.rewind();
@@ -1051,7 +1091,10 @@ impl Voice {
         // The note clock runs on tape time, as the grain scheduler does:
         // a brake slows it, and the material's octave does not.
         self.note.age += f64::from(p.speed.abs());
-        (l, r)
+
+        // The voice's own fade, in and out. Exactly one while it plays.
+        let g = self.level.process(if self.active { 1.0 } else { 0.0 });
+        (l * g, r * g)
     }
 
     /// After a block's frames: the playhead, and a cloud or FM switched off
@@ -1075,6 +1118,14 @@ impl Voice {
         // FM likewise starts from the top of a cycle when switched back on.
         if self.fades.fm.value() == 0.0 {
             self.fm.reset();
+        }
+
+        // Faded out: idle from the next block, with nothing left running.
+        if !self.active && self.level.value() == 0.0 {
+            self.idle = true;
+            self.granular.clear();
+            self.tail_left = 0.0;
+            self.steps.set_running(false);
         }
     }
 }

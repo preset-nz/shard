@@ -99,8 +99,9 @@ pub const PATCH_LABEL: &str = "patch.label";
 pub const TRACK_PATCH: &str = "track.patch";
 
 /// Played, not edited: a held button or a pedal writes them to the bank, and
-/// a document never stores them.
-pub const PLAYED: &[&str] = &["tape.brake", "tape.reverse"];
+/// a document never stores them. The tape's gestures, on the arrangement's
+/// table since they slow every track (epic 28, Georg, 2026-10-12).
+pub const PLAYED: &[&str] = &["arrangement.tape.brake", "arrangement.tape.reverse"];
 
 /// A patch's fixed nodes, each a child named for its kind.
 pub const PATCH_NODES: &[&str] = &["material", "grain", "fm", "env", "tape", "filter", "amp"];
@@ -190,7 +191,7 @@ fn key_prefix(id: &str) -> &str {
 fn patch_rows(prefix: &str) -> Vec<ParamDef> {
     PARAMS
         .iter()
-        .filter(|p| key_prefix(p.id) == prefix && !PLAYED.contains(&p.id))
+        .filter(|p| key_prefix(p.id) == prefix)
         .copied()
         .collect()
 }

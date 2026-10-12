@@ -322,22 +322,30 @@ fn writing_a_plan_leaves_a_held_brake_held() {
     let mut doc = new_session();
     let grain = id(&doc, "/patches/patch/grain");
     let bank = ParamBank::new();
-    bank.set_by_id("tape.brake", 1.0);
-    bank.set_by_id("tape.reverse", 1.0);
+    let arr = ParamBank::for_table(arrangement::params());
+    assert!(arr.set_by_id("arrangement.tape.brake", 1.0));
+    assert!(arr.set_by_id("arrangement.tape.reverse", 1.0));
 
     doc.edit("Set", |tx| {
         tx.set_value(grain, "grain.size", Value::Float(80.0))
     })
     .unwrap();
     doc.projection().write_patch(&bank);
+    doc.projection().write_arrangement(&arr);
 
-    assert_eq!(bank.get_by_id("tape.brake"), Some(1.0));
-    assert_eq!(bank.get_by_id("tape.reverse"), Some(1.0));
+    assert_eq!(arr.get_by_id("arrangement.tape.brake"), Some(1.0));
+    assert_eq!(arr.get_by_id("arrangement.tape.reverse"), Some(1.0));
     assert_eq!(bank.get_by_id("grain.size"), Some(80.0));
-    for def in PARAMS.iter().filter(|d| !PLAYED.contains(&d.id)) {
+    for def in PARAMS.iter() {
         if def.id != "grain.size" {
             assert_eq!(bank.get_by_id(def.id), Some(def.default), "{}", def.id);
         }
+    }
+    for def in arrangement::params()
+        .iter()
+        .filter(|d| !PLAYED.contains(&d.id))
+    {
+        assert_eq!(arr.get_by_id(def.id), Some(def.default), "{}", def.id);
     }
 }
 

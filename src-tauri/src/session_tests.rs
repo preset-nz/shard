@@ -56,7 +56,11 @@ pub(crate) fn rig() -> Rig {
 }
 
 fn get(r: &Rig, id: &str) -> f32 {
-    r.bank.get_by_id(id).unwrap()
+    if id.starts_with(shard_dsp::arrangement::PREFIX) {
+        r.arrangement.get_by_id(id).unwrap()
+    } else {
+        r.bank.get_by_id(id).unwrap()
+    }
 }
 
 #[test]
@@ -116,15 +120,19 @@ fn a_value_out_of_range_is_brought_into_it_as_the_bank_did() {
 #[test]
 fn held_gestures_are_not_edits_and_reach_the_bank() {
     let r = rig();
-    r.session.set_param("tape.brake", 1.0).unwrap();
-    r.session.set_param("tape.reverse", 1.0).unwrap();
-    assert_eq!(get(&r, "tape.brake"), 1.0);
+    r.session.set_param("arrangement.tape.brake", 1.0).unwrap();
+    r.session
+        .set_param("arrangement.tape.reverse", 1.0)
+        .unwrap();
+    assert_eq!(get(&r, "arrangement.tape.brake"), 1.0);
     assert!(r.session.undo().unwrap().is_none());
 
-    // An edit while the brake is held leaves it held.
+    // An edit while the brake is held leaves it held, in the patch and in
+    // the arrangement.
     r.session.set_param("grain.size", 80.0).unwrap();
-    assert_eq!(get(&r, "tape.brake"), 1.0);
-    assert_eq!(get(&r, "tape.reverse"), 1.0);
+    r.session.set_param("arrangement.kit.gain", 0.5).unwrap();
+    assert_eq!(get(&r, "arrangement.tape.brake"), 1.0);
+    assert_eq!(get(&r, "arrangement.tape.reverse"), 1.0);
 }
 
 #[test]

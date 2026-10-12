@@ -341,7 +341,12 @@ pub struct Wear {
 
 impl Wear {
     pub fn new(sample_rate: f32) -> Self {
-        Self::with_seed(sample_rate, 0x5EED_0001)
+        Self::seeded(sample_rate, 0)
+    }
+
+    /// Seeded with `salt` mixed in (`rng::salt`); zero is `new`.
+    pub fn seeded(sample_rate: f32, salt: u32) -> Self {
+        Self::with_seed(sample_rate, 0x5EED_0001 ^ salt)
     }
 
     /// Every random source is derived from `seed`, so equal seeds render

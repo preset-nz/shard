@@ -169,14 +169,15 @@ export const NODES: NodeInfo[] = [
   },
   { layer: 'patch', id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
   // The tape's feel, in Settings (Georg, 2026-09-14). Brake and reverse are
-  // played from the header, so they are not rows anywhere.
+  // played from the header and slow every track, so they are the
+  // arrangement's rows (`arrangement.tape.*`) and drawn on no card.
   {
     layer: 'patch',
     id: 'tape',
     label: 'Tape',
     lane: null,
     table: null,
-    owns: (id) => under('tape')(id) && id !== 'tape.brake' && id !== 'tape.reverse',
+    owns: under('tape'),
   },
 ];
 

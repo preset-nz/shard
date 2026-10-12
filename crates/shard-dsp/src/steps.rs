@@ -25,6 +25,11 @@
 //! Sample-accurate: the clock is advanced per frame inside the engine's
 //! loop, so a trigger lands on the frame it is due, not at a block edge.
 //! Swing delays every second step by a share of a step.
+//!
+//! **One transport, many tracks** (epic 28). `Transport` counts the position
+//! once a frame for the whole engine; each track's `StepClock` reads it
+//! through its own pattern and length, and the kit reads it too, so every
+//! loop starts on the same sample and a bar is a bar for all of them.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
@@ -264,38 +269,186 @@ impl Default for StepBank {
     }
 }
 
+/// Steps in a bar: what "the next bar" counts.
+pub const BAR: u64 = 16;
+
+/// A sixteenth at `tempo_bpm`, in samples.
+#[inline]
+pub fn step_len(sample_rate: f32, tempo_bpm: f32) -> f32 {
+    sample_rate * 60.0 / tempo_bpm.clamp(20.0, 300.0) / 4.0
+}
+
+/// Where the transport is on one frame: whole sixteenths since the steps
+/// started, and how far into the current one.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Beat {
+    /// Sixteenths completed since the steps started.
+    pub step: u64,
+    /// Samples into the current sixteenth, from zero to under `len`. f64, so
+    /// a sixteenth that is not a whole number of samples never drifts.
+    pub offset: f64,
+    /// A sixteenth, in samples, at the transport's tempo.
+    pub len: f32,
+}
+
+impl Beat {
+    /// Samples into a loop of `length` steps: what a track's clock compares
+    /// its onsets with. Every track reads the same beat, so a loop of four
+    /// and a loop of sixteen start together on every bar.
+    #[inline]
+    pub fn in_loop(&self, length: u32) -> f32 {
+        let length = u64::from(length.max(1));
+        ((self.step % length) as f64 * f64::from(self.len) + self.offset) as f32
+    }
+
+    /// Sixteenths since the steps started, counted as a loop of `length`
+    /// counts them: whole loops, then the place in this one. For the kit,
+    /// which finds its step from it.
+    #[inline]
+    pub fn elapsed(&self, length: u32) -> f64 {
+        let length = u64::from(length.max(1));
+        let loops = self.step - self.step % length;
+        loops as f64 + f64::from(self.in_loop(length as u32) / self.len)
+    }
+
+    /// Bars completed since the steps started.
+    #[inline]
+    pub fn bar(&self) -> u64 {
+        self.step / BAR
+    }
+}
+
+/// The arrangement's clock, shared by every track and the kit (epic 28): one
+/// position, counted once a frame, so "the next bar" means one thing for
+/// every track.
+///
+/// Tempo and swing are the arrangement's, so they are set here, not on a
+/// track. The position moves at the tape's speed: a brake slows the steps
+/// with everything else, like a finger on the reel. Reverse slows it to a
+/// stop and back through the same slew, but the grid never runs backwards.
+#[derive(Debug, Clone, Copy)]
+pub struct Transport {
+    sample_rate: f32,
+    beat: Beat,
+    /// Whether the tracker wants the steps running.
+    on: bool,
+    /// Whether they are: from the block `on` was first seen, until it goes
+    /// off or the transport stops.
+    running: bool,
+    /// 0 to 0.5 of a sixteenth, on every even-numbered step.
+    swing: f32,
+}
+
+impl Transport {
+    pub fn new(sample_rate: f32) -> Self {
+        let p = StepParams::default();
+        Self {
+            sample_rate,
+            beat: Beat {
+                step: 0,
+                offset: 0.0,
+                len: step_len(sample_rate, p.tempo_bpm),
+            },
+            on: p.on,
+            running: false,
+            swing: p.swing,
+        }
+    }
+
+    /// The arrangement's half of the steps: whether they run, the tempo and
+    /// the swing. The rest of `p` belongs to a track. A tempo change keeps the
+    /// place in the current sixteenth, so nothing jumps.
+    pub fn set(&mut self, p: &StepParams) {
+        self.on = p.on;
+        self.swing = p.swing.clamp(0.0, 0.5);
+        let len = step_len(self.sample_rate, p.tempo_bpm);
+        if len != self.beat.len {
+            self.beat.offset = (self.beat.offset * f64::from(len) / f64::from(self.beat.len))
+                .clamp(0.0, f64::from(len));
+            self.beat.len = len;
+        }
+    }
+
+    /// Once a block, before its frames: the steps start from step one the
+    /// block they are switched on. True when they started this block.
+    pub fn begin_block(&mut self) -> bool {
+        let started = self.on && !self.running;
+        if started {
+            self.beat.step = 0;
+            self.beat.offset = 0.0;
+        }
+        self.running = self.on;
+        started
+    }
+
+    /// Stopped with the tape: the next block starts the steps again.
+    pub fn stop(&mut self) {
+        self.running = false;
+    }
+
+    pub fn running(&self) -> bool {
+        self.running
+    }
+
+    pub fn swing(&self) -> f32 {
+        self.swing
+    }
+
+    /// This frame's place. Read by every track and the kit before `advance`.
+    #[inline]
+    pub fn beat(&self) -> &Beat {
+        &self.beat
+    }
+
+    /// On to the next frame at `speed` (the tape's, so a brake slows it).
+    /// True when a bar began. Nothing moves while the steps are stopped.
+    #[inline]
+    pub fn advance(&mut self, speed: f32) -> bool {
+        if !self.running {
+            return false;
+        }
+        self.beat.offset += f64::from(speed.abs());
+        let len = f64::from(self.beat.len);
+        let mut bar = false;
+        while self.beat.offset >= len {
+            self.beat.offset -= len;
+            self.beat.step += 1;
+            bar |= self.beat.step.is_multiple_of(BAR);
+        }
+        bar
+    }
+}
+
+/// A track's step clock: it reads the shared transport and notices when the
+/// track enters a step that is on. Its pattern, length, pitches, holds,
+/// velocities and nudges are its own; tempo and swing are the transport's.
 pub struct StepClock {
     sample_rate: f32,
-    /// Samples into the pattern.
-    pos: f32,
     /// The step the last frame was in, or none before the first.
     step: Option<u32>,
     running: bool,
-    /// Loops completed since the steps started.
-    loops: u64,
-    /// Sixteenths since the steps started, as of the last frame.
-    elapsed: f64,
+    /// Started while the transport was already past its first frame: the
+    /// step it lands in is taken as already entered, so a track switched on
+    /// mid-play waits for its next step rather than firing late.
+    joining: bool,
 }
 
 impl StepClock {
     pub fn new(sample_rate: f32) -> Self {
         Self {
             sample_rate,
-            pos: 0.0,
             step: None,
             running: false,
-            loops: 0,
-            elapsed: 0.0,
+            joining: false,
         }
     }
 
-    /// Start from the top, or stop. Starting always begins at step one.
+    /// Start or stop. Starting forgets the last step, so the step the clock
+    /// lands in is a new one.
     pub fn set_running(&mut self, running: bool) {
         if running && !self.running {
-            self.pos = 0.0;
             self.step = None;
-            self.loops = 0;
-            self.elapsed = 0.0;
+            self.joining = true;
         }
         self.running = running;
     }
@@ -313,58 +466,45 @@ impl StepClock {
         }
     }
 
-    /// Sixteenths since the steps started, as of the last `tick`: what the
-    /// drum kit counts its own loop from, so it stays on this grid whatever
-    /// its length. Counted from this track's loops and its place in the
-    /// current one, so a tempo change moves both together.
-    pub fn elapsed(&self) -> f64 {
-        self.elapsed
-    }
-
-    /// A sixteenth note, in samples.
-    pub fn step_len(&self, p: &StepParams) -> f32 {
-        self.sample_rate * 60.0 / p.tempo_bpm.clamp(20.0, 300.0) / 4.0
-    }
-
-    /// Where step `k` begins, with swing and its own nudge.
-    fn onset(&self, k: u32, step_len: f32, p: &StepParams) -> f32 {
-        let swing = p.swing.clamp(0.0, 0.5);
+    /// Where step `k` begins in its loop, with swing and its own nudge.
+    fn onset(&self, k: u32, step_len: f32, swing: f32, p: &StepParams) -> f32 {
         let late = if k % 2 == 1 { swing * step_len } else { 0.0 };
         k as f32 * step_len + late + p.nudge_samples(k, self.sample_rate, step_len)
     }
 
-    /// One frame on. The step, when a step that is on begins on this frame.
+    /// This frame, at `beat` on the transport, which swings by `swing`. The
+    /// step, when a step that is on begins on this frame.
     #[inline]
-    pub fn tick(&mut self, p: &StepParams) -> Option<u32> {
+    pub fn tick(&mut self, p: &StepParams, beat: &Beat, swing: f32) -> Option<u32> {
         if !self.running {
             return None;
         }
-        let step_len = self.step_len(p);
+        let step_len = beat.len;
+        let swing = swing.clamp(0.0, 0.5);
         let length = p.length.clamp(1, STEPS as u32);
-        let total = length as f32 * step_len;
+        let pos = beat.in_loop(length);
         // Which step contains `pos`: the last whose onset is at or before it.
         // A step nudged early has begun before the grid says, and one nudged
         // late has not, so look a step either way.
-        let mut k = ((self.pos / step_len) as u32).min(length - 1);
-        while k > 0 && self.onset(k, step_len, p) > self.pos {
+        let mut k = ((pos / step_len) as u32).min(length - 1);
+        while k > 0 && self.onset(k, step_len, swing, p) > pos {
             k -= 1;
         }
-        while k + 1 < length && self.onset(k + 1, step_len, p) <= self.pos {
+        while k + 1 < length && self.onset(k + 1, step_len, swing, p) <= pos {
             k += 1;
         }
         // Before step one's own onset (a late nudge on it) the clock is still
         // in the last step of the loop before; on the very first pass that
         // means no step at all yet, and nothing triggers.
-        let before_first = k == 0 && self.onset(0, step_len, p) > self.pos;
+        let before_first = k == 0 && self.onset(0, step_len, swing, p) > pos;
         let k = if before_first { length - 1 } else { k };
-        let entered = self.step != Some(k) && !(before_first && self.step.is_none());
-        self.step = Some(k);
-        self.elapsed = (self.loops * u64::from(length)) as f64 + f64::from(self.pos / step_len);
-        self.pos += 1.0;
-        if self.pos >= total {
-            self.pos -= total;
-            self.loops += 1;
+        let mut entered = self.step != Some(k) && !(before_first && self.step.is_none());
+        // Joining a transport that has already run: the step it lands in
+        // began without this track, so it waits for the next.
+        if core::mem::take(&mut self.joining) && (beat.step != 0 || beat.offset != 0.0) {
+            entered = false;
         }
+        self.step = Some(k);
         (entered && (p.pattern >> k) & 1 == 1).then_some(k)
     }
 }
@@ -375,10 +515,35 @@ mod tests {
 
     const SR: f32 = 48_000.0;
 
+    /// A track's clock on its own transport, at `p`'s tempo and swing.
+    struct Rig {
+        t: Transport,
+        c: StepClock,
+    }
+
+    impl Rig {
+        fn new(p: &StepParams) -> Self {
+            let mut t = Transport::new(SR);
+            t.set(&StepParams { on: true, ..*p });
+            t.begin_block();
+            Self {
+                t,
+                c: StepClock::new(SR),
+            }
+        }
+
+        /// One frame: the clock reads the beat, then the transport moves on.
+        fn tick(&mut self, p: &StepParams) -> Option<u32> {
+            let fired = self.c.tick(p, self.t.beat(), self.t.swing());
+            self.t.advance(1.0);
+            fired
+        }
+    }
+
     fn triggers(p: &StepParams, frames: usize) -> Vec<usize> {
-        let mut c = StepClock::new(SR);
-        c.set_running(true);
-        (0..frames).filter(|_| c.tick(p).is_some()).collect()
+        let mut r = Rig::new(p);
+        r.c.set_running(true);
+        (0..frames).filter(|_| r.tick(p).is_some()).collect()
     }
 
     #[test]
@@ -454,18 +619,21 @@ mod tests {
             length: 4,
             ..Default::default()
         };
-        let mut c = StepClock::new(SR);
-        assert_eq!(c.tick(&p), None);
-        assert_eq!(c.current(), None);
-        c.set_running(true);
+        let mut r = Rig::new(&p);
+        assert_eq!(r.tick(&p), None);
+        assert_eq!(r.c.current(), None);
+        let mut r = Rig::new(&p);
+        r.c.set_running(true);
         for _ in 0..1_000 {
-            c.tick(&p);
+            r.tick(&p);
         }
-        assert_eq!(c.current(), Some(0));
-        c.set_running(false);
-        assert_eq!(c.current(), None);
-        c.set_running(true);
-        assert_eq!(c.tick(&p), Some(0), "restarting fires step one again");
+        assert_eq!(r.c.current(), Some(0));
+        r.c.set_running(false);
+        assert_eq!(r.c.current(), None);
+        // The transport starts again with the steps, from the top.
+        let mut r = Rig::new(&p);
+        r.c.set_running(true);
+        assert_eq!(r.tick(&p), Some(0), "restarting fires step one again");
     }
 
     #[test]
@@ -476,9 +644,9 @@ mod tests {
             pattern: 0b1010,
             ..Default::default()
         };
-        let mut c = StepClock::new(SR);
-        c.set_running(true);
-        let fired: Vec<u32> = (0..24_000).filter_map(|_| c.tick(&p)).collect();
+        let mut r = Rig::new(&p);
+        r.c.set_running(true);
+        let fired: Vec<u32> = (0..24_000).filter_map(|_| r.tick(&p)).collect();
         assert_eq!(fired, vec![1, 3]);
     }
 
@@ -598,10 +766,10 @@ mod tests {
     /// The frame step `k` first triggers on, over a few bars at 120 bpm
     /// (a sixteenth is 6 000 samples at 48 kHz).
     fn first_trigger(p: &StepParams, k: usize) -> usize {
-        let mut c = StepClock::new(SR);
-        c.set_running(true);
+        let mut r = Rig::new(p);
+        r.c.set_running(true);
         for frame in 0..SR as usize * 2 {
-            if c.tick(p) == Some(k as u32) {
+            if r.tick(p) == Some(k as u32) {
                 return frame;
             }
         }
@@ -664,11 +832,11 @@ mod tests {
         for (i, n) in p.nudges.iter_mut().enumerate() {
             *n = if i % 2 == 0 { -50 } else { 50 };
         }
-        let mut c = StepClock::new(SR);
-        c.set_running(true);
+        let mut r = Rig::new(&p);
+        r.c.set_running(true);
         let mut seen = Vec::new();
         for _ in 0..SR as usize * 4 {
-            if let Some(k) = c.tick(&p) {
+            if let Some(k) = r.tick(&p) {
                 seen.push(k);
             }
         }
@@ -690,5 +858,64 @@ mod tests {
         for (k, at) in t.iter().enumerate() {
             assert_eq!(*at, k * 6_000, "step {k}");
         }
+    }
+
+    #[test]
+    fn a_track_switched_on_mid_play_waits_for_its_next_step() {
+        let p = StepParams {
+            on: true,
+            length: 4,
+            pattern: 0b1111,
+            ..Default::default()
+        };
+        let mut r = Rig::new(&p);
+        // Half way through step one, a sixteenth being 6 000 samples.
+        for _ in 0..3_000 {
+            r.tick(&p);
+        }
+        r.c.set_running(true);
+        let fired: Vec<usize> = (0..12_000).filter(|_| r.tick(&p).is_some()).collect();
+        assert_eq!(
+            fired,
+            vec![3_000, 9_000],
+            "steps two and three, not a late step one"
+        );
+    }
+
+    #[test]
+    fn a_tempo_change_keeps_the_place_in_the_step() {
+        let p = StepParams {
+            on: true,
+            ..Default::default()
+        };
+        let mut t = Transport::new(SR);
+        t.set(&p);
+        t.begin_block();
+        for _ in 0..9_000 {
+            t.advance(1.0);
+        }
+        // A step and a half at 120; at 60 still a step and a half.
+        t.set(&StepParams {
+            tempo_bpm: 60.0,
+            ..p
+        });
+        assert_eq!(t.beat().step, 1);
+        assert_eq!(t.beat().offset, 6_000.0);
+    }
+
+    #[test]
+    fn the_transport_counts_bars_and_moves_at_the_tapes_speed() {
+        let p = StepParams {
+            on: true,
+            ..Default::default()
+        };
+        let mut t = Transport::new(SR);
+        t.set(&p);
+        t.begin_block();
+        // A bar at 120 is two seconds; at half speed it takes four.
+        let bars = (0..SR as usize * 4).filter(|_| t.advance(0.5)).count();
+        assert_eq!(bars, 1);
+        assert_eq!(t.beat().bar(), 1);
+        assert_eq!(t.beat().step, 16);
     }
 }

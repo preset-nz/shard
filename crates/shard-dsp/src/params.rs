@@ -437,25 +437,13 @@ const BASE: &[ParamDef] = &[
         unit: Unit::Ms,
         smooth_ms: 0.0,
     },
-    // The tape transport. One mechanism: `speed` is a multiplier on tape time,
+    // The tape's feel. One mechanism: `speed` is a multiplier on tape time,
     // and brake and reverse are two ways of asking for a different one. Both
     // arrive through the same slew, which is what makes a stop sound like a
-    // finger on the reel rather than a mute.
-    ParamDef {
-        id: "tape.brake",
-        name: "Brake",
-        min: 0.0,
-        max: 1.0,
-        // Continuous, not a switch, even though the button only sends 0 and 1.
-        // A pedal or a MIDI CC lands here unchanged, and half a brake is a
-        // real thing: the tape runs slow and flat instead of stopping.
-        default: 0.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        // Not smoothed here. `tape.time` is the slew, and it is the control
-        // that decides how the gesture sounds.
-        smooth_ms: 0.0,
-    },
+    // finger on the reel rather than a mute. Brake and reverse themselves are
+    // played, and slow everything, so they are the arrangement's
+    // (`arrangement.tape.brake`, `arrangement.tape.reverse`); the slew and the
+    // flick are still the patch's, and the engine reads the first voice's.
     ParamDef {
         id: "tape.time",
         name: "Time",
@@ -464,20 +452,6 @@ const BASE: &[ParamDef] = &[
         default: 400.0,
         taper: Taper::Exponential,
         unit: Unit::Ms,
-        smooth_ms: 0.0,
-    },
-    // Reverse is a *gate*, not a state: the button holds it high, and later a
-    // MIDI note or CC will do the same. What a tap means rather than a hold is
-    // decided by the engine, so both sources get the same gesture.
-    ParamDef {
-        id: "tape.reverse",
-        name: "Reverse",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        // Stepped, so it draws as a selector and cannot be linked to an LFO.
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
         smooth_ms: 0.0,
     },
     ParamDef {

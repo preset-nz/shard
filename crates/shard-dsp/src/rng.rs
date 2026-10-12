@@ -40,6 +40,14 @@ impl Rng {
     }
 }
 
+/// What voice `index` mixes into each of its seeds, so two voices playing the
+/// same patch are not sample-identical. Zero for voice 0, which keeps every
+/// seed it had before there was more than one voice. Deterministic: the same
+/// index always gives the same salt.
+pub fn salt(index: usize) -> u32 {
+    (index as u32).wrapping_mul(0x9E37_79B9)
+}
+
 impl Default for Rng {
     fn default() -> Self {
         Self::new(0x1234_5678)
