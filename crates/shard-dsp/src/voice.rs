@@ -71,6 +71,9 @@ struct Slots {
     fm_type: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
+    /// The patch filter's key tracking. Not in `ChainSlots`: the arrangement
+    /// shares that struct and has no note to follow.
+    filter_tracking: usize,
 }
 
 impl Slots {
@@ -113,6 +116,7 @@ impl Slots {
             fm_drift: at("fm.drift"),
             fm_type: at("fm.type"),
             fx: ChainSlots::resolve(at),
+            filter_tracking: at("filter.tracking"),
         }
     }
 }
@@ -216,6 +220,9 @@ struct Block {
     /// The cloud's parameters as this frame left them.
     p: GrainParams,
     fx: ChainParams,
+    /// How many octaves the filter's cutoff moves per octave of the step's
+    /// pitch: 0 (off), 0.5 (half) or 1 (full).
+    filter_tracking: f32,
     material_gain_target: f32,
     fm_gain_target: f32,
     fm_params: FmParams,
@@ -390,6 +397,7 @@ impl Voice {
                 |slot| defs[slot].default,
                 |slot| defs[slot].default,
             ),
+            filter_tracking: 0.0,
             material_gain_target: 0.0,
             fm_gain_target: 0.0,
             fm_params: FmParams {
@@ -700,6 +708,9 @@ impl Voice {
             |slot| bank.get(slot),
         );
 
+        // Stepped, so raw: no LFO moves it. Off, half, full.
+        let filter_tracking = bank.get(self.slots.filter_tracking).round().clamp(0.0, 2.0) * 0.5;
+
         let material_gain_target = read(&self.mods, bank, self.slots.material_gain);
         let fm_gain_target = read(&self.mods, bank, self.slots.fm_gain);
         let fm_params = FmParams {
@@ -859,6 +870,7 @@ impl Voice {
             target,
             p: target,
             fx,
+            filter_tracking,
             material_gain_target,
             fm_gain_target,
             fm_params,
@@ -1086,7 +1098,14 @@ impl Voice {
 
         // The filter, on the master: after every generator, effect and
         // the envelope, then the master gain.
-        let (l, r) = self.fx.back(l, r, fx);
+        // The cutoff follows the step's pitch from the frame it lands on; the
+        // filter's own cutoff smoother glides it. Off multiplies by exactly 1.
+        let cutoff_mul = if b.filter_tracking == 0.0 || self.pass_semis == 0.0 {
+            1.0
+        } else {
+            (b.filter_tracking * self.pass_semis * (1.0 / 12.0)).exp2()
+        };
+        let (l, r) = self.fx.back_tracked(l, r, fx, cutoff_mul);
 
         // The note clock runs on tape time, as the grain scheduler does:
         // a brake slows it, and the material's octave does not.

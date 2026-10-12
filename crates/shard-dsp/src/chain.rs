@@ -682,9 +682,17 @@ impl Chain {
     /// smoother starts and rests on it.
     #[inline]
     pub fn back(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
+        self.back_tracked(l, r, p, 1.0)
+    }
+
+    /// `back` with the filter's cutoff scaled by `cutoff_mul`, which the
+    /// patch's key tracking sets per frame. One is exact: `x * 1.0 == x`.
+    #[inline]
+    pub fn back_tracked(&mut self, l: f32, r: f32, p: &ChainParams, cutoff_mul: f32) -> (f32, f32) {
         let filter_on = self.filter_fade.process(p.filter_on);
         let filter = FilterParams {
             mix: p.filter.mix * filter_on,
+            cutoff_hz: p.filter.cutoff_hz * cutoff_mul,
             ..p.filter
         };
         let (l, r) = self.filter.process(l, r, &filter);

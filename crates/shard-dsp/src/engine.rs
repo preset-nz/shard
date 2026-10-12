@@ -3580,6 +3580,83 @@ mod tests {
         dot(a, b) / (dot(a, a) * dot(b, b)).sqrt()
     }
 
+    /// A looped noise through a low-pass at `cutoff`, tracking `tracking`,
+    /// stepping at `semis`; `steps_on` false leaves the clock off. The second
+    /// half of the left channel, long after the 20 ms glide.
+    fn tracked(cutoff: f32, tracking: f32, semis: i8, steps_on: bool) -> Vec<f32> {
+        let mut seed = 12_345u32;
+        let noise: Vec<f32> = (0..48_000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / 8_388_608.0 - 1.0
+            })
+            .collect();
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(noise);
+        let bank = ParamBank::new();
+        set(&bank, "patch.length", 0.0);
+        set(&bank, "filter.on", 1.0);
+        set(&bank, "filter.cutoff", cutoff);
+        set(&bank, "filter.tracking", tracking);
+        let mut pitches = [0i8; crate::steps::STEPS];
+        pitches[0] = semis;
+        e.set_steps(StepParams {
+            on: steps_on,
+            tempo_bpm: 120.0,
+            length: 1,
+            pattern: 1,
+            pitches,
+            ..Default::default()
+        });
+        e.set_playing(true);
+        let mut out = vec![0.0; 512];
+        let mut all = Vec::new();
+        while all.len() < 24_000 {
+            e.process_block(&mut out, &bank);
+            all.extend(out.iter().step_by(2));
+        }
+        all.split_off(12_000)
+    }
+
+    fn worst_gap(a: &[f32], b: &[f32]) -> f32 {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| (x - y).abs())
+            .fold(0.0, f32::max)
+    }
+
+    #[test]
+    fn full_tracking_moves_the_cutoff_an_octave_per_octave() {
+        let moved = tracked(500.0, 2.0, 12, true);
+        let by_hand = tracked(1_000.0, 0.0, 12, true);
+        let unmoved = tracked(500.0, 0.0, 12, true);
+        assert!(worst_gap(&moved, &by_hand) < 1e-3, "tracked != doubled");
+        assert!(
+            worst_gap(&moved, &unmoved) > 0.05,
+            "tracking changed nothing"
+        );
+    }
+
+    #[test]
+    fn half_tracking_moves_the_cutoff_half_an_octave_per_octave() {
+        let half_up = tracked(500.0, 1.0, 12, true);
+        let by_hand = tracked(500.0 * 0.5f32.exp2(), 0.0, 12, true);
+        assert!(worst_gap(&half_up, &by_hand) < 1e-3);
+        // And an octave down at full goes the other way.
+        let down = tracked(1_000.0, 2.0, -12, true);
+        let by_hand = tracked(500.0, 0.0, -12, true);
+        assert!(worst_gap(&down, &by_hand) < 1e-3);
+    }
+
+    #[test]
+    fn tracking_changes_nothing_at_step_pitch_zero_or_with_the_steps_off() {
+        let off = tracked(500.0, 0.0, 0, true);
+        assert_eq!(off, tracked(500.0, 2.0, 0, true), "full at pitch 0");
+        assert_eq!(off, tracked(500.0, 1.0, 0, true), "half at pitch 0");
+        let idle = tracked(500.0, 0.0, 7, false);
+        assert_eq!(idle, tracked(500.0, 2.0, 7, false), "steps off");
+    }
+
     #[test]
     fn two_voices_on_one_patch_are_not_the_same_sound() {
         let bank = restless();

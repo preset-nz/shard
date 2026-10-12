@@ -635,6 +635,8 @@ export const MAX_DRUMS_TRACKS = 4;
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
 /** `FilterType::NAMES`, in stepped order. */
 export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
+/** The patch filter's key tracking, in stepped order. */
+export const FILTER_TRACKING = ['Off', 'Half', 'Full'];
 /** `DriveType::NAMES`, in stepped order. */
 export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
 /** `ChorusType::NAMES`, in stepped order. */

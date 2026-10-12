@@ -519,6 +519,18 @@ const BASE: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // Off, half, full: how far the cutoff follows the step's pitch, an octave
+    // per octave at full. The patch's filter only; the arrangement has no note.
+    ParamDef {
+        id: "filter.tracking",
+        name: "Tracking",
+        min: 0.0,
+        max: 2.0,
+        default: 0.0,
+        taper: Taper::Stepped(3),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
     // The master gain, after every generator and effect. Unity is bit-exact.
     ParamDef {
         id: "amp.gain",

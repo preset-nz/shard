@@ -491,6 +491,43 @@ fn adding_removing_and_reordering_effects_never_touches_the_allocator() {
 }
 
 #[test]
+fn key_tracking_never_touches_the_allocator() {
+    // The filter's cutoff follows each step's pitch, per frame, as the
+    // tracking switches between off, half and full and the pitches move.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    let bank = ParamBank::new();
+    bank.set_by_id("grain.on", 1.0);
+    bank.set_by_id("filter.on", 1.0);
+    bank.set_by_id("filter.mix", 1.0);
+    bank.set_by_id("filter.cutoff", 400.0);
+    e.set_playing(true);
+    let mut out = vec![0.0f32; 512];
+
+    let ((), caught) = no_alloc(|| {
+        for block in 0..1_200 {
+            bank.set_by_id("filter.tracking", (block / 50 % 3) as f32);
+            let mut pitches = [0i8; shard_dsp::steps::STEPS];
+            for (i, p) in pitches.iter_mut().enumerate() {
+                *p = ((block / 10 + i * 5) % 49) as i8 - 24;
+            }
+            e.set_steps(StepParams {
+                on: true,
+                tempo_bpm: 240.0,
+                pattern: 0xFFFF,
+                pitches,
+                ..Default::default()
+            });
+            e.process_block(&mut out, &bank);
+        }
+    });
+    assert_eq!(
+        caught, 0,
+        "key tracking touched the allocator {caught} time(s)"
+    );
+}
+
+#[test]
 fn held_steps_never_touch_the_allocator() {
     // Under Hold each step gates its own note: a trigger latches a different
     // gate, release and end every time. The patch's Length is Hold, the

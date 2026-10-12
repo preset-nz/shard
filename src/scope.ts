@@ -30,6 +30,7 @@ import {
   CHORUS_TYPES,
   DRIVE_TYPES,
   denormalise,
+  FILTER_TRACKING,
   FILTER_TYPES,
   FM_TYPES,
   format,
@@ -334,6 +335,7 @@ export function isSwitch(p: ParamInfo): boolean {
 const STEP_NAMES: Record<string, string[]> = {
   'grain.window': WINDOW_NAMES,
   'filter.type': FILTER_TYPES,
+  'filter.tracking': FILTER_TRACKING,
   'drive.type': DRIVE_TYPES,
   'chorus.type': CHORUS_TYPES,
   'reverb.type': REVERB_TYPES,
