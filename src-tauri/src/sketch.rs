@@ -5,14 +5,20 @@
 //!
 //! ```json
 //! {
-//!   "tracker": { "tempo": 87, "swing": 0, "tracks": [ ... ] },
+//!   "tracker": { "tempo": 87, "swing": 0, "tracks": [
+//!     { "length": 16, "steps": [ ... ] },
+//!     { "length": 32, "gain": 0.7, "drums": { "on": true, "kick": [ 110, 0, ... ] } }
+//!   ] },
 //!   "patch": { "fm.on": 1, "patch.length": 2 },
 //!   "effects": [ { "kind": "drive", "amount": 14, "mix": 0.4 } ],
-//!   "arrangement": { "arrangement.kit.gain": 0.7 }
+//!   "arrangement": { "arrangement.amp.gain": 0.9 }
 //! }
 //! ```
 //!
-//! `tracker` is `Tracker`'s own shape. `patch` and `arrangement` are rows by
+//! `tracker` is `Tracker`'s own shape: a track with `drums` is a drums track
+//! (epic 28, story d), the rest melody tracks, in order. The session gets
+//! those tracks; a sketch that lists no drums track keeps a new session's,
+//! switched off, as the Drums lane was before drums were tracks. `patch` and `arrangement` are rows by
 //! id; an id left out keeps its default. `effects` is the patch's chain in
 //! order, each with its kind and its rows by name. Anything the session
 //! refuses fails the write, by name.
@@ -24,7 +30,7 @@ use serde::Deserialize;
 use shard_dsp::fx;
 
 use crate::session::Session;
-use crate::tracker::Tracker;
+use crate::tracker::{Track, Tracker};
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -45,7 +51,12 @@ pub struct Effect {
 /// Writes `sketch` into `session`, which should be fresh.
 pub fn apply(sketch: &Sketch, session: &Session) -> Result<(), String> {
     if let Some(tracker) = &sketch.tracker {
-        session.set_tracker(tracker.clone())?;
+        let mut want = tracker.clone().sanitised();
+        if !want.tracks.iter().any(Track::is_drums) {
+            want.tracks.push(Track::drums());
+        }
+        shape(session, &want)?;
+        session.set_tracker(want)?;
     }
     for (id, &v) in sketch.patch.iter().chain(&sketch.arrangement) {
         if fx::parse_row(id).is_some() || fx::is_order_row(id) {
@@ -63,6 +74,34 @@ pub fn apply(sketch: &Sketch, session: &Session) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Adds and removes tracks until the session's are `want`'s kinds, place by
+/// place: `set_tracker` matches tracks by place and never adds one.
+fn shape(session: &Session, want: &Tracker) -> Result<(), String> {
+    let kinds = |t: &Tracker| t.tracks.iter().map(Track::is_drums).collect::<Vec<_>>();
+    let (have, want) = (kinds(&session.tracker()), kinds(want));
+    let keep = have.iter().zip(&want).take_while(|(a, b)| a == b).count();
+    let remove = || -> Result<(), String> {
+        for _ in keep..have.len() {
+            session.remove_track(keep)?;
+        }
+        Ok(())
+    };
+    let add = || -> Result<(), String> {
+        for &drums in &want[keep..] {
+            session.add_track(drums)?;
+        }
+        Ok(())
+    };
+    // The first melody track stays until another arrives.
+    if keep > 0 {
+        remove()?;
+        add()
+    } else {
+        add()?;
+        remove()
+    }
 }
 
 /// `just shard-write <sketch.json> <out.shard>`.
@@ -84,10 +123,13 @@ fn write_a_sketch() {
 fn a_sketch_writes_its_tracker_values_and_chain() {
     let sketch: Sketch = serde_json::from_str(
         r#"{
-            "tracker": { "tempo": 87, "tracks": [ { "length": 16, "gain": 0.8 } ] },
+            "tracker": { "tempo": 87, "tracks": [
+                { "length": 16, "gain": 0.8 },
+                { "length": 32, "gain": 0.7, "drums": { "on": true, "tune": -2, "kick": [110] } }
+            ] },
             "patch": { "fm.on": 1, "filter.cutoff": 420 },
             "effects": [ { "kind": "drive", "amount": 14 }, { "kind": "drive", "mix": 0.5 } ],
-            "arrangement": { "arrangement.kit.gain": 0.7 }
+            "arrangement": { "arrangement.amp.gain": 0.7 }
         }"#,
     )
     .unwrap();
@@ -95,8 +137,15 @@ fn a_sketch_writes_its_tracker_values_and_chain() {
     apply(&sketch, &r.session).unwrap();
     assert_eq!(r.session.tracker().tempo, 87.0);
     assert_eq!(r.bank.get_by_id("filter.cutoff"), Some(420.0));
-    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(0.7));
-    assert_eq!(r.session.tracker().tracks[0].gain, 0.8);
+    assert_eq!(r.arrangement.get_by_id("arrangement.amp.gain"), Some(0.7));
+    let t = r.session.tracker();
+    assert_eq!(t.tracks[0].gain, 0.8);
+    let (grid, sound, gain) = t.kit(0).expect("the drums track");
+    assert_eq!(
+        (grid.length, grid.hits[0][0], grid.hits[0][1]),
+        (32, 110, 0)
+    );
+    assert_eq!((sound.on, sound.tune, gain), (true, -2.0, 0.7));
     let order = fx::order_of(&r.bank);
     assert_eq!(order.len(), 2, "two drives, in order");
     let (first, second) = (order.as_slice()[0] as usize, order.as_slice()[1] as usize);
@@ -121,4 +170,44 @@ fn a_sketch_with_a_row_that_does_not_exist_fails_by_name() {
     let unknown_kind: Sketch =
         serde_json::from_str(r#"{ "effects": [ { "kind": "wobble" } ] }"#).unwrap();
     assert!(apply(&unknown_kind, &r.session).is_err());
+}
+
+#[test]
+fn a_sketch_gets_the_tracks_it_lists() {
+    // No drums track: a new session's stays, switched off. Two melody tracks
+    // and a drums track: one melody track added between, in order.
+    let r = crate::session_tests::rig();
+    let melody: Sketch = serde_json::from_str(
+        r#"{ "tracker": { "tracks": [ { "length": 8 }, { "length": 4 } ] } }"#,
+    )
+    .unwrap();
+    apply(&melody, &r.session).unwrap();
+    let t = r.session.tracker();
+    assert_eq!(
+        t.slots(),
+        vec![
+            crate::tracker::Slot::Melody(0),
+            crate::tracker::Slot::Melody(1),
+            crate::tracker::Slot::Drums(0)
+        ]
+    );
+    assert!(!t.kit(0).unwrap().1.on);
+
+    let r = crate::session_tests::rig();
+    let mixed: Sketch = serde_json::from_str(
+        r#"{ "tracker": { "tracks": [ { "length": 8 }, { "length": 4 }, { "drums": { "on": true } } ] } }"#,
+    )
+    .unwrap();
+    apply(&mixed, &r.session).unwrap();
+    let t = r.session.tracker();
+    assert_eq!(
+        t.slots(),
+        vec![
+            crate::tracker::Slot::Melody(0),
+            crate::tracker::Slot::Melody(1),
+            crate::tracker::Slot::Drums(0)
+        ]
+    );
+    assert_eq!((t.tracks[0].length, t.tracks[1].length), (8, 4));
+    assert!(t.kit(0).unwrap().1.on);
 }

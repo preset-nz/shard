@@ -28,12 +28,11 @@
 //!
 //! **One transport, many tracks** (epic 28). `Transport` counts the position
 //! once a frame for the whole engine; each track's `StepClock` reads it
-//! through its own pattern and length, and the kit reads it too, so every
-//! loop starts on the same sample and a bar is a bar for all of them.
+//! through its own pattern and length, and every drums track's kit reads it
+//! too, so every loop starts on the same sample and a bar is a bar for all
+//! of them.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
-
-use crate::kit::{KitPattern, VOICES};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct StepParams {
@@ -70,8 +69,6 @@ pub struct StepParams {
     /// nudge can never swap two steps or land them together. Step one cannot
     /// go early, since nothing comes before the loop's start.
     pub nudges: [i8; STEPS],
-    /// The drum kit's grid, on this clock beside the track (`kit.rs`).
-    pub kit: KitPattern,
 }
 
 /// The steps a pattern holds: four bars of sixteen.
@@ -102,7 +99,6 @@ impl Default for StepParams {
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
             nudges: [0; STEPS],
-            kit: KitPattern::default(),
         }
     }
 }
@@ -162,9 +158,6 @@ pub struct StepBank {
     velocities: [AtomicU64; WORDS],
     /// The nudges, a byte a step, packed like the pitches.
     nudges: [AtomicU64; WORDS],
-    kit_length: AtomicU32,
-    /// The kit's hits, a voice at a time, packed like the velocities.
-    kit_hits: [[AtomicU64; WORDS]; VOICES],
 }
 
 /// Words of eight steps a byte each.
@@ -200,10 +193,6 @@ impl StepBank {
                 AtomicU64::new(pack_u8(&p.velocities[w * 8..w * 8 + 8]))
             }),
             nudges: std::array::from_fn(|w| AtomicU64::new(pack(&p.nudges[w * 8..w * 8 + 8]))),
-            kit_length: AtomicU32::new(p.kit.length),
-            kit_hits: std::array::from_fn(|v| {
-                std::array::from_fn(|w| AtomicU64::new(pack_u8(&p.kit.hits[v][w * 8..w * 8 + 8])))
-            }),
         }
     }
 
@@ -219,12 +208,7 @@ impl StepBank {
             self.holds[w].store(pack_u8(&p.holds[w * 8..w * 8 + 8]), Ordering::Relaxed);
             self.nudges[w].store(pack(&p.nudges[w * 8..w * 8 + 8]), Ordering::Relaxed);
             self.velocities[w].store(pack_u8(&p.velocities[w * 8..w * 8 + 8]), Ordering::Relaxed);
-            for v in 0..VOICES {
-                self.kit_hits[v][w]
-                    .store(pack_u8(&p.kit.hits[v][w * 8..w * 8 + 8]), Ordering::Relaxed);
-            }
         }
-        self.kit_length.store(p.kit.length, Ordering::Relaxed);
     }
 
     #[inline]
@@ -239,12 +223,6 @@ impl StepBank {
             nudges[i] = (self.nudges[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8 as i8;
             velocities[i] = (self.velocities[i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
         }
-        let mut hits = [[0u8; STEPS]; VOICES];
-        for (v, row) in hits.iter_mut().enumerate() {
-            for (i, hit) in row.iter_mut().enumerate() {
-                *hit = (self.kit_hits[v][i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
-            }
-        }
         StepParams {
             on: self.on.load(Ordering::Relaxed),
             tempo_bpm: f32::from_bits(self.tempo_bpm.load(Ordering::Relaxed)),
@@ -255,10 +233,6 @@ impl StepBank {
             holds,
             velocities,
             nudges,
-            kit: KitPattern {
-                length: self.kit_length.load(Ordering::Relaxed),
-                hits,
-            },
         }
     }
 }
@@ -558,7 +532,6 @@ mod tests {
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
             nudges: [0; STEPS],
-            kit: KitPattern::default(),
         };
         let t = triggers(&p, SR as usize * 4);
         // Steps 0, 4, 8, 12 of a 16-step bar at 120: every 0.5 s, 8 in 4 s.
@@ -580,7 +553,6 @@ mod tests {
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
             nudges: [0; STEPS],
-            kit: KitPattern::default(),
         };
         let t = triggers(&p, SR as usize);
         // Four sixteenths at 120 is half a second; step one fires twice.
@@ -599,7 +571,6 @@ mod tests {
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
             nudges: [0; STEPS],
-            kit: KitPattern::default(),
         };
         let swung = StepParams {
             swing: 0.5,
@@ -694,12 +665,6 @@ mod tests {
                     *x = ((i as i32 * 7) % 101 - 50) as i8;
                 }
                 n
-            },
-            kit: KitPattern {
-                length: 32,
-                hits: std::array::from_fn(|v| {
-                    std::array::from_fn(|i| ((i * 11 + v * 29) % 128) as u8)
-                }),
             },
         };
         let bank = StepBank::default();

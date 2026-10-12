@@ -4,7 +4,7 @@
 //! The document is `tests/fixtures/trip-hop-acid.shard`, in rhizome's format
 //! since epic 32 (Georg, 2026-10-04:
 //! *"a trip hop drum loop with an acidic bass"*): pattern 6b of
-//! `design/drum-programming.md` on the drum kit at 82 bpm and 56 % swing,
+//! `design/drum-programming.md` on its drums track at 82 bpm and 56 % swing,
 //! under a two-bar FM line in F through drive and a resonant low-pass that a
 //! mod envelope plucks on every note. It opens in the app as it is.
 //!
@@ -15,6 +15,8 @@
 
 use std::path::Path;
 
+use shard_dsp::kit::{KitParams, KitPattern, VOICES as DRUMS};
+use shard_dsp::steps::STEPS;
 use shard_dsp::{Engine, StepParams};
 
 use crate::session_tests::{rig, Rig};
@@ -26,19 +28,35 @@ const FIXTURE: &str = concat!(
     "/tests/fixtures/trip-hop-acid.shard"
 );
 
-/// The document, opened the way File > Open opens it, and the steps tracker
-/// mode plays.
+/// What the first drums track's kit plays: its grid, its sound, its fader.
+type Drums = (KitPattern, KitParams, f32);
+
+/// The document, opened the way File > Open opens it: the first melody
+/// track's steps and the first drums track's kit, as the engine plays them.
 struct Loaded {
     rig: Rig,
     steps: StepParams,
+    drums: Drums,
+}
+
+/// The same drums with every hit taken out: the track heard without them.
+fn silent((mut grid, params, gain): Drums) -> Drums {
+    grid.hits = [[0; STEPS]; DRUMS];
+    (grid, params, gain)
 }
 
 fn open(path: &str) -> (Loaded, crate::session::LoadReport) {
     let rig = rig();
     let report = rig.session.open(Path::new(path)).expect("the file opens");
-    // What the first track's voice plays: its steps, on the transport.
-    let steps = rig.session.plan().tracker.params(0);
-    (Loaded { rig, steps }, report)
+    // What the first melody track's voice plays, its steps on the
+    // transport, and the first drums track's kit; none, a silent one.
+    let plan = rig.session.plan();
+    let steps = plan.tracker.params(0);
+    let drums = plan
+        .tracker
+        .kit(0)
+        .unwrap_or((KitPattern::default(), KitParams::default(), 0.0));
+    (Loaded { rig, steps, drums }, report)
 }
 
 fn load() -> Loaded {
@@ -50,7 +68,7 @@ fn load() -> Loaded {
 }
 
 /// Interleaved stereo, `bars` bars, as the audio callback renders it.
-fn render(l: &Loaded, steps: StepParams, bars: usize) -> Vec<f32> {
+fn render(l: &Loaded, steps: StepParams, drums: Drums, bars: usize) -> Vec<f32> {
     let (set, refused) = l.rig.session.plan().mod_set();
     assert!(refused.is_empty(), "modulation refused: {refused:?}");
     let mut e = Engine::new(SR, 256);
@@ -61,6 +79,8 @@ fn render(l: &Loaded, steps: StepParams, bars: usize) -> Vec<f32> {
     let mut all = Vec::with_capacity(frames * 2 + BLOCK * 2);
     while all.len() < frames * 2 {
         e.set_steps(steps);
+        e.set_kit(0, drums.0, drums.1);
+        e.set_kit_gain(0, drums.2);
         e.set_arrangement(&l.rig.arrangement, false);
         e.process_block(&mut out, &l.rig.bank);
         all.extend_from_slice(&out);
@@ -108,7 +128,7 @@ fn brightness(x: &[f32], frames: std::ops::Range<usize>) -> f32 {
 #[test]
 fn the_trip_hop_document_plays_in_range_and_never_drops_out() {
     let l = load();
-    let out = render(&l, l.steps, 4);
+    let out = render(&l, l.steps, l.drums, 4);
     assert!(out.iter().all(|s| s.is_finite()));
     let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     assert!(
@@ -124,25 +144,34 @@ fn the_trip_hop_document_plays_in_range_and_never_drops_out() {
 }
 
 #[test]
+fn the_trip_hop_drums_are_its_first_drums_track() {
+    // Story d moved the kit off the arrangement: the fixture's drums open
+    // as a drums track after the bass, on kit 0, switched on, at unity.
+    let l = load();
+    use crate::tracker::Slot;
+    assert_eq!(l.rig.session.slots(), vec![Slot::Melody(0), Slot::Drums(0)]);
+    let feed = &l.rig.voices.kits[0];
+    assert!(feed.active.load(std::sync::atomic::Ordering::Relaxed));
+    let (grid, sound) = feed.bank.load();
+    assert_eq!((grid, sound, feed.gain()), l.drums);
+    assert!(sound.on && grid.length == 32);
+}
+
+#[test]
 fn the_drums_land_on_their_steps() {
     // The kit alone, against the same document with the kit muted: what
     // the kit adds starts on the swung grid, not before it.
     let l = load();
-    let mut muted = l.steps;
-    muted.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
-    let with = render(&l, l.steps, 2);
-    let without = render(&l, muted, 2);
+    let with = render(&l, l.steps, l.drums, 2);
+    let without = render(&l, l.steps, silent(l.drums), 2);
     let added: Vec<f32> = with.iter().zip(&without).map(|(a, b)| a - b).collect();
     let latency = Engine::new(SR, 1).latency();
     let window = (0.015 * SR) as usize;
-    let kit = &l.steps.kit;
+    let kit = &l.drums.0;
     let mut checked = 0;
     for k in 0..kit.length as usize {
         // Accents only: a ghost under a kick's tail is felt, not measured.
-        let loudest = (0..shard_dsp::kit::VOICES)
-            .map(|v| kit.hits[v][k])
-            .max()
-            .unwrap_or(0);
+        let loudest = (0..DRUMS).map(|v| kit.hits[v][k]).max().unwrap_or(0);
         if loudest < 80 {
             continue;
         }
@@ -172,12 +201,11 @@ fn the_bass_is_acid_its_filter_plucked_on_every_note() {
     // than a step later. The drive brightens a note's loud start a little on
     // its own, so the same render with the link removed is the yardstick.
     let l = load();
-    let mut bass = l.steps;
-    bass.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
+    let bass = l.steps;
     let still = load();
     still.rig.session.unlink_param("filter.cutoff").unwrap();
-    let plucked = render(&l, bass, 2);
-    let unplucked = render(&still, bass, 2);
+    let plucked = render(&l, bass, silent(l.drums), 2);
+    let unplucked = render(&still, bass, silent(l.drums), 2);
     let latency = Engine::new(SR, 1).latency();
     let ms = |t: f32| (t * 0.001 * SR) as usize;
     // The curve spans the note, so the late window is a share of the note's
@@ -206,7 +234,7 @@ fn render_to_listen() {
         return;
     };
     let l = load();
-    let out = render(&l, l.steps, 8);
+    let out = render(&l, l.steps, l.drums, 8);
     let path = std::path::Path::new(&dir).join("trip-hop-acid.wav");
     let spec = hound::WavSpec {
         channels: 2,
@@ -229,11 +257,9 @@ fn the_drums_are_heard_over_the_bass() {
     // held the limiter down. What the drums add to the limited mix has to be
     // a good part of the bass's own level, or nobody hears them.
     let l = load();
-    let mut bass = l.steps;
-    bass.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
     let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
-    let mix = render(&l, l.steps, 2);
-    let alone = render(&l, bass, 2);
+    let mix = render(&l, l.steps, l.drums, 2);
+    let alone = render(&l, l.steps, silent(l.drums), 2);
     let added: Vec<f32> = mix.iter().zip(&alone).map(|(x, y)| x - y).collect();
     let ratio = rms(&added) / rms(&alone);
     assert!(
@@ -259,13 +285,11 @@ fn check_a_shard_file() {
         report.refused.len(),
         report.sample_missing
     );
-    let steps = l.steps;
-    let mut track = steps;
-    track.kit.hits = [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES];
+    let (steps, drums) = (l.steps, l.drums);
     let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
     let db = |x: f32| 20.0 * x.max(1e-9).log10();
-    let mix = render(&l, steps, 4);
-    let alone = render(&l, track, 4);
+    let mix = render(&l, steps, drums, 4);
+    let alone = render(&l, steps, silent(drums), 4);
     let added: Vec<f32> = mix.iter().zip(&alone).map(|(x, y)| x - y).collect();
     let peak = mix.iter().fold(0.0f32, |m, s| m.max(s.abs()));
     println!(
@@ -289,7 +313,7 @@ fn check_a_shard_file() {
         sample_format: hound::SampleFormat::Float,
     };
     let mut w = hound::WavWriter::create(&dest, spec).expect("the renders folder is writable");
-    for s in render(&l, steps, 8) {
+    for s in render(&l, steps, drums, 8) {
         w.write_sample(s).unwrap();
     }
     w.finalize().unwrap();

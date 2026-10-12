@@ -13,8 +13,9 @@
 //!
 //! **Borrowed rows** are the patch's own rows under `arrangement.`, with the
 //! same range, taper and smoothing, so the two chains cannot drift apart.
-//! **Own rows** are the drum kit's and the limiter. The tracks' faders are
-//! per track, not rows here (`TRACK_GAIN_MAX`).
+//! **Own rows** are the limiter's and the tape's. The tracks' faders are per
+//! track, not rows here (`TRACK_GAIN_MAX`), and so is everything a drums
+//! track holds (`kit.rs`, epic 28 story d).
 //!
 //! Ids are a wire format, as in the patch table.
 
@@ -42,52 +43,8 @@ pub const TRACK_GAIN_MAX: f32 = 2.0;
 pub const TRACK_GAIN_DEFAULT: f32 = 1.0;
 pub const TRACK_GAIN_MS: f32 = 20.0;
 
-/// In panel order: the drum kit, the process lane, then the master.
+/// In panel order: the process lane, then the master.
 const ROWS: &[Row] = &[
-    // The drum kit beside the patch (`kit.rs`), a stop-gap until roadmap
-    // row 25. A generator, so its switch and then its Gain, drawn on its
-    // card like every other node's. Its grid is in the tracker. Off by
-    // default, as the effects are.
-    Row::Own(ParamDef {
-        id: "arrangement.kit.on",
-        name: "Drums",
-        min: 0.0,
-        max: 1.0,
-        default: 0.0,
-        taper: Taper::Stepped(2),
-        unit: Unit::None,
-        smooth_ms: 0.0,
-    }),
-    Row::Own(ParamDef {
-        id: "arrangement.kit.gain",
-        name: "Gain",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    }),
-    Row::Own(ParamDef {
-        id: "arrangement.kit.tune",
-        name: "Tune",
-        min: -12.0,
-        max: 12.0,
-        default: 0.0,
-        taper: Taper::Bipolar,
-        unit: Unit::Semitones,
-        smooth_ms: 0.0,
-    }),
-    Row::Own(ParamDef {
-        id: "arrangement.kit.decay",
-        name: "Decay",
-        min: 0.25,
-        max: 4.0,
-        default: 1.0,
-        taper: Taper::Exponential,
-        unit: Unit::Percent,
-        smooth_ms: 0.0,
-    }),
     // The palette: every instance's rows and the order rows, borrowed from
     // the patch's by `fx::rows`. Which effects run, and in what order, is the
     // arrangement's own: the patch's order is not heard here.
@@ -124,7 +81,7 @@ const ROWS: &[Row] = &[
     }),
     // The tape's two gestures, played rather than set: a held button, a pad
     // or a pedal writes them, and no document stores them. They slow the
-    // whole tape, every track, the kit and the transport together (Georg,
+    // whole tape, every track, the drums and the transport together (Georg,
     // 2026-10-12: brake and rewind slow everything), so they are the
     // arrangement's rather than a patch's. The slew they share is the patch's
     // `tape.time`.

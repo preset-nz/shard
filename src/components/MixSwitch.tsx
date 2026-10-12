@@ -8,7 +8,7 @@ import type React from 'react';
 export function MixSwitch({
   letter,
   verb,
-  track,
+  name,
   on,
   heard,
   chord,
@@ -18,7 +18,8 @@ export function MixSwitch({
   letter: string;
   /** "Mute" or "Solo". */
   verb: string;
-  track: number;
+  /** The track's name: "Track 2", "Drums 1". */
+  name: string;
   /** As pressed. */
   on: boolean;
   /** As the engine applies it. */
@@ -29,7 +30,6 @@ export function MixSwitch({
   onToggle: () => void;
 }) {
   const waiting = on !== heard;
-  const name = `Track ${track + 1}`;
   const title = waiting
     ? `${name} ${on ? `${verb.toLowerCase()}s` : `stops ${verb === 'Mute' ? 'muting' : 'soloing'}`} on the next bar. Click again to cancel. (${chord})`
     : `${on ? `Un${verb.toLowerCase()}` : verb} ${name} (on the next bar, ${chord})`;

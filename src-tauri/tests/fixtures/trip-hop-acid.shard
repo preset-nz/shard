@@ -21,7 +21,8 @@
       },
       "orders": {
         "tracks": [
-          "01M48DSQ1T7CF6PEYFBW1FG736"
+          "01M48DSQ1T7CF6PEYFBW1FG736",
+          "01M48DSQ1TC9BMGZ5J4MZKT2WH"
         ]
       }
     },
@@ -31,21 +32,16 @@
       "type": "master"
     },
     {
-      "path": "/arrangements/arrangement/filter",
-      "id": "01M48DSQ1T9Y0WX28KB269ENBR",
-      "type": "filter"
-    },
-    {
-      "path": "/arrangements/arrangement/kit",
+      "path": "/arrangements/arrangement/drums",
       "id": "01M48DSQ1TC9BMGZ5J4MZKT2WH",
-      "type": "kit",
+      "type": "drums",
       "values": {
-        "kit.length": 32,
-        "kit.on": true
+        "drums.length": 32,
+        "drums.on": true
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/1",
+      "path": "/arrangements/arrangement/drums/1",
       "id": "01M48DSQ1T1A5BDA9Q0XXRX5TK",
       "type": "beat",
       "values": {
@@ -54,7 +50,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/11",
+      "path": "/arrangements/arrangement/drums/11",
       "id": "01M48DSQ1TKPKMB2CBEYDZY71M",
       "type": "beat",
       "values": {
@@ -63,7 +59,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/13",
+      "path": "/arrangements/arrangement/drums/13",
       "id": "01M48DSQ1TM2SR4C7YRC6ARZNV",
       "type": "beat",
       "values": {
@@ -71,7 +67,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/15",
+      "path": "/arrangements/arrangement/drums/15",
       "id": "01M48DSQ1TT69H05DNNG5PWFRH",
       "type": "beat",
       "values": {
@@ -80,7 +76,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/17",
+      "path": "/arrangements/arrangement/drums/17",
       "id": "01M48DSQ1VZDCD2FKFH8Z6958J",
       "type": "beat",
       "values": {
@@ -89,7 +85,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/19",
+      "path": "/arrangements/arrangement/drums/19",
       "id": "01M48DSQ1V71M43HSPS5FWAHH5",
       "type": "beat",
       "values": {
@@ -98,7 +94,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/21",
+      "path": "/arrangements/arrangement/drums/21",
       "id": "01M48DSQ1VH1AQ84MXNJ809Z9C",
       "type": "beat",
       "values": {
@@ -106,7 +102,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/23",
+      "path": "/arrangements/arrangement/drums/23",
       "id": "01M48DSQ1VKJHC9DKD0Y1X6E8R",
       "type": "beat",
       "values": {
@@ -115,7 +111,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/25",
+      "path": "/arrangements/arrangement/drums/25",
       "id": "01M48DSQ1VQ9B53C9B0069YEC6",
       "type": "beat",
       "values": {
@@ -124,7 +120,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/27",
+      "path": "/arrangements/arrangement/drums/27",
       "id": "01M48DSQ1VF23F7TWHMAXZQA9T",
       "type": "beat",
       "values": {
@@ -133,7 +129,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/28",
+      "path": "/arrangements/arrangement/drums/28",
       "id": "01M48DSQ1V5ZQ34F7NZ0B8WSGP",
       "type": "beat",
       "values": {
@@ -141,7 +137,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/29",
+      "path": "/arrangements/arrangement/drums/29",
       "id": "01M48DSQ1VCTQCMQX3F7J7M2B0",
       "type": "beat",
       "values": {
@@ -149,7 +145,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/3",
+      "path": "/arrangements/arrangement/drums/3",
       "id": "01M48DSQ1T8AMXRCDT09QCX2YT",
       "type": "beat",
       "values": {
@@ -158,7 +154,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/31",
+      "path": "/arrangements/arrangement/drums/31",
       "id": "01M48DSQ1VH07W4RM7V9PACZ1Y",
       "type": "beat",
       "values": {
@@ -167,7 +163,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/32",
+      "path": "/arrangements/arrangement/drums/32",
       "id": "01M48DSQ1VKDNCRS57FA2E1MCB",
       "type": "beat",
       "values": {
@@ -175,7 +171,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/5",
+      "path": "/arrangements/arrangement/drums/5",
       "id": "01M48DSQ1TYEPP7GZWGFGERJ5C",
       "type": "beat",
       "values": {
@@ -183,7 +179,7 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/7",
+      "path": "/arrangements/arrangement/drums/7",
       "id": "01M48DSQ1T4WZV3XMFNZ5VSN1J",
       "type": "beat",
       "values": {
@@ -192,13 +188,18 @@
       }
     },
     {
-      "path": "/arrangements/arrangement/kit/9",
+      "path": "/arrangements/arrangement/drums/9",
       "id": "01M48DSQ1TER20D9R5Z9VHW83Z",
       "type": "beat",
       "values": {
         "beat.hat": 80,
         "beat.snare": 110
       }
+    },
+    {
+      "path": "/arrangements/arrangement/filter",
+      "id": "01M48DSQ1T9Y0WX28KB269ENBR",
+      "type": "filter"
     },
     {
       "path": "/arrangements/arrangement/track",

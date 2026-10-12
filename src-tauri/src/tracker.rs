@@ -6,23 +6,35 @@
 //! tempo, the swing, and tracks of steps. Loading a different patch leaves
 //! the beat alone, and a patch never carries a pattern.
 //!
-//! **Several tracks, each playing its own patch** (epic 28). Up to
-//! `shard_dsp::VOICES` of them, and every one sounds while the transport
-//! runs. Track *i* plays on the engine's voice *i*, by its place in the
-//! arrangement's order. A track is up to four bars of sixteen steps, each
-//! step with its own pitch and hold, a fader (`gain`), and the patch it
-//! plays (`track.patch` in the tree; `patch` here is that patch's runtime
-//! id, for the webview's *Plays* pickers, and is never written back). Each
-//! track is monophonic, as in a tracker: a new step cuts the last.
+//! **Several tracks, of two kinds** (epic 28). Every one sounds while the
+//! transport runs.
+//!
+//! - **A melody track** plays its own patch: up to four bars of sixteen
+//!   steps, each with its own pitch and hold, a fader (`gain`), and the
+//!   patch it plays (`track.patch` in the tree; `patch` here is that patch's
+//!   runtime id, for the webview's *Plays* pickers, and is never written
+//!   back). Monophonic, as in a tracker: a new step cuts the last. Up to
+//!   `shard_dsp::VOICES` of them.
+//! - **A drums track** (story d) plays a synthesised kit: a kick, snare and
+//!   hat grid (`drums`), its own length, fader, switch, tune and decay, and
+//!   no patch. Up to `shard_dsp::KITS` of them.
+//!
+//! **One order, two pools.** The tracks are one list, in the arrangement's
+//! order `tracks`, and a drums track can sit anywhere in it. Each kind maps
+//! to its own pool by its place among its own kind (`Slot`): the *k*-th
+//! melody track plays on voice *k*, the *k*-th drums track on kit *k*. So
+//! adding or moving a drums track never moves a melody track's voice.
 //!
 //! Saved in the same `.shard` file as the patch, in the arrangement node
 //! (`object_model::write_tracker`).
 
 use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
-use shard_dsp::kit::{KitPattern, HAT, HIT_MAX, KICK, SNARE};
+use shard_dsp::kit::{
+    KitParams, KitPattern, DECAY_MAX, DECAY_MIN, HAT, HIT_MAX, KICK, SNARE, TUNE_RANGE,
+};
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
-use shard_dsp::{StepParams, VOICES};
+use shard_dsp::{StepParams, KITS, VOICES};
 
 pub const TEMPO_MIN: f32 = 40.0;
 pub const TEMPO_MAX: f32 = 240.0;
@@ -39,30 +51,65 @@ pub struct Tracker {
     pub tempo: f32,
     /// 0 to `SWING_MAX` of a sixteenth, on the even steps.
     pub swing: f32,
+    /// Melody and drums tracks, in the arrangement's order.
     pub tracks: Vec<Track>,
-    /// The drum kit beside the tracks, a stop-gap until roadmap row 25.
-    pub kit: Kit,
 }
 
-/// The drum kit's grid: kick, snare and hat, synthesised, on the tracks'
-/// clock (`shard_dsp::kit`). Its switch and level are the Drums card, in the
-/// arrangement's table. Each row is a velocity a step, zero for none,
-/// so several drums land on one step.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// Where a track plays: the *k*-th of its kind, on voice *k* or kit *k*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Slot {
+    Melody(usize),
+    Drums(usize),
+}
+
+/// Each track's slot, from whether each is a drums track, in order. The one
+/// mapping from a track's place to its voice or kit: the session and the
+/// meters both go through it.
+pub fn slots(drums: impl IntoIterator<Item = bool>) -> Vec<Slot> {
+    let (mut melody, mut kits) = (0, 0);
+    drums
+        .into_iter()
+        .map(|is_drums| {
+            if is_drums {
+                kits += 1;
+                Slot::Drums(kits - 1)
+            } else {
+                melody += 1;
+                Slot::Melody(melody - 1)
+            }
+        })
+        .collect()
+}
+
+/// A drums track's kit: its kick, snare and hat grid, synthesised
+/// (`shard_dsp::kit`), its switch and its sound. Each row is a velocity a
+/// step, zero for none, so several drums land on one step. Its length and
+/// fader are the track's.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Kit {
-    /// 4, 8, 16, 32 or 64 sixteenths, as a track's.
-    pub length: u32,
+    /// Whether it plays. A new session's drums track starts off, as the
+    /// Drums card did; Add Track › Drums arrives on.
+    pub on: bool,
+    /// Semitones, every drum together, up to `TUNE_RANGE` either way.
+    pub tune: f32,
+    /// A factor on every drum's decay, `DECAY_MIN` to `DECAY_MAX`.
+    pub decay: f32,
     pub kick: Vec<u8>,
     pub snare: Vec<u8>,
     pub hat: Vec<u8>,
 }
 
 impl Default for Kit {
+    /// The kit a new session has: off, with a beat in it, so switching it on
+    /// does something.
     fn default() -> Self {
         let p = KitPattern::default();
+        let q = KitParams::default();
         Self {
-            length: p.length,
+            on: q.on,
+            tune: q.tune,
+            decay: q.decay,
             kick: p.hits[KICK].to_vec(),
             snare: p.hits[SNARE].to_vec(),
             hat: p.hits[HAT].to_vec(),
@@ -71,16 +118,34 @@ impl Default for Kit {
 }
 
 impl Kit {
-    fn pattern(&self) -> KitPattern {
+    /// What Add Track › Drums adds: on, an empty grid.
+    pub fn blank() -> Self {
+        Self {
+            on: true,
+            kick: vec![0; STEPS],
+            snare: vec![0; STEPS],
+            hat: vec![0; STEPS],
+            ..Self::default()
+        }
+    }
+
+    /// The grid for the engine, `length` steps long.
+    pub fn pattern(&self, length: u32) -> KitPattern {
         let mut hits = [[0u8; STEPS]; shard_dsp::kit::VOICES];
         for (v, row) in [(KICK, &self.kick), (SNARE, &self.snare), (HAT, &self.hat)] {
             for (i, hit) in row.iter().take(STEPS).enumerate() {
                 hits[v][i] = *hit;
             }
         }
-        KitPattern {
-            length: self.length,
-            hits,
+        KitPattern { length, hits }
+    }
+
+    /// Its sound for the engine.
+    pub fn params(&self) -> KitParams {
+        KitParams {
+            on: self.on,
+            tune: self.tune,
+            decay: self.decay,
         }
     }
 }
@@ -97,8 +162,10 @@ pub struct Track {
     pub patch: Option<u64>,
     /// Every step the track can hold, `STEPS` of them, step one first. Steps
     /// past `length` are kept, so shortening a track and lengthening it again
-    /// gives them back.
+    /// gives them back. Blank on a drums track.
     pub steps: Vec<Step>,
+    /// A drums track's kit; none on a melody track.
+    pub drums: Option<Kit>,
 }
 
 /// One sixteenth of a track.
@@ -139,8 +206,7 @@ impl Default for Tracker {
         Self {
             tempo: p.tempo_bpm,
             swing: p.swing,
-            tracks: vec![Track::default()],
-            kit: Kit::default(),
+            tracks: vec![Track::default(), Track::drums()],
         }
     }
 }
@@ -162,6 +228,7 @@ impl Default for Track {
                     nudge: p.nudges[i],
                 })
                 .collect(),
+            drums: None,
         }
     }
 }
@@ -174,15 +241,37 @@ impl Track {
             gain: TRACK_GAIN_DEFAULT,
             patch: None,
             steps: vec![Step::default(); STEPS],
+            drums: None,
         }
+    }
+
+    /// A new session's drums track: today's Drums lane, off, with its beat.
+    pub fn drums() -> Self {
+        Self {
+            drums: Some(Kit::default()),
+            ..Self::blank()
+        }
+    }
+
+    /// What Add Track › Drums adds: on, an empty grid, sixteen steps at unity.
+    pub fn blank_drums() -> Self {
+        Self {
+            drums: Some(Kit::blank()),
+            ..Self::blank()
+        }
+    }
+
+    pub fn is_drums(&self) -> bool {
+        self.drums.is_some()
     }
 }
 
 impl Tracker {
     /// Brought into range: tempo and swing clamped, each length snapped to
     /// the nearest of 4, 8, 16, 32 and 64, each track padded or cut to exactly
-    /// `STEPS` steps with pitches and holds in range, each fader in range, and
-    /// between one track and `VOICES`.
+    /// `STEPS` steps with pitches and holds in range, each fader in range, a
+    /// kit's rows and sound in range, between one melody track and `VOICES`
+    /// of them, and at most `KITS` drums tracks.
     /// Everything the UI or a hand-edited file sends passes through here
     /// before the engine hears it.
     pub fn sanitised(mut self) -> Self {
@@ -197,10 +286,15 @@ impl Tracker {
         } else {
             fallback.swing
         };
-        if self.tracks.is_empty() {
-            self.tracks.push(Track::default());
+        if !self.tracks.iter().any(|t| !t.is_drums()) {
+            self.tracks.insert(0, Track::default());
         }
-        self.tracks.truncate(VOICES);
+        let (mut melody, mut kits) = (0, 0);
+        self.tracks.retain(|t| {
+            let count = if t.is_drums() { &mut kits } else { &mut melody };
+            *count += 1;
+            *count <= if t.is_drums() { KITS } else { VOICES }
+        });
         let snap = |length: u32| {
             LENGTHS
                 .iter()
@@ -208,14 +302,27 @@ impl Tracker {
                 .min_by_key(|n| n.abs_diff(length))
                 .unwrap_or(16)
         };
-        self.kit.length = snap(self.kit.length);
-        for row in [&mut self.kit.kick, &mut self.kit.snare, &mut self.kit.hat] {
-            row.resize(STEPS, 0);
-            for hit in row.iter_mut() {
-                *hit = (*hit).min(HIT_MAX);
-            }
-        }
         for t in &mut self.tracks {
+            if let Some(kit) = &mut t.drums {
+                t.patch = None;
+                let fallback = Kit::default();
+                kit.tune = if kit.tune.is_finite() {
+                    kit.tune.clamp(-TUNE_RANGE, TUNE_RANGE)
+                } else {
+                    fallback.tune
+                };
+                kit.decay = if kit.decay.is_finite() {
+                    kit.decay.clamp(DECAY_MIN, DECAY_MAX)
+                } else {
+                    fallback.decay
+                };
+                for row in [&mut kit.kick, &mut kit.snare, &mut kit.hat] {
+                    row.resize(STEPS, 0);
+                    for hit in row.iter_mut() {
+                        *hit = (*hit).min(HIT_MAX);
+                    }
+                }
+            }
             t.length = snap(t.length);
             t.gain = if t.gain.is_finite() {
                 t.gain.clamp(0.0, TRACK_GAIN_MAX)
@@ -233,24 +340,46 @@ impl Tracker {
         self
     }
 
+    /// Each track's slot, in order: which voice or kit plays it.
+    pub fn slots(&self) -> Vec<Slot> {
+        slots(self.tracks.iter().map(Track::is_drums))
+    }
+
+    /// The melody tracks, in order: the *k*-th plays on voice *k*.
+    pub fn melody(&self) -> impl Iterator<Item = &Track> {
+        self.tracks.iter().filter(|t| !t.is_drums())
+    }
+
+    /// The drums tracks, in order: the *k*-th plays on kit *k*.
+    pub fn drums(&self) -> impl Iterator<Item = &Track> {
+        self.tracks.iter().filter(|t| t.is_drums())
+    }
+
     /// The transport: the steps running, at the arrangement's tempo and
-    /// swing, with the kit's grid (`Engine::set_transport`).
+    /// swing (`Engine::set_transport`).
     pub fn transport(&self) -> StepParams {
         StepParams {
             on: true,
             tempo_bpm: self.tempo,
             swing: self.swing,
-            kit: self.kit.pattern(),
             ..StepParams::default()
         }
     }
 
-    /// What track `i`'s voice plays (`Engine::set_voice_steps`), its steps
-    /// following the transport, or a blank track when there is no such
-    /// track. The transport's half is filled in too.
-    pub fn params(&self, i: usize) -> StepParams {
+    /// What the `k`-th drums track's kit plays (`Engine::set_kit`), and its
+    /// fader; none when there is no such track.
+    pub fn kit(&self, k: usize) -> Option<(KitPattern, KitParams, f32)> {
+        let t = self.drums().nth(k)?;
+        let kit = t.drums.as_ref()?;
+        Some((kit.pattern(t.length), kit.params(), t.gain))
+    }
+
+    /// What voice `k` plays (`Engine::set_voice_steps`): the `k`-th melody
+    /// track's steps following the transport, or a blank track when there
+    /// is no such track. The transport's half is filled in too.
+    pub fn params(&self, k: usize) -> StepParams {
         let blank = Track::blank();
-        let t = self.tracks.get(i).unwrap_or(&blank);
+        let t = self.melody().nth(k).unwrap_or(&blank);
         let mut p = StepParams {
             on: true,
             tempo_bpm: self.tempo,
@@ -261,7 +390,6 @@ impl Tracker {
             holds: [0; STEPS],
             velocities: [VELOCITY_MAX; STEPS],
             nudges: [0; STEPS],
-            kit: self.kit.pattern(),
         };
         for (i, step) in t.steps.iter().take(STEPS).enumerate() {
             p.pattern |= u64::from(step.on) << i;
@@ -314,11 +442,12 @@ impl Tracker {
         }
     }
 
-    /// Apply a whole-pattern edit to track `track`. Out-of-range bars, and a
-    /// track that does not exist, are ignored rather than guessed at.
+    /// Apply a whole-pattern edit to track `track`. Out-of-range bars, a
+    /// track that does not exist and a drums track (whose grid has no
+    /// pitches to move yet) are ignored rather than guessed at.
     pub fn apply(mut self, track: usize, edit: &Edit) -> Self {
         self = self.sanitised();
-        let Some(t) = self.tracks.get_mut(track) else {
+        let Some(t) = self.tracks.get_mut(track).filter(|t| !t.is_drums()) else {
             return self;
         };
         let bars = (t.length as usize / BAR).max(1);
@@ -390,7 +519,6 @@ mod tests {
             tempo: f32::NAN,
             swing: 9.0,
             tracks: vec![track(11, 0)],
-            kit: Kit::default(),
         };
         t.tracks[0].steps = vec![
             Step {
@@ -482,17 +610,10 @@ mod tests {
             };
             100
         ];
-        // A kit too long, too loud and too short in its rows.
         let sent = Tracker {
             tempo: 500.0,
             swing: -1.0,
             tracks: vec![t],
-            kit: Kit {
-                length: 30,
-                kick: vec![200; 3],
-                snare: vec![9; 100],
-                hat: Vec::new(),
-            },
         };
         let kept = sent.sanitised();
         let bank = StepBank::default();
@@ -509,17 +630,106 @@ mod tests {
                 holds: [3; STEPS],
                 velocities: [5; STEPS],
                 nudges: [7; STEPS],
-                kit: KitPattern {
-                    length: 32,
-                    hits: {
-                        let mut h = [[0; STEPS]; shard_dsp::kit::VOICES];
-                        h[KICK][..3].fill(HIT_MAX);
-                        h[SNARE] = [9; STEPS];
-                        h
-                    },
-                },
             }
         );
+    }
+
+    #[test]
+    fn a_drums_tracks_kit_reaches_the_engine_in_range() {
+        // A kit too long, too loud, too short in its rows, tuned and decayed
+        // past its ends, and a patch it cannot play.
+        let mut drums = Track::drums();
+        drums.length = 30;
+        drums.patch = Some(4);
+        drums.drums = Some(Kit {
+            on: true,
+            tune: 40.0,
+            decay: f32::NAN,
+            kick: vec![200; 3],
+            snare: vec![9; 100],
+            hat: Vec::new(),
+        });
+        let kept = Tracker {
+            tracks: vec![track(16, 0), drums],
+            ..Tracker::default()
+        }
+        .sanitised();
+        assert_eq!(kept.tracks[1].patch, None);
+        let (pattern, params, gain) = kept.kit(0).expect("one drums track");
+        assert_eq!(pattern.length, 32);
+        let mut hits = [[0; STEPS]; shard_dsp::kit::VOICES];
+        hits[KICK][..3].fill(HIT_MAX);
+        hits[SNARE] = [9; STEPS];
+        assert_eq!(pattern.hits, hits);
+        assert_eq!(
+            params,
+            KitParams {
+                on: true,
+                tune: TUNE_RANGE,
+                decay: 1.0
+            }
+        );
+        assert_eq!(gain, TRACK_GAIN_DEFAULT);
+        assert_eq!(kept.kit(1), None);
+    }
+
+    #[test]
+    fn each_kind_plays_on_its_own_pool_by_its_place_among_its_kind() {
+        // Melody, drums, melody, drums, drums: a drums track anywhere in the
+        // order never moves a melody track's voice.
+        let t = Tracker {
+            tracks: vec![
+                track(16, 0b1),
+                Track::drums(),
+                track(8, 0b11),
+                Track::blank_drums(),
+                Track::drums(),
+            ],
+            ..Tracker::default()
+        };
+        assert_eq!(
+            t.slots(),
+            vec![
+                Slot::Melody(0),
+                Slot::Drums(0),
+                Slot::Melody(1),
+                Slot::Drums(1),
+                Slot::Drums(2)
+            ]
+        );
+        assert_eq!((t.params(1).length, t.params(1).pattern), (8, 0b11));
+        assert!(t.kit(1).unwrap().1.on, "Add Track › Drums arrives on");
+        assert_eq!(t.kit(0).unwrap().1.on, Kit::default().on);
+    }
+
+    #[test]
+    fn there_are_never_more_drums_tracks_than_kits_nor_none_to_play_a_patch() {
+        let t = Tracker {
+            tracks: vec![Track::blank_drums(); KITS + 2],
+            ..Tracker::default()
+        }
+        .sanitised();
+        assert_eq!(t.drums().count(), KITS);
+        assert_eq!(t.melody().count(), 1, "a melody track is put first");
+        assert!(!t.tracks[0].is_drums());
+    }
+
+    #[test]
+    fn a_pattern_edit_leaves_a_drums_track_alone() {
+        let t = Tracker::default();
+        assert_eq!(
+            t.clone().apply(1, &Edit::ClearBar { bar: 0 }),
+            t.sanitised()
+        );
+    }
+
+    #[test]
+    fn a_new_session_has_a_melody_track_and_a_drums_track_switched_off() {
+        let t = Tracker::default();
+        assert_eq!(t.slots(), vec![Slot::Melody(0), Slot::Drums(0)]);
+        let (pattern, params, _) = t.kit(0).unwrap();
+        assert_eq!(pattern, KitPattern::default());
+        assert!(!params.on);
     }
 
     #[test]
@@ -535,7 +745,6 @@ mod tests {
             tempo: 82.0,
             swing: 0.12,
             tracks: vec![first, track(4, 0b1)],
-            kit: Kit::default(),
         };
         assert_eq!(
             t.params(0),
@@ -549,7 +758,6 @@ mod tests {
                 holds: [2; STEPS],
                 velocities: [64; STEPS],
                 nudges: [-3; STEPS],
-                kit: KitPattern::default(),
             }
         );
         let second = t.params(1);
@@ -629,6 +837,7 @@ mod tests {
             velocity: 90,
             nudge: 15,
         };
+        t.tracks[1].drums.as_mut().unwrap().snare[9] = 33;
         let text = serde_json::to_string(&t).unwrap();
         let back: Tracker = serde_json::from_str(&text).unwrap();
         assert_eq!(back, t);

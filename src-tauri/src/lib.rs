@@ -22,10 +22,12 @@ use serde::Serialize;
 use shard_dsp::arrangement;
 use shard_dsp::params::{ParamDef, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
-use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, VOICES};
+use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, KITS, VOICES};
 
 mod controllers;
 mod document;
+#[cfg(test)]
+mod drums_tests;
 #[cfg(test)]
 mod e2e;
 mod mapping;
@@ -71,8 +73,8 @@ pub struct Audio {
     /// The current patch's values: what the patch view, the controllers and
     /// the preview read. The audio thread reads each voice's own bank.
     bank: Arc<ParamBank>,
-    /// The arrangement's values: its chain over the tracks, the drum kit and
-    /// the limiter. Read by the audio thread once a block.
+    /// The arrangement's values: its chain over the tracks and the limiter.
+    /// Read by the audio thread once a block.
     arrangement: Arc<ParamBank>,
     /// Every voice's feed, from the session to the audio thread.
     voices: Arc<Voices>,
@@ -90,8 +92,8 @@ pub struct Audio {
     playing: Arc<AtomicBool>,
     /// Each voice's step, plus one; zero while it is off.
     steps: Arc<[AtomicU32; VOICES]>,
-    /// The drum kit's step, the same way. Its loop has its own length.
-    kit_step: Arc<AtomicU32>,
+    /// Each kit's step, the same way. Each loop has its own length.
+    kit_steps: Arc<[AtomicU32; KITS]>,
     /// Every grain the cloud has spawned, drained by the UI at poll rate.
     grain_log: Arc<GrainLog>,
     /// One grain waiting to be auditioned. Handed across the same way a sample
@@ -139,10 +141,8 @@ pub struct Meters {
     pub grains: u32,
     pub playing: bool,
     /// Each track's current step, from zero, or -1 while it is off, in the
-    /// tracks' order.
+    /// tracks' order: a melody track's voice's, a drums track's kit's.
     pub steps: Vec<i32>,
-    /// The drum kit's current step, the same way.
-    pub kit_step: i32,
     /// Where the current patch's plain playback has reached, 0 to 1.
     pub playhead: f32,
     /// True while one grain is being auditioned on its own.
@@ -354,11 +354,18 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         reduction: f32::from_bits(state.reduction.swap(1.0f32.to_bits(), Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
         playing: state.playing.load(Ordering::Relaxed),
-        steps: state.steps[..state.session.track_count().min(VOICES)]
-            .iter()
-            .map(|s| s.load(Ordering::Relaxed) as i32 - 1)
+        steps: state
+            .session
+            .slots()
+            .into_iter()
+            .map(|slot| {
+                let step = match slot {
+                    tracker::Slot::Melody(k) => state.steps.get(k),
+                    tracker::Slot::Drums(k) => state.kit_steps.get(k),
+                };
+                step.map_or(-1, |s| s.load(Ordering::Relaxed) as i32 - 1)
+            })
             .collect(),
-        kit_step: state.kit_step.load(Ordering::Relaxed) as i32 - 1,
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
         reversing: state.reversing.load(Ordering::Relaxed),
@@ -790,11 +797,12 @@ fn select_track(
     Ok(())
 }
 
-/// Add Track: a melody track at the end, playing the current patch. One step
-/// of Undo, "Add Track". Answers its place.
+/// Add Track: a melody track at the end, playing the current patch, one step
+/// of Undo, "Add Track"; with `drums`, a drums track, "Add Drums". Answers
+/// its place.
 #[tauri::command]
-fn add_track(state: tauri::State<'_, Audio>) -> Result<usize, String> {
-    state.session.add_track()
+fn add_track(state: tauri::State<'_, Audio>, drums: bool) -> Result<usize, String> {
+    state.session.add_track(drums)
 }
 
 /// Mutes or unmutes a track, on the next bar while playing. Not an edit.
@@ -815,7 +823,8 @@ fn toggle_track_solo(
     state.session.toggle_solo(track)
 }
 
-/// Remove Track: one step of Undo, "Remove Track 2". Refused for the last.
+/// Remove Track: one step of Undo, "Remove Track 2" or "Remove Drums 1".
+/// Refused for the last melody track.
 #[tauri::command]
 fn remove_track(state: tauri::State<'_, Audio>, track: usize) -> Result<(), String> {
     state.session.remove_track(track)
@@ -886,8 +895,8 @@ fn tracker(state: tauri::State<'_, Audio>) -> tracker::Tracker {
     state.session.tracker()
 }
 
-/// Takes the tempo, swing, kit and each track's steps, length and fader from
-/// `tracker`, by place; never adds, removes or re-patches a track. Answers
+/// Takes the tempo, swing and each track's steps or grid, length, fader and
+/// kit from `tracker`, by place; never adds, removes or re-patches a track. Answers
 /// with what the engine now plays, which differs from what was sent only
 /// where a value was out of range.
 #[tauri::command]
@@ -1563,8 +1572,9 @@ impl Audio {
 pub(crate) struct Held {
     retiring: [SourceSlots; VOICES],
     mods: [Option<ModSet>; VOICES],
-    /// Each voice's `VoiceFeed::placed` as last seen.
+    /// Each voice's `VoiceFeed::placed` as last seen, and each kit's.
     placed: [u32; VOICES],
+    kit_placed: [u32; KITS],
 }
 
 impl Held {
@@ -1573,6 +1583,7 @@ impl Held {
             retiring: std::array::from_fn(|_| [None, None]),
             mods: std::array::from_fn(|_| None),
             placed: [0; VOICES],
+            kit_placed: [0; KITS],
         }
     }
 }
@@ -1655,6 +1666,24 @@ pub(crate) fn hand_over(
             engine.set_voice_active(i, active);
         }
     }
+    // The drums tracks' kits: grid and sound, fader, mix, then the switch.
+    for (k, feed) in voices.kits.iter().enumerate() {
+        let (pattern, params) = feed.bank.load();
+        engine.set_kit(k, pattern, params);
+        engine.set_kit_gain(k, feed.gain());
+        let placed = feed.placed.load(Ordering::Acquire);
+        let mix = Mix::from_bits(feed.mix.load(Ordering::Acquire));
+        if placed != held.kit_placed[k] {
+            held.kit_placed[k] = placed;
+            engine.place_kit_mix(k, mix);
+        } else {
+            engine.set_kit_mix(k, mix);
+        }
+        let active = feed.active.load(Ordering::Acquire);
+        if active != engine.kit_active(k) {
+            engine.set_kit_active(k, active);
+        }
+    }
     // The transport always runs: every track plays while it does, and an
     // auditioned patch loops free over them because its own steps are off.
     engine.set_transport(&voices.transport.load());
@@ -1669,6 +1698,10 @@ pub(crate) fn render(engine: &mut Engine, voices: &Voices, heard: &ParamBank, ou
     for (i, feed) in voices.voice.iter().enumerate() {
         feed.heard_mix
             .store(engine.voice_mix(i).bits(), Ordering::Release);
+    }
+    for (k, feed) in voices.kits.iter().enumerate() {
+        feed.heard_mix
+            .store(engine.kit_mix(k).bits(), Ordering::Release);
     }
     if let Some(i) = voices.shown() {
         engine.publish_voice_heard(i, &voices.voice[i].bank, heard);
@@ -1685,7 +1718,7 @@ fn build_audio() -> Result<Audio, String> {
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
     let steps: Arc<[AtomicU32; VOICES]> = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
-    let kit_step = Arc::new(AtomicU32::new(0));
+    let kit_steps: Arc<[AtomicU32; KITS]> = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
     let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
@@ -1709,7 +1742,7 @@ fn build_audio() -> Result<Audio, String> {
     let audio_playing = Arc::clone(&playing);
     let audio_playhead = Arc::clone(&playhead);
     let audio_steps = Arc::clone(&steps);
-    let audio_kit_step = Arc::clone(&kit_step);
+    let audio_kit_steps = Arc::clone(&kit_steps);
     let audio_arrangement = Arc::clone(&arrangement);
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
@@ -1739,6 +1772,7 @@ fn build_audio() -> Result<Audio, String> {
                 // track, with its materials, before anything plays.
                 let mut engine = Engine::new(sample_rate, LIVE_MAX_GRAINS);
                 engine.set_voice_active(0, false);
+                engine.set_kit_active(0, false);
                 let log = engine.grain_log();
                 let mut scratch = vec![0.0f32; 8192];
                 let mut held = Held::new();
@@ -1836,10 +1870,12 @@ fn build_audio() -> Result<Audio, String> {
                                         Ordering::Relaxed,
                                     );
                                 }
-                                audio_kit_step.store(
-                                    engine.current_kit_step().map_or(0, |s| s + 1),
-                                    Ordering::Relaxed,
-                                );
+                                for (k, step) in audio_kit_steps.iter().enumerate() {
+                                    step.store(
+                                        engine.kit_step(k).map_or(0, |s| s + 1),
+                                        Ordering::Relaxed,
+                                    );
+                                }
                                 audio_auditioning.store(engine.auditioning(), Ordering::Relaxed);
                                 audio_reversing.store(engine.reversing(), Ordering::Relaxed);
                             });
@@ -1910,7 +1946,7 @@ fn build_audio() -> Result<Audio, String> {
         grains,
         playing,
         steps,
-        kit_step,
+        kit_steps,
         grain_log,
         audition,
         auditioning,
@@ -2146,7 +2182,6 @@ mod tests {
             grains: 0,
             playing: false,
             steps: vec![-1],
-            kit_step: -1,
             playhead: 0.0,
             auditioning: false,
             reversing: false,
@@ -2161,7 +2196,6 @@ mod tests {
             "reduction",
             "grains",
             "steps",
-            "kit_step",
             "playing",
             "playhead",
             "auditioning",
@@ -2180,13 +2214,19 @@ mod tests {
 
         let tracker =
             serde_json::to_value(tracker::Tracker::default()).expect("Tracker is serialisable");
-        for key in ["tempo", "swing", "tracks", "kit"] {
+        for key in ["tempo", "swing", "tracks"] {
             assert!(tracker.get(key).is_some(), "Tracker lost `{key}`");
         }
-        for key in ["length", "gain", "patch", "steps"] {
+        for key in ["length", "gain", "patch", "steps", "drums"] {
             assert!(
                 tracker["tracks"][0].get(key).is_some(),
                 "Track lost `{key}`"
+            );
+        }
+        for key in ["on", "tune", "decay", "kick", "snare", "hat"] {
+            assert!(
+                tracker["tracks"][1]["drums"].get(key).is_some(),
+                "Kit lost `{key}`"
             );
         }
 

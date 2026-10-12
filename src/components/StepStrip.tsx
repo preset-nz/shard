@@ -9,6 +9,7 @@ import {
   type Track,
   type Tracker,
   type TrackerEdit,
+  trackName,
 } from '@/audio';
 import { PlaysPicker } from '@/components/PlaysPicker';
 import { Slider } from '@/components/ui/slider';
@@ -46,25 +47,22 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
  *
  * Every change hands the whole tracker up; App shows it at once and Rust
  * answers with it brought into range.
+ *
+ * A drums track (epic 28, story d) shows its kick, snare and hat grid
+ * instead of steps (`DrumsStrip`), and a melody track no longer shows the
+ * drums under it.
  */
-export function StepStrip({
-  tracker,
-  index,
-  step,
-  kitStep,
-  root,
-  patches,
-  onPlays,
-  onChange,
-  onEdit,
-}: {
+export function StepStrip(props: StripProps) {
+  const track = props.tracker.tracks[props.index] ?? props.tracker.tracks[0];
+  return track?.drums ? <DrumsStrip {...props} kit={track.drums} /> : <MelodyStrip {...props} />;
+}
+
+interface StripProps {
   tracker: Tracker;
   /** The track shown and edited, by its place. */
   index: number;
   /** The step that track is playing, from zero, or -1. */
   step: number;
-  /** The drum kit's step playing, from zero, or -1. */
-  kitStep: number;
   /** The Sample material's root note, a MIDI number, so pitches show as names. */
   root: number | null;
   /** The session's patches, for the *Plays* picker. */
@@ -74,13 +72,143 @@ export function StepStrip({
   onChange: (next: Tracker) => void;
   /** A whole-pattern edit on this track: clear, paste or repeat a bar, rotate, transpose. */
   onEdit: (edit: TrackerEdit) => void;
+}
+
+/** The arrangement's tempo and swing, on every track's strip. */
+function TempoSwing({
+  tracker,
+  onChange,
+}: {
+  tracker: Tracker;
+  onChange: (next: Tracker) => void;
 }) {
+  // Typed as text and committed on Enter or leaving the field, so typing 95
+  // does not clamp to 40 on the way through the 9.
+  const shown = String(Math.round(tracker.tempo));
+  const [tempo, setTempo] = useState(shown);
+  useEffect(() => setTempo(shown), [shown]);
+  const commitTempo = () => {
+    const v = Number(tempo);
+    if (tempo.trim() === '' || !Number.isFinite(v)) {
+      setTempo(shown);
+      return;
+    }
+    const clamped = Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, Math.round(v)));
+    setTempo(String(clamped));
+    if (clamped !== Math.round(tracker.tempo)) onChange({ ...tracker, tempo: clamped });
+  };
+  return (
+    <>
+      <label className="flex items-center gap-1">
+        <input
+          type="number"
+          min={TEMPO_MIN}
+          max={TEMPO_MAX}
+          value={tempo}
+          onChange={(e) => setTempo(e.target.value)}
+          onBlur={commitTempo}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') e.currentTarget.blur();
+            if (e.key === 'Escape') {
+              setTempo(shown);
+              e.currentTarget.blur();
+            }
+          }}
+          aria-label="Tempo"
+          className="w-12 rounded-sm border border-border bg-transparent px-1 py-0.5 text-right font-mono tabular-nums text-foreground"
+        />
+        bpm
+      </label>
+
+      <div className="flex items-center gap-2">
+        <span>Swing</span>
+        <Slider
+          min={50}
+          max={75}
+          step={1}
+          value={[toPercent(tracker.swing)]}
+          onValueChange={(v) =>
+            onChange({ ...tracker, swing: fromPercent(Array.isArray(v) ? v[0] : (v as number)) })
+          }
+          aria-label="Swing"
+          className="w-20"
+        />
+        <span className="w-8 font-mono text-[11px] tabular-nums">
+          {Math.round(toPercent(tracker.swing))}%
+        </span>
+      </div>
+    </>
+  );
+}
+
+/** A track's length: 4, 8, 16, 32 or 64 steps. */
+function LengthPicker({ length, onPick }: { length: number; onPick: (n: number) => void }) {
+  return (
+    <fieldset className="flex items-center gap-0.5" aria-label="Length">
+      {LENGTHS.map((n) => (
+        <button
+          key={n}
+          type="button"
+          aria-pressed={length === n}
+          title={`${n} steps`}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => onPick(n)}
+          className={`rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${
+            length === n ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
+          }`}
+        >
+          {n}
+        </button>
+      ))}
+    </fieldset>
+  );
+}
+
+/** Replaces track `index` of `tracker` with `change` applied. */
+const withTrack = (tracker: Tracker, index: number, change: Partial<Track>): Tracker => ({
+  ...tracker,
+  tracks: tracker.tracks.map((t, i) => (i === index ? { ...t, ...change } : t)),
+});
+
+/**
+ * A drums track's strip: its name, the tempo and swing, its length and its
+ * grid. Its switch, fader, Tune and Decay are its card in the Patches lane.
+ */
+function DrumsStrip({ tracker, index, step, onChange, kit }: StripProps & { kit: Kit }) {
+  const track = tracker.tracks[index];
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+      <span className="text-[11px] font-semibold uppercase tracking-wider">
+        {trackName(tracker.tracks, index)}
+      </span>
+      <TempoSwing tracker={tracker} onChange={onChange} />
+      <LengthPicker
+        length={track.length}
+        onPick={(length) => onChange(withTrack(tracker, index, { length }))}
+      />
+      <KitGrid
+        kit={kit}
+        length={track.length}
+        name={trackName(tracker.tracks, index)}
+        step={step}
+        onChange={(drums) => onChange(withTrack(tracker, index, { drums }))}
+      />
+    </div>
+  );
+}
+
+function MelodyStrip({
+  tracker,
+  index,
+  step,
+  root,
+  patches,
+  onPlays,
+  onChange,
+  onEdit,
+}: StripProps) {
   const track = tracker.tracks[index] ?? tracker.tracks[0];
-  const setTrack = (change: Partial<Track>) =>
-    onChange({
-      ...tracker,
-      tracks: tracker.tracks.map((t, i) => (i === index ? { ...t, ...change } : t)),
-    });
+  const setTrack = (change: Partial<Track>) => onChange(withTrack(tracker, index, change));
   const stepAt = (i: number): Step =>
     track.steps[i] ?? { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX, nudge: 0 };
   const setStep = (i: number, change: Partial<Step>) => {
@@ -213,88 +341,21 @@ export function StepStrip({
     handled();
   };
 
-  // Typed as text and committed on Enter or leaving the field, so typing 95
-  // does not clamp to 40 on the way through the 9.
-  const shown = String(Math.round(tracker.tempo));
-  const [tempo, setTempo] = useState(shown);
-  useEffect(() => setTempo(shown), [shown]);
-  const commitTempo = () => {
-    const v = Number(tempo);
-    if (tempo.trim() === '' || !Number.isFinite(v)) {
-      setTempo(shown);
-      return;
-    }
-    const clamped = Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, Math.round(v)));
-    setTempo(String(clamped));
-    if (clamped !== Math.round(tracker.tempo)) onChange({ ...tracker, tempo: clamped });
-  };
-
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
       {/* No switch: every track plays while the transport runs. */}
-      <span className="text-[11px] font-semibold uppercase tracking-wider">Track {index + 1}</span>
+      <span className="text-[11px] font-semibold uppercase tracking-wider">
+        {trackName(tracker.tracks, index)}
+      </span>
 
       <div className="flex items-center gap-1.5">
         <span>Plays</span>
         <PlaysPicker patches={patches} value={track.patch} onPick={onPlays} />
       </div>
 
-      <label className="flex items-center gap-1">
-        <input
-          type="number"
-          min={TEMPO_MIN}
-          max={TEMPO_MAX}
-          value={tempo}
-          onChange={(e) => setTempo(e.target.value)}
-          onBlur={commitTempo}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur();
-            if (e.key === 'Escape') {
-              setTempo(shown);
-              e.currentTarget.blur();
-            }
-          }}
-          aria-label="Tempo"
-          className="w-12 rounded-sm border border-border bg-transparent px-1 py-0.5 text-right font-mono tabular-nums text-foreground"
-        />
-        bpm
-      </label>
+      <TempoSwing tracker={tracker} onChange={onChange} />
 
-      <div className="flex items-center gap-2">
-        <span>Swing</span>
-        <Slider
-          min={50}
-          max={75}
-          step={1}
-          value={[toPercent(tracker.swing)]}
-          onValueChange={(v) =>
-            onChange({ ...tracker, swing: fromPercent(Array.isArray(v) ? v[0] : (v as number)) })
-          }
-          aria-label="Swing"
-          className="w-20"
-        />
-        <span className="w-8 font-mono text-[11px] tabular-nums">
-          {Math.round(toPercent(tracker.swing))}%
-        </span>
-      </div>
-
-      <fieldset className="flex items-center gap-0.5" aria-label="Length">
-        {LENGTHS.map((n) => (
-          <button
-            key={n}
-            type="button"
-            aria-pressed={track.length === n}
-            title={`${n} steps`}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => setTrack({ length: n })}
-            className={`rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${
-              track.length === n ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
-            }`}
-          >
-            {n}
-          </button>
-        ))}
-      </fieldset>
+      <LengthPicker length={track.length} onPick={(length) => setTrack({ length })} />
 
       <span
         className="font-mono text-[10px] tabular-nums"
@@ -412,8 +473,6 @@ export function StepStrip({
           +{hiddenSteps(track)} past step {track.length}
         </span>
       )}
-
-      <KitGrid kit={tracker.kit} step={kitStep} onChange={(kit) => onChange({ ...tracker, kit })} />
     </div>
   );
 }
@@ -426,23 +485,29 @@ const HIT_GHOST = 48;
 const nextHit = (v: number) => (v === 0 ? HIT_MAX : v === HIT_MAX ? HIT_GHOST : 0);
 
 /**
- * The drum kit's grid (Georg, 2026-10-03, a stop-gap until roadmap row 25):
+ * A drums track's grid (Georg, 2026-10-03, a stop-gap until roadmap row 25):
  * a row per drum, a column a sixteenth, and any number of drums on one step.
- * It runs on the tracks' clock with a length of its own, so a bar of drums
- * loops under a longer line. Its switch, level, tune and decay are the
- * Drums card.
+ * It runs on the tracks' clock with the track's own length, so a bar of
+ * drums loops under a longer line. Its switch, level, tune and decay are the
+ * track's card.
  */
 function KitGrid({
   kit,
+  length,
+  name,
   step,
   onChange,
 }: {
   kit: Kit;
+  /** The track's length, in steps. */
+  length: number;
+  /** The track's name, for the cells' labels. */
+  name: string;
   /** The kit's step playing, from zero, or -1. */
   step: number;
   onChange: (next: Kit) => void;
 }) {
-  const bars = Array.from({ length: Math.ceil(kit.length / BAR) }, (_, b) => b);
+  const bars = Array.from({ length: Math.ceil(length / BAR) }, (_, b) => b);
   const setHit = (voice: KitVoice, i: number, v: number) => {
     const row = Array.from({ length: STEPS }, (_, j) => kit[voice][j] ?? 0);
     row[i] = v;
@@ -450,40 +515,16 @@ function KitGrid({
   };
   return (
     <div className="flex basis-full flex-col gap-2">
-      <div className="flex items-center gap-4">
-        {/* No switch here: the Drums card has it, as every node's card does. */}
-        <span className="text-[11px] font-semibold uppercase tracking-wider">Drums</span>
-        <fieldset className="flex items-center gap-0.5" aria-label="Drum length">
-          {LENGTHS.map((n) => (
-            <button
-              key={n}
-              type="button"
-              aria-pressed={kit.length === n}
-              title={`${n} steps`}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => onChange({ ...kit, length: n })}
-              className={`rounded px-1.5 py-0.5 font-mono text-[10px] tabular-nums ${
-                kit.length === n ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
-              }`}
-            >
-              {n}
-            </button>
-          ))}
-        </fieldset>
-      </div>
       {bars.map((bar) => {
         const first = bar * BAR;
-        const cells = Array.from(
-          { length: Math.min(BAR, kit.length - first) },
-          (_, k) => first + k,
-        );
+        const cells = Array.from({ length: Math.min(BAR, length - first) }, (_, k) => first + k);
         return (
           <div key={bar} className="flex min-w-0 flex-col gap-1">
             {KIT_VOICES.map((voice) => (
               <fieldset
                 key={voice}
                 className="flex min-w-0 items-center gap-1"
-                aria-label={`${KIT_LABELS[voice]}, bar ${bar + 1}`}
+                aria-label={`${name}, ${KIT_LABELS[voice]}, bar ${bar + 1}`}
               >
                 {cells.map((i) => {
                   const v = kit[voice][i] ?? 0;

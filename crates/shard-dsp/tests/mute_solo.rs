@@ -5,6 +5,7 @@
 //! While stopped a change lands at once. Mute wins over solo.
 
 use shard_dsp::arrangement;
+use shard_dsp::kit::{KitParams, KitPattern};
 use shard_dsp::mix::gate_frames;
 use shard_dsp::steps::{StepParams, Transport};
 use shard_dsp::{Engine, Mix, ParamBank, VOICES};
@@ -70,8 +71,15 @@ fn engine_with(active: &[usize], kit: bool, steps: Option<StepParams>) -> (Engin
         e.set_voice_active(v, active.contains(&v));
     }
     e.set_transport(&transport());
+    e.set_kit(
+        0,
+        KitPattern::default(),
+        KitParams {
+            on: kit,
+            ..KitParams::default()
+        },
+    );
     let arr = ParamBank::for_table(arrangement::params());
-    arr.set_by_id("arrangement.kit.on", if kit { 1.0 } else { 0.0 });
     // Off, so renders with different voices in them compare to the bit:
     // near its ceiling the limiter's gain depends on the whole mix.
     arr.set_by_id("arrangement.amp.limit", 0.0);
@@ -358,32 +366,39 @@ fn a_solo_safe_voice_plays_through_a_solo() {
 }
 
 #[test]
-fn any_solo_silences_the_kit() {
-    let kit = |solo: bool| {
-        // No voice sounding, only a solo on voice 0.
-        let (mut e, bank) = engine(&[], true);
-        if solo {
-            e.set_voice_mix(0, SOLO);
-        }
+fn a_solo_in_either_pool_silences_the_other() {
+    // Story d: a drums track has switches of its own, and one rule covers
+    // voices and kits alike. Voice 0 plays its tone and kit 0 its beat;
+    // solo one and the other goes, set while stopped so it applies at once.
+    let run = |voice: Mix, kit: Mix, playing: &[usize], drums: bool| {
+        let (mut e, bank) = engine(playing, drums);
+        e.set_voice_mix(0, voice);
+        e.set_kit_mix(0, kit);
         e.set_playing(true);
         let mut out = vec![0.0; BLOCK * 2];
-        let mut peak = 0.0f32;
-        for block in 0..400 {
+        let mut all = Vec::new();
+        for _ in 0..400 {
             e.process_block(&mut out, &bank);
-            // Past voice 0 fading out: it starts switched in.
-            if block >= 20 {
-                peak = out.iter().fold(peak, |m, s| m.max(s.abs()));
-            }
+            all.extend_from_slice(&out);
         }
-        (peak, e.kit_audible())
+        (all, e.voice_audible(0), e.kit_audible(0))
     };
-    let (heard, audible) = kit(false);
-    assert!(heard > 0.01 && audible, "the kit should play: {heard}");
-    let (soloed, audible) = kit(true);
-    assert!(
-        soloed == 0.0 && !audible,
-        "the kit played through a solo: {soloed}"
+    let (voice_soloed, v, k) = run(SOLO, OPEN, &[0], true);
+    assert!(v && !k, "a soloed voice leaves the kit heard");
+    let (voice_alone, _, _) = run(OPEN, OPEN, &[0], false);
+    assert_eq!(voice_soloed, voice_alone, "the kit played through a solo");
+
+    let (kit_soloed, v, k) = run(OPEN, SOLO, &[0], true);
+    assert!(!v && k, "a soloed kit leaves the voice heard");
+    let (kit_alone, _, _) = run(OPEN, OPEN, &[], true);
+    // Past voice 0 fading out in the render without it: it starts switched in.
+    let settled = 20 * BLOCK * 2;
+    assert_eq!(
+        kit_soloed[settled..],
+        kit_alone[settled..],
+        "the voice played through the kit's solo"
     );
+    assert!(kit_alone.iter().any(|s| *s != 0.0));
 }
 
 #[test]

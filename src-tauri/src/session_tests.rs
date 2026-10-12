@@ -65,6 +65,30 @@ pub(crate) fn rig() -> Rig {
     }
 }
 
+/// A session holding one melody track and no drums track: a new session
+/// with its drums track removed, saved and opened again, so its history is
+/// empty and it is not unsaved. For the tests of melody tracks alone, whose
+/// places are then their voices.
+pub(crate) fn melody_rig() -> Rig {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static N: AtomicUsize = AtomicUsize::new(0);
+    let r = rig();
+    r.session.remove_track(1).expect("the drums track goes");
+    let dir = std::env::temp_dir().join(format!(
+        "shard-melody-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("melody.shard");
+    r.session.save(&path).unwrap();
+    let m = rig();
+    m.session.open(&path).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    assert_eq!(m.session.track_count(), 1);
+    m
+}
+
 fn get(r: &Rig, id: &str) -> f32 {
     if id.starts_with(shard_dsp::arrangement::PREFIX) {
         r.arrangement.get_by_id(id).unwrap()
@@ -140,7 +164,7 @@ fn held_gestures_are_not_edits_and_reach_the_bank() {
     // An edit while the brake is held leaves it held, in the patch and in
     // the arrangement.
     r.session.set_param("grain.size", 80.0).unwrap();
-    r.session.set_param("arrangement.kit.gain", 0.5).unwrap();
+    r.session.set_param("arrangement.amp.gain", 0.5).unwrap();
     assert_eq!(get(&r, "arrangement.tape.brake"), 1.0);
     assert_eq!(get(&r, "arrangement.tape.reverse"), 1.0);
 }
@@ -202,12 +226,12 @@ fn an_effect_moved_past_its_own_kind_takes_the_other_copy() {
 #[test]
 fn the_arrangement_is_undone_with_the_patch() {
     let r = rig();
-    r.session.set_param("arrangement.kit.gain", 0.25).unwrap();
-    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(0.25));
+    r.session.set_param("arrangement.amp.gain", 0.25).unwrap();
+    assert_eq!(r.arrangement.get_by_id("arrangement.amp.gain"), Some(0.25));
     r.session.set_param("grain.size", 99.0).unwrap();
     r.session.undo().unwrap();
     r.session.undo().unwrap();
-    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(1.0));
+    assert_eq!(r.arrangement.get_by_id("arrangement.amp.gain"), Some(1.0));
 }
 
 #[test]
@@ -347,7 +371,7 @@ fn resetting_the_sound_restores_defaults_in_one_undoable_step() {
         .set_param(&fx::row_id(n, "delay.time"), 777.0)
         .unwrap();
     // Things the reset must leave alone.
-    r.session.set_param("arrangement.kit.gain", 0.25).unwrap();
+    r.session.set_param("arrangement.amp.gain", 0.25).unwrap();
     let mut t = r.session.tracker();
     t.tempo = 90.0;
     r.session.set_tracker(t).unwrap();
@@ -360,7 +384,7 @@ fn resetting_the_sound_restores_defaults_in_one_undoable_step() {
         fx::order_of(&r.bank).is_empty(),
         "the chain empties with it"
     );
-    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(0.25));
+    assert_eq!(r.arrangement.get_by_id("arrangement.amp.gain"), Some(0.25));
     assert_eq!(r.session.tracker().tempo, 90.0);
 
     assert_eq!(

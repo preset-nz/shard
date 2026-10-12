@@ -11,12 +11,15 @@
 //! What is played rather than edited never enters the tree: brake and
 //! reverse write the arrangement's bank directly.
 //!
-//! **Several tracks, one voice each** (epic 28). Track *i* of the
-//! arrangement's order plays on the engine's voice *i*, and every voice plays
-//! its own track's patch: its values, modulation and materials, handed to its
-//! own feed (`VoiceFeed`). Two tracks on one patch both follow an edit to it.
-//! Removing a track moves the later ones down a voice each; the voices' fades
-//! and smoothers carry the change.
+//! **Several tracks, one voice or kit each** (epic 28). The arrangement's
+//! one order holds melody and drums tracks; the *k*-th melody track plays on
+//! the engine's voice *k*, the *k*-th drums track on its kit *k*
+//! (`tracker::Slot`). Every voice plays its own track's patch: its values,
+//! modulation and materials, handed to its own feed (`VoiceFeed`). Two
+//! tracks on one patch both follow an edit to it. A kit is handed its
+//! track's grid, sound and fader through its own feed (`KitFeed`). Removing
+//! a track moves the later ones of its kind down a voice or kit each; the
+//! fades and smoothers carry the change.
 //!
 //! **The current patch is what is edited, never what plays** (epic 10, epic
 //! 28). Every patch-scoped command (a value, the chain, presets, links,
@@ -56,9 +59,12 @@ use rhizome_pom::{Document, FileStore, PresetRef, Store};
 use serde::Serialize;
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
+use shard_dsp::kit::{KitParams, KitPattern};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::StepBank;
-use shard_dsp::{Generator, Mix, ModSet, ParamBank, ReadingBank, StepParams, VOICES};
+use shard_dsp::{
+    Generator, KitBank, Mix, ModSet, ParamBank, ReadingBank, StepParams, KITS, VOICES,
+};
 
 use crate::mapping::MapRef;
 use crate::materials::{self, Pool, Wires, DRONE_NAME};
@@ -67,7 +73,7 @@ use crate::object_model::{
     self as om, arrangement_node, instance_of, locate, patch_node, to_value, Plan, Shard, ShardEdit,
 };
 use crate::source::{self, Loaded};
-use crate::tracker::{self, Track, Tracker};
+use crate::tracker::{self, Slot, Track, Tracker};
 
 /// One source buffer per generator, by `Generator::index`: a new material
 /// waiting for the audio thread, or an old one it handed back.
@@ -140,10 +146,47 @@ impl VoiceFeed {
     }
 }
 
-/// Every voice's feed, the transport, and which voice the UI follows.
+/// One kit's inputs (story d): its drums track's grid, sound, fader and
+/// switches. Atomics only, read once a block.
+pub struct KitFeed {
+    /// Its track's grid and sound.
+    pub bank: KitBank,
+    /// Its track's fader, as `f32` bits.
+    pub gain: AtomicU32,
+    /// Whether it plays. Stored after everything above.
+    pub active: AtomicBool,
+    /// Its track's mute and solo, as `VoiceFeed::mix`.
+    pub mix: AtomicU8,
+    /// As `VoiceFeed::placed`.
+    pub placed: AtomicU32,
+    /// The mix the engine has applied, as `VoiceFeed::heard_mix`.
+    pub heard_mix: AtomicU8,
+}
+
+impl KitFeed {
+    fn new() -> Self {
+        Self {
+            bank: KitBank::default(),
+            gain: AtomicU32::new(TRACK_GAIN_DEFAULT.to_bits()),
+            active: AtomicBool::new(false),
+            mix: AtomicU8::new(0),
+            placed: AtomicU32::new(0),
+            heard_mix: AtomicU8::new(0),
+        }
+    }
+
+    pub fn gain(&self) -> f32 {
+        f32::from_bits(self.gain.load(Ordering::Relaxed))
+    }
+}
+
+/// Every voice's and kit's feed, the transport, and which voice the UI
+/// follows.
 pub struct Voices {
     pub voice: [VoiceFeed; VOICES],
-    /// The transport: tempo, swing and the kit's grid. Always running.
+    /// The drums tracks' kits.
+    pub kits: [KitFeed; KITS],
+    /// The transport: tempo and swing. Always running.
     pub transport: StepBank,
     /// The voice playing the current patch, whose heard values, playhead and
     /// grains the patch view shows, or `NO_VOICE`.
@@ -154,6 +197,7 @@ impl Voices {
     pub fn new() -> Self {
         Self {
             voice: std::array::from_fn(|_| VoiceFeed::new()),
+            kits: std::array::from_fn(|_| KitFeed::new()),
             transport: StepBank::new(Tracker::default().transport()),
             shown: AtomicUsize::new(NO_VOICE),
         }
@@ -174,6 +218,16 @@ impl Voices {
     /// The voice the patch view follows, if one plays the current patch.
     pub fn shown(&self) -> Option<usize> {
         Some(self.shown.load(Ordering::Acquire)).filter(|i| *i < VOICES)
+    }
+
+    /// The applied mix of the voice or kit at `slot`.
+    pub fn heard_mix(&self, slot: Slot) -> Mix {
+        let bits = match slot {
+            Slot::Melody(k) => self.voice.get(k).map(|v| &v.heard_mix),
+            Slot::Drums(k) => self.kits.get(k).map(|v| &v.heard_mix),
+        };
+        bits.map(|b| Mix::from_bits(b.load(Ordering::Acquire)))
+            .unwrap_or_default()
     }
 }
 
@@ -204,6 +258,10 @@ struct Voiced {
     gain: f32,
 }
 
+/// What a kit was last handed: its track's grid, sound and fader, or none
+/// while it is switched out.
+type KitVoiced = Option<(KitPattern, KitParams, f32)>;
+
 /// A track's mute and solo, as the session holds them.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 pub struct TrackMix {
@@ -228,13 +286,17 @@ struct Sent {
     voices: [Voiced; VOICES],
     /// The track selected in the scene view, or none with a patch selected.
     selected_track: Option<usize>,
-    /// Every track's node, in the arrangement's order.
+    /// What each kit was handed.
+    kits: [KitVoiced; KITS],
+    /// Every track's node, in the arrangement's order, and where each plays.
     tracks: Vec<NodeId>,
+    slots: Vec<Slot>,
     /// Mute and solo by track node. Kept for a removed track, so undoing
     /// the removal brings its switches back; emptied only by open and new.
     mix: HashMap<NodeId, TrackMix>,
-    /// The track each voice was last handed the switches of.
+    /// The track each voice and kit was last handed the switches of.
     voice_tracks: [Option<NodeId>; VOICES],
+    kit_tracks: [Option<NodeId>; KITS],
 }
 
 /// What a load could not take as written. Surfaced rather than logged, because
@@ -356,10 +418,13 @@ impl Session {
             sent: Mutex::new(Sent {
                 plan: Plan::default(),
                 voices: std::array::from_fn(|_| Voiced::default()),
+                kits: [None; KITS],
                 selected_track: None,
                 tracks: Vec::new(),
+                slots: Vec::new(),
                 mix: HashMap::new(),
                 voice_tracks: [None; VOICES],
+                kit_tracks: [None; KITS],
             }),
             decoded: Mutex::new([(None, drone)].into()),
             feeding: Mutex::new(std::array::from_fn(|_| [None, None])),
@@ -420,7 +485,13 @@ impl Session {
             self.hand(i, &want, &sent.voices[i], all, materials, &plan.pool);
             sent.voices[i] = want;
         }
+        for k in 0..KITS {
+            let want = plan.tracker.kit(k);
+            self.hand_kit(k, &want, &sent.kits[k], all);
+            sent.kits[k] = want;
+        }
         sent.tracks = om::tracks(doc.tree()).iter().map(|t| t.id()).collect();
+        sent.slots = plan.tracker.slots();
         self.hand_mix(&mut sent, all);
         let shown = sent
             .voices
@@ -463,32 +534,70 @@ impl Session {
         }
     }
 
-    /// Every voice's mute and solo: track *i*'s on voice *i*, and the
-    /// audition loop, which is no track, safe from solos. A voice whose track
-    /// changed (or every voice, with `all`) has its switches placed at once;
-    /// otherwise the engine lands the change on the bar.
+    /// Hands kit `k` its drums track's grid, sound and fader where they
+    /// differ from what it was last handed (`was`), or everything. Switched
+    /// in last; switched out when no drums track is there.
+    fn hand_kit(&self, k: usize, want: &KitVoiced, was: &KitVoiced, all: bool) {
+        let feed = &self.feeds.voices.kits[k];
+        let Some((pattern, params, gain)) = want else {
+            if all || was.is_some() {
+                feed.active.store(false, Ordering::Release);
+            }
+            return;
+        };
+        if all || want != was {
+            feed.bank.store(pattern, params);
+            feed.gain.store(gain.to_bits(), Ordering::Relaxed);
+        }
+        if all || was.is_none() {
+            feed.active.store(true, Ordering::Release);
+        }
+    }
+
+    /// Every voice's and kit's mute and solo: each track's on the voice or
+    /// kit its slot names, and the ones no track plays (the audition loop
+    /// among them) safe from solos. One whose track changed (or every one,
+    /// with `all`) has its switches placed at once; otherwise the engine
+    /// lands the change on the bar.
     fn hand_mix(&self, sent: &mut Sent, all: bool) {
-        for i in 0..VOICES {
-            let track = sent.tracks.get(i).copied();
-            let mix = match track {
-                Some(t) => {
-                    let m = sent.mix.get(&t).copied().unwrap_or_default();
-                    Mix {
-                        mute: m.mute,
-                        solo: m.solo,
-                        solo_safe: false,
-                    }
+        let mut voice_tracks = [None; VOICES];
+        let mut kit_tracks = [None; KITS];
+        for (node, slot) in sent.tracks.iter().zip(&sent.slots) {
+            match *slot {
+                Slot::Melody(k) if k < VOICES => voice_tracks[k] = Some(*node),
+                Slot::Drums(k) if k < KITS => kit_tracks[k] = Some(*node),
+                _ => {}
+            }
+        }
+        let mix_of = |track: Option<NodeId>| match track {
+            Some(t) => {
+                let m = sent.mix.get(&t).copied().unwrap_or_default();
+                Mix {
+                    mute: m.mute,
+                    solo: m.solo,
+                    solo_safe: false,
                 }
-                None => Mix {
-                    solo_safe: true,
-                    ..Mix::default()
-                },
-            };
-            let feed = &self.feeds.voices.voice[i];
-            feed.mix.store(mix.bits(), Ordering::Release);
+            }
+            None => Mix {
+                solo_safe: true,
+                ..Mix::default()
+            },
+        };
+        let voices = &self.feeds.voices;
+        for (i, track) in voice_tracks.into_iter().enumerate() {
+            let feed = &voices.voice[i];
+            feed.mix.store(mix_of(track).bits(), Ordering::Release);
             if all || sent.voice_tracks[i] != track {
                 feed.placed.fetch_add(1, Ordering::Release);
                 sent.voice_tracks[i] = track;
+            }
+        }
+        for (k, track) in kit_tracks.into_iter().enumerate() {
+            let feed = &voices.kits[k];
+            feed.mix.store(mix_of(track).bits(), Ordering::Release);
+            if all || sent.kit_tracks[k] != track {
+                feed.placed.fetch_add(1, Ordering::Release);
+                sent.kit_tracks[k] = track;
             }
         }
     }
@@ -752,26 +861,35 @@ impl Session {
 
     // The tracker.
 
-    /// The tempo, swing, kit grid and every track, with the patch each plays.
+    /// The tempo, swing and every track, with the patch each plays.
     pub fn tracker(&self) -> Tracker {
         lock(&self.sent).plan.tracker.clone()
     }
 
-    /// How many tracks there are, and so how many voices play them.
+    /// How many tracks there are, of both kinds.
     pub fn track_count(&self) -> usize {
         lock(&self.sent).plan.tracker.tracks.len()
     }
 
-    /// Takes the tempo, swing, kit grid and each track's steps, length and
-    /// fader from `next`, matching tracks by place, as one step. Never adds
+    /// Where each track plays, in order: its voice or kit.
+    pub fn slots(&self) -> Vec<Slot> {
+        lock(&self.sent).plan.tracker.slots()
+    }
+
+    /// Takes the tempo, swing and each track's steps or grid, length, fader
+    /// and kit from `next`, matching tracks by place, as one step. Never adds
     /// or removes a track, and never changes what one plays. A drag on one
-    /// track's fader is "Set Gain"; anything else "Edit the steps", coalesced
-    /// per track, so edits to two tracks are two steps.
+    /// track's fader is "Set Gain", and on a drums track's Tune or Decay
+    /// "Set Tune" or "Set Decay", its switch "Set Drums"; anything else "Edit
+    /// the steps", coalesced per track, so edits to two tracks are two steps.
     pub fn set_tracker(&self, next: Tracker) -> Result<Tracker, String> {
         let next = next.sanitised();
         let now = self.tracker();
-        let differs =
-            |a: &Track, b: &Track| (a.length, &a.steps, a.gain) != (b.length, &b.steps, b.gain);
+        // What a track plays is never this call's: a stale `patch` sent back
+        // counts for nothing.
+        let differs = |a: &Track, b: &Track| {
+            (a.length, &a.steps, a.gain, &a.drums) != (b.length, &b.steps, b.gain, &b.drums)
+        };
         let changed: Vec<usize> = now
             .tracks
             .iter()
@@ -780,15 +898,12 @@ impl Session {
             .filter(|(_, (a, b))| differs(a, b))
             .map(|(i, _)| i)
             .collect();
-        let shared = (now.tempo, now.swing, &now.kit) != (next.tempo, next.swing, &next.kit);
+        let shared = (now.tempo, now.swing) != (next.tempo, next.swing);
         let (label, key) = match changed.as_slice() {
             [i] if !shared => {
                 let (a, b) = (&now.tracks[*i], &next.tracks[*i]);
-                if (a.length, &a.steps) == (b.length, &b.steps) {
-                    ("Set Gain", format!("gain:{i}"))
-                } else {
-                    ("Edit the steps", format!("tracker:{i}"))
-                }
+                let (label, field) = one_setting(a, b).unwrap_or(("Edit the steps", "tracker"));
+                (label, format!("{field}:{i}"))
             }
             _ => ("Edit the steps", "tracker".to_string()),
         };
@@ -814,15 +929,27 @@ impl Session {
         Ok(self.tracker())
     }
 
-    /// Add Track: a melody track at the end, sixteen empty steps at unity,
-    /// playing the current patch. One undo step, "Add Track". Refused once
-    /// every voice has a track. Answers its place.
-    pub fn add_track(&self) -> Result<usize, String> {
-        let tracks = self.track_count();
-        if tracks >= VOICES {
-            return Err(format!("a session plays at most {VOICES} tracks"));
+    /// Add Track › Melody: a melody track at the end, sixteen empty steps at
+    /// unity, playing the current patch, one undo step, "Add Track". Add
+    /// Track › Drums (`drums`): a drums track at the end, switched on with an
+    /// empty grid, "Add Drums". Each refused once its pool is full. Answers
+    /// its place.
+    pub fn add_track(&self, drums: bool) -> Result<usize, String> {
+        let now = self.tracker();
+        let tracks = now.tracks.len();
+        if drums && now.drums().count() >= KITS {
+            return Err(format!("a session plays at most {KITS} drums tracks"));
+        }
+        if !drums && now.melody().count() >= VOICES {
+            return Err(format!("a session plays at most {VOICES} melody tracks"));
         }
         let arr = self.owner("arrangement")?;
+        if drums {
+            self.edit("Add Drums", None, |tx| {
+                tx.add_track(arr, &Track::blank_drums()).map(|_| ())
+            })?;
+            return Ok(tracks);
+        }
         let patch = self.read(|d| patch_node(d.tree(), self.current()).map(|p| p.id()));
         self.edit("Add Track", None, |tx| {
             let track = tx.add_track(arr, &Track::blank())?;
@@ -834,15 +961,19 @@ impl Session {
         Ok(tracks)
     }
 
-    /// Remove Track: track `track` with its steps, one undo step named for
-    /// it, "Remove Track 2". Undo brings it back in its place. The tracks
-    /// after it move down a place, and so a voice. Refused for the last one.
+    /// Remove Track: track `track` with its steps or grid, one undo step
+    /// named for it, "Remove Track 2" or "Remove Drums 1". Undo brings it
+    /// back in its place. The tracks of its kind after it move down a voice
+    /// or kit. Refused for the last melody track, which the current patch
+    /// falls back on.
     pub fn remove_track(&self, track: usize) -> Result<(), String> {
         let node = self
             .read(|d| om::tracks(d.tree()).get(track).map(|t| t.id()))
             .ok_or_else(|| format!("there is no track {}", track + 1))?;
-        if self.track_count() <= 1 {
-            return Err("a session keeps at least one track".into());
+        let now = self.tracker();
+        let slot = now.slots()[track];
+        if matches!(slot, Slot::Melody(_)) && now.melody().count() <= 1 {
+            return Err("a session keeps at least one melody track".into());
         }
         {
             let mut sent = lock(&self.sent);
@@ -851,7 +982,7 @@ impl Session {
                 .selected_track
                 .map(|s| if s > track { s - 1 } else { s });
         }
-        self.edit(&format!("Remove Track {}", track + 1), None, |tx| {
+        self.edit(&format!("Remove {}", track_name(slot)), None, |tx| {
             tx.remove(node)
         })?;
         Ok(())
@@ -864,11 +995,16 @@ impl Session {
     pub fn select_track(&self, track: usize) -> Result<bool, String> {
         let mut doc = lock(&self.doc);
         let tracks = om::tracks(doc.tree());
-        let played = tracks
+        let t = *tracks
             .get(track)
-            .and_then(|t| om::played_by(doc.tree(), *t))
-            .map(|p| p.id())
             .ok_or_else(|| format!("there is no track {}", track + 1))?;
+        let Some(played) = om::played_by(doc.tree(), t).map(|p| p.id()) else {
+            // A drums track plays no patch: the current patch stays, and
+            // nothing is auditioned while it is selected.
+            lock(&self.sent).selected_track = Some(track);
+            self.sync(&doc, false);
+            return Ok(false);
+        };
         let moved = self.current() != Some(played);
         // A gesture on the patch being left ends with it.
         let ended = moved && self.end_gesture(&mut doc);
@@ -892,16 +1028,10 @@ impl Session {
         let sent = lock(&self.sent);
         sent.tracks
             .iter()
-            .enumerate()
-            .map(|(i, t)| {
+            .zip(&sent.slots)
+            .map(|(t, slot)| {
                 let m = sent.mix.get(t).copied().unwrap_or_default();
-                let heard = self
-                    .feeds
-                    .voices
-                    .voice
-                    .get(i)
-                    .map(|v| Mix::from_bits(v.heard_mix.load(Ordering::Acquire)))
-                    .unwrap_or_default();
+                let heard = self.feeds.voices.heard_mix(*slot);
                 MixState {
                     mute: m.mute,
                     solo: m.solo,
@@ -1625,6 +1755,9 @@ impl Session {
             .get(track)
             .copied()
             .ok_or_else(|| format!("there is no track {}", track + 1))?;
+        if t.type_name() != om::TRACK {
+            return Err("a drums track plays no patch".into());
+        }
         if om::played_by(doc.tree(), t).map(|p| p.id()) == Some(node) {
             return Ok(false);
         }
@@ -1779,11 +1912,14 @@ fn with_mix(tree: &Tree, mix: &HashMap<NodeId, TrackMix>) -> Result<String, Stri
         .iter()
         .map(|t| mix.get(&t.id()).copied().unwrap_or_default())
         .collect();
-    let nodes: Vec<NodeId> = om::tracks(&copy).iter().map(|t| t.id()).collect();
+    let nodes: Vec<(NodeId, (&str, &str))> = om::tracks(&copy)
+        .iter()
+        .map(|t| (t.id(), om::mix_keys(t)))
+        .collect();
     copy.edit("Mute and solo", |tx| {
-        for (node, m) in nodes.iter().zip(&want) {
-            tx.set_value(*node, om::TRACK_MUTE, Value::Bool(m.mute))?;
-            tx.set_value(*node, om::TRACK_SOLO, Value::Bool(m.solo))?;
+        for ((node, (mute, solo)), m) in nodes.iter().zip(&want) {
+            tx.set_value(*node, mute, Value::Bool(m.mute))?;
+            tx.set_value(*node, solo, Value::Bool(m.solo))?;
         }
         Ok(())
     })
@@ -1797,20 +1933,22 @@ fn read_mix(tree: &Tree) -> HashMap<NodeId, TrackMix> {
         .iter()
         .map(|t| {
             let on = |key| t.value(key) == Some(Value::Bool(true));
+            let (mute, solo) = om::mix_keys(t);
             (
                 t.id(),
                 TrackMix {
-                    mute: on(om::TRACK_MUTE),
-                    solo: on(om::TRACK_SOLO),
+                    mute: on(mute),
+                    solo: on(solo),
                 },
             )
         })
         .collect()
 }
 
-/// What every voice should play: track *i* on voice *i*, its patch, steps
-/// and fader; and a selected patch no track plays on `AUDITION`, looping
-/// free, while that voice is spare and no track is selected.
+/// What every voice should play: the *k*-th melody track on voice *k*, its
+/// patch, steps and fader; and a selected patch no track plays on
+/// `AUDITION`, looping free, while that voice is spare and no track is
+/// selected.
 fn voicing(plan: &Plan, selected_track: Option<usize>) -> [Voiced; VOICES] {
     let mut out: [Voiced; VOICES] = std::array::from_fn(|_| Voiced::default());
     let of = |patch: NodeId, steps: StepParams, gain: f32| {
@@ -1823,11 +1961,19 @@ fn voicing(plan: &Plan, selected_track: Option<usize>) -> [Voiced; VOICES] {
             gain,
         })
     };
-    let tracks = plan.tracker.tracks.len().min(VOICES);
-    for (i, track) in plan.tracker.tracks.iter().take(tracks).enumerate() {
-        if let Some(Some(patch)) = plan.track_patches.get(i) {
-            if let Some(v) = of(*patch, plan.tracker.params(i), track.gain) {
-                out[i] = v;
+    let melody = plan
+        .tracker
+        .tracks
+        .iter()
+        .zip(&plan.track_patches)
+        .filter(|(t, _)| !t.is_drums())
+        .take(VOICES);
+    let mut tracks = 0;
+    for (k, (track, patch)) in melody.enumerate() {
+        tracks += 1;
+        if let Some(patch) = patch {
+            if let Some(v) = of(*patch, plan.tracker.params(k), track.gain) {
+                out[k] = v;
             }
         }
     }
@@ -1844,6 +1990,39 @@ fn voicing(plan: &Plan, selected_track: Option<usize>) -> [Voiced; VOICES] {
         }
     }
     out
+}
+
+/// A track's name by its slot, as the scene view and Undo show it: "Track 2"
+/// by its place among the melody tracks, "Drums 1" among the drums.
+pub fn track_name(slot: Slot) -> String {
+    match slot {
+        Slot::Melody(k) => format!("Track {}", k + 1),
+        Slot::Drums(k) => format!("Drums {}", k + 1),
+    }
+}
+
+/// When a track's change from `a` to `b` is one setting moving, its undo
+/// label and the key a drag coalesces under: the fader, or a drums track's
+/// switch, Tune or Decay.
+fn one_setting(a: &Track, b: &Track) -> Option<(&'static str, &'static str)> {
+    if (a.length, &a.steps, &a.drums) == (b.length, &b.steps, &b.drums) {
+        return Some(("Set Gain", "gain"));
+    }
+    let (Some(x), Some(y)) = (&a.drums, &b.drums) else {
+        return None;
+    };
+    if a.gain != b.gain
+        || a.length != b.length
+        || (&x.kick, &x.snare, &x.hat) != (&y.kick, &y.snare, &y.hat)
+    {
+        return None;
+    }
+    match (x.on != y.on, x.tune != y.tune, x.decay != y.decay) {
+        (true, false, false) => Some(("Set Drums", "drums")),
+        (false, true, false) => Some(("Set Tune", "tune")),
+        (false, false, true) => Some(("Set Decay", "decay")),
+        _ => None,
+    }
 }
 
 /// Every patch some track plays.

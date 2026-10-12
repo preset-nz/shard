@@ -1,7 +1,7 @@
 //! The engine: the arrangement around the voices. A voice (`voice.rs`) is one
 //! track playing one patch; the engine holds a fixed pool of them, the
-//! transport they all step on, the tape they all run on, the drum kit beside
-//! them, the arrangement's chain over them and the limiter.
+//! transport they all step on, the tape they all run on, the drums tracks'
+//! kits beside them, the arrangement's chain over them and the limiter.
 //!
 //! **The pool (epic 28).** `VOICES` voices, every buffer sized here, in
 //! `new`. Voice `i` reads its own bank (`process_voices`), modulation
@@ -15,8 +15,8 @@
 //! voice 0, and `process_block` hands every voice the same bank.
 //!
 //! **One transport** (`steps::Transport`): tempo, swing and whether the steps
-//! run are the arrangement's, set by `set_transport`. Every voice and the kit
-//! read the same position each frame, so their step ones land on the same
+//! run are the arrangement's, set by `set_transport`. Every voice and kit
+//! reads the same position each frame, so their step ones land on the same
 //! sample and "the next bar" means one thing (`bar`).
 //!
 //! **Mute and solo** (`mix.rs`): each voice has its mix switches and a gate
@@ -25,12 +25,19 @@
 //! while it does not, at once. The gate ramps over `mix::GATE_MS`, so a
 //! landing never clicks: silencing fades over the gate's length *before* the
 //! bar line and is silent from it, so the downbeat's note never sounds
-//! through the fade; bringing back fades in from the bar line. Any solo silences the kit too, until drums are
-//! tracks with switches of their own (story d).
+//! through the fade; bringing back fades in from the bar line. A kit has
+//! the same switches as a voice, and solos count across both pools.
+//!
+//! **Drums tracks** (story d): `KITS` kits, each a drums track's, with its
+//! own grid and sound (`set_kit`), fader (`set_kit_gain`), mix
+//! (`set_kit_mix`) and switch (`set_kit_active`). Kit `k`'s noise is salted
+//! by `k`, so kit 0 keeps the seed the single kit had. A kit switched out
+//! rings out and then costs nothing. Kit 0 starts active, its switch off,
+//! as the single kit did; the rest idle.
 //!
 //! **One tape.** Brake and rewind are the arrangement's rows
 //! (`arrangement.tape.brake`, `arrangement.tape.reverse`), and slow every
-//! voice, the kit and the transport together (Georg, 2026-10-12). The slew
+//! voice, every kit and the transport together (Georg, 2026-10-12). The slew
 //! and the flick length are still a patch's rows, read from voice 0.
 //!
 //! Everything here runs on the audio thread. No allocation, no locks, no
@@ -47,6 +54,7 @@ use crate::limiter::{Limiter, LimiterParams};
 use crate::mix::{gate_frames, Gate, Mix};
 use crate::modulation::ModSet;
 use crate::params::ParamBank;
+use crate::rng::salt;
 use crate::smooth::OnePole;
 use crate::sources::{Generator, Reading};
 use crate::steps::{StepParams, Transport, BAR};
@@ -56,13 +64,17 @@ use crate::voice::{tape_gain, Tape, Voice};
 /// once (epic 28). Fixed, so every buffer is sized when the engine is built.
 pub const VOICES: usize = 8;
 
+/// How many kits the engine holds: the most drums tracks that can play at
+/// once (epic 28, story d). Fixed, like `VOICES`.
+pub const KITS: usize = 4;
+
+/// Every switchable channel: the voices, then the kits. The mix arrays are
+/// indexed this way, so mute and solo are one rule across both pools.
+const CHANNELS: usize = VOICES + KITS;
+
 /// Where the arrangement's rows sit in its own table.
 struct ArrangementSlots {
     fx: ChainSlots,
-    kit_on: usize,
-    kit_gain: usize,
-    kit_tune: usize,
-    kit_decay: usize,
     limit: usize,
     ceiling: usize,
     tape_brake: usize,
@@ -77,10 +89,6 @@ impl ArrangementSlots {
         };
         Self {
             fx: ChainSlots::resolve(at),
-            kit_on: at("kit.on"),
-            kit_gain: at("kit.gain"),
-            kit_tune: at("kit.tune"),
-            kit_decay: at("kit.decay"),
             limit: at("amp.limit"),
             ceiling: at("amp.ceiling"),
             tape_brake: at("tape.brake"),
@@ -94,13 +102,9 @@ impl ArrangementSlots {
 #[derive(Clone, Copy)]
 struct ArrangementBlock {
     fx: ChainParams,
-    /// The patch alone: every track's fader at unity. See `read`.
+    /// The patch alone: every track's fader at unity and the drums silent.
+    /// See `read`.
     patch_alone: bool,
-    /// Whether the drum kit plays, its level (zero when it is off and for
-    /// the patch alone) and its sound.
-    kit_on: bool,
-    kit_gain: f32,
-    kit: KitParams,
     limiter: LimiterParams,
     /// The tape's gestures: how far the brake is down, 0 to 1, and whether
     /// the reverse gate is held.
@@ -113,28 +117,19 @@ impl ArrangementBlock {
     /// read as the hand set it.
     fn read(s: &ArrangementSlots, value: impl Fn(usize) -> f32 + Copy, patch_alone: bool) -> Self {
         let mut fx = ChainParams::read(&s.fx, value, value);
-        let kit_on = value(s.kit_on) >= 0.5;
-        let mut kit_gain = if kit_on { value(s.kit_gain) } else { 0.0 };
         // The patch alone, as sound scaping hears it (Georg, 2026-09-26). Not
-        // a separate path: the arrangement's chain is emptied and both gains
-        // go to unity (the tracks' faders too), so the ramps fade the change
+        // a separate path: the arrangement's chain is emptied, the tracks'
+        // faders go to unity and the drums' to zero, so the ramps fade the change
         // in 10 ms, and once they
         // land the chain is bit-exact with no arrangement at all. The filter
         // keeps running, so one switched back in has no stale state. The
         // tape is everyone's, so the patch alone still brakes.
         if patch_alone {
             fx = fx.without_effects();
-            kit_gain = 0.0;
         }
         Self {
             fx,
             patch_alone,
-            kit_on,
-            kit_gain,
-            kit: KitParams {
-                tune: value(s.kit_tune),
-                decay: value(s.kit_decay),
-            },
             limiter: LimiterParams {
                 ceiling: value(s.ceiling),
                 on: value(s.limit) >= 0.5,
@@ -145,7 +140,7 @@ impl ArrangementBlock {
     }
 }
 
-/// The tape every voice, the kit and the transport run on: one speed, a
+/// The tape every voice, every kit and the transport run on: one speed, a
 /// multiplier on tape time. Brake and reverse are two ways of asking for a
 /// different one, and they share one slew, so flipping direction slows to a
 /// stop and climbs back the other way, exactly as a reel does.
@@ -196,12 +191,65 @@ impl Reel {
     }
 }
 
+/// One drums track's kit in the pool (story d): its grid, its sound, its
+/// place in its own loop and its fader. Its hits, step by step, are what a
+/// sidechain keyed by a drums track would follow (roadmap row 41): not built.
+struct Drums {
+    kit: Kit,
+    pattern: KitPattern,
+    params: KitParams,
+    clock: KitClock,
+    /// Its track's fader as the host last set it, and the glide.
+    gain_target: f32,
+    gain: OnePole,
+    /// Switched in: it hits. Switched out, it rings out and goes idle.
+    active: bool,
+    /// Woken while the transport runs: the next tick only finds its place,
+    /// so a kit switched in never fires in the middle of a step.
+    rejoin: bool,
+}
+
+impl Drums {
+    fn new(sample_rate: f32, index: usize) -> Self {
+        let mut gain = OnePole::new();
+        gain.set_time(arrangement::TRACK_GAIN_MS, sample_rate);
+        // Silent until its switch is on, as the single kit started.
+        gain.reset(0.0);
+        Self {
+            kit: Kit::seeded(sample_rate, salt(index)),
+            pattern: KitPattern::default(),
+            params: KitParams::default(),
+            clock: KitClock::default(),
+            gain_target: arrangement::TRACK_GAIN_DEFAULT,
+            gain,
+            active: false,
+            rejoin: false,
+        }
+    }
+
+    /// Skipped whole: switched out and nothing left ringing.
+    #[inline]
+    fn idle(&self) -> bool {
+        !self.active && !self.kit.sounding()
+    }
+
+    /// Where its fader is headed: its gain while it is on, else silence.
+    #[inline]
+    fn level(&self, patch_alone: bool) -> f32 {
+        if self.params.on && !patch_alone {
+            self.gain_target
+        } else {
+            0.0
+        }
+    }
+}
+
 pub struct Engine {
     /// The pool. Boxed, so the engine itself stays small to move.
     voices: Box<[Voice]>,
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
-    /// The steps' clock, shared by every voice and the kit.
+    /// The steps' clock, shared by every voice and kit.
     transport: Transport,
     /// The tape's speed, shared the same way.
     reel: Reel,
@@ -213,28 +261,21 @@ pub struct Engine {
     /// (`set_voice_gain`) and where the glide has got to.
     gain_targets: [f32; VOICES],
     gains: [OnePole; VOICES],
-    /// Each voice's mix switches: what the host wants, what is applied (the
-    /// next bar line copies one onto the other), whether that is heard, and
-    /// the gate carrying it.
-    mix_wanted: [Mix; VOICES],
-    mix: [Mix; VOICES],
-    audible: [bool; VOICES],
-    /// Who will be heard once the wanted mix lands, and the kit likewise:
-    /// the gates' targets for the last stretch before the bar.
-    wanted_audible: [bool; VOICES],
-    kit_wanted: bool,
+    /// Each channel's mix switches, the voices' then the kits'
+    /// (`CHANNELS`): what the host wants, what is applied (the next bar line
+    /// copies one onto the other), whether that is heard, and the gate
+    /// carrying it.
+    mix_wanted: [Mix; CHANNELS],
+    mix: [Mix; CHANNELS],
+    audible: [bool; CHANNELS],
+    /// Who will be heard once the wanted mix lands: the gates' targets for
+    /// the last stretch before the bar.
+    wanted_audible: [bool; CHANNELS],
     /// The gate's length in frames: how far before the bar silencing starts.
     gate_frames: f64,
-    gates: [Gate; VOICES],
-    /// The kit's gate: silent while any voice is soloed.
-    kit_audible: bool,
-    kit_gate: Gate,
-    /// The drum kit beside the voices, its grid, its place in its own loop,
-    /// and its fader. See `kit.rs`.
-    kit: Kit,
-    kit_pattern: KitPattern,
-    kit_clock: KitClock,
-    kit_gain: OnePole,
+    gates: [Gate; CHANNELS],
+    /// The drums tracks' kits. See `kit.rs`.
+    drums: [Drums; KITS],
     /// After everything, the arrangement included.
     limiter: Limiter,
     sample_rate: f32,
@@ -252,9 +293,9 @@ impl Engine {
             g.reset(arrangement::TRACK_GAIN_DEFAULT);
             g
         });
-        let mut kit_gain = OnePole::new();
-        kit_gain.set_time(arr_defs[arr_slots.kit_gain].smooth_ms, sample_rate);
-        kit_gain.reset(arr.kit_gain);
+        let mut drums: [Drums; KITS] = std::array::from_fn(|k| Drums::new(sample_rate, k));
+        // Kit 0 starts switched in, its switch off, as the single kit did.
+        drums[0].active = true;
         let steps = StepParams::default();
         let mut transport = Transport::new(sample_rate);
         transport.set(&steps);
@@ -271,19 +312,13 @@ impl Engine {
             arr,
             gain_targets: [arrangement::TRACK_GAIN_DEFAULT; VOICES],
             gains,
-            mix_wanted: [Mix::default(); VOICES],
-            mix: [Mix::default(); VOICES],
-            audible: [true; VOICES],
-            wanted_audible: [true; VOICES],
-            kit_wanted: true,
+            mix_wanted: [Mix::default(); CHANNELS],
+            mix: [Mix::default(); CHANNELS],
+            audible: [true; CHANNELS],
+            wanted_audible: [true; CHANNELS],
             gate_frames: gate_frames(sample_rate) as f64,
-            gates: [Gate::new(sample_rate); VOICES],
-            kit_audible: true,
-            kit_gate: Gate::new(sample_rate),
-            kit: Kit::new(sample_rate),
-            kit_pattern: steps.kit,
-            kit_clock: KitClock::default(),
-            kit_gain,
+            gates: [Gate::new(sample_rate); CHANNELS],
+            drums,
             limiter: Limiter::new(sample_rate),
             sample_rate,
             peak: 0.0,
@@ -322,9 +357,24 @@ impl Engine {
     /// state again before then cancels it. While it does not run (stopped,
     /// or the steps off) it applies at once.
     pub fn set_voice_mix(&mut self, i: usize, mix: Mix) {
-        self.mix_wanted[i] = mix;
-        if !self.transport.running() && self.mix[i] != mix {
-            self.mix[i] = mix;
+        assert!(i < VOICES);
+        self.want_mix(i, mix);
+    }
+
+    /// `set_voice_mix` on channel `c`, a voice's or a kit's.
+    fn want_mix(&mut self, c: usize, mix: Mix) {
+        self.mix_wanted[c] = mix;
+        if !self.transport.running() && self.mix[c] != mix {
+            self.mix[c] = mix;
+            self.resolve_mix();
+        }
+    }
+
+    /// `place_voice_mix` on channel `c`.
+    fn place_mix(&mut self, c: usize, mix: Mix) {
+        self.mix_wanted[c] = mix;
+        if self.mix[c] != mix {
+            self.mix[c] = mix;
             self.resolve_mix();
         }
     }
@@ -333,11 +383,8 @@ impl Engine {
     /// arriving on the voice (a track removed before it, an undo, a file
     /// opened), whose switches go with it. The gate still ramps.
     pub fn place_voice_mix(&mut self, i: usize, mix: Mix) {
-        self.mix_wanted[i] = mix;
-        if self.mix[i] != mix {
-            self.mix[i] = mix;
-            self.resolve_mix();
-        }
+        assert!(i < VOICES);
+        self.place_mix(i, mix);
     }
 
     /// Voice `i`'s mix as applied: what is heard, or fading towards it.
@@ -350,9 +397,72 @@ impl Engine {
         self.audible[i]
     }
 
-    /// Whether the kit is heard: not while any voice is soloed.
-    pub fn kit_audible(&self) -> bool {
-        self.kit_audible
+    // The kits. `k` is below `KITS`.
+
+    /// Switch kit `k` in or out. In, it starts from its place in the loop
+    /// (never mid-step) with its fader and gate where its track has them;
+    /// out, no new hit starts and what rings rings out, then it is skipped.
+    pub fn set_kit_active(&mut self, k: usize, on: bool) {
+        let c = VOICES + k;
+        let level = self.drums[k].level(self.arr.patch_alone);
+        let running = self.transport.running();
+        let audible = self.audible[c];
+        let d = &mut self.drums[k];
+        if on && d.idle() {
+            d.clock.reset();
+            d.rejoin = running;
+            d.gain.reset(level);
+            self.gates[c].reset(audible);
+        }
+        d.active = on;
+    }
+
+    pub fn kit_active(&self, k: usize) -> bool {
+        self.drums[k].active
+    }
+
+    /// Kit `k`'s grid and sound, once a block, as a track's steps are.
+    pub fn set_kit(&mut self, k: usize, pattern: KitPattern, params: KitParams) {
+        let d = &mut self.drums[k];
+        d.pattern = pattern;
+        d.params = params;
+    }
+
+    /// Kit `k`'s fader, as `set_voice_gain`.
+    pub fn set_kit_gain(&mut self, k: usize, gain: f32) {
+        self.drums[k].gain_target = if gain.is_finite() {
+            gain.clamp(0.0, arrangement::TRACK_GAIN_MAX)
+        } else {
+            arrangement::TRACK_GAIN_DEFAULT
+        };
+    }
+
+    /// Kit `k`'s mute and solo, landing on the bar as `set_voice_mix`.
+    pub fn set_kit_mix(&mut self, k: usize, mix: Mix) {
+        self.want_mix(VOICES + k, mix);
+    }
+
+    /// Kit `k`'s mix at once, as `place_voice_mix`.
+    pub fn place_kit_mix(&mut self, k: usize, mix: Mix) {
+        self.place_mix(VOICES + k, mix);
+    }
+
+    pub fn kit_mix(&self, k: usize) -> Mix {
+        self.mix[VOICES + k]
+    }
+
+    /// Whether kit `k` is heard under the applied mutes and solos.
+    pub fn kit_audible(&self, k: usize) -> bool {
+        self.audible[VOICES + k]
+    }
+
+    /// The step kit `k` is in, or none while the steps are off or it is idle.
+    pub fn kit_step(&self, k: usize) -> Option<u32> {
+        if self.transport.running() && !self.drums[k].idle() {
+            self.drums[k].clock.current()
+        } else {
+            None
+        }
     }
 
     /// Every wanted mix applied: on a bar line.
@@ -371,12 +481,10 @@ impl Engine {
         for (a, m) in self.audible.iter_mut().zip(&self.mix) {
             *a = m.audible(any_solo);
         }
-        self.kit_audible = !any_solo;
         if !self.playing {
             for (g, a) in self.gates.iter_mut().zip(&self.audible) {
                 g.reset(*a);
             }
-            self.kit_gate.reset(self.kit_audible);
         }
     }
 
@@ -431,18 +539,17 @@ impl Engine {
     }
 
     /// What voice `i`'s track plays: whether it follows the steps, its
-    /// pattern, length, pitches, holds, velocities and nudges. Its tempo,
-    /// swing and kit grid are ignored: those are the transport's
+    /// pattern, length, pitches, holds, velocities and nudges. Its tempo
+    /// and swing are ignored: those are the transport's
     /// (`set_transport`).
     pub fn set_voice_steps(&mut self, i: usize, p: StepParams) {
         self.voices[i].set_steps(p);
     }
 
     /// The arrangement's half of the steps, once a block: whether they run,
-    /// the tempo, the swing, and the kit's grid.
+    /// the tempo and the swing.
     pub fn set_transport(&mut self, p: &StepParams) {
         self.transport.set(p);
-        self.kit_pattern = p.kit;
     }
 
     // The single-track shorthand: voice 0.
@@ -538,9 +645,12 @@ impl Engine {
         // The steps stop with the tape, and the next block starts them again
         // from step one.
         self.transport.stop();
-        // The kit too: no drum rings on into the next play.
-        self.kit.reset();
-        self.kit_clock.reset();
+        // The kits too: no drum rings on into the next play.
+        for d in &mut self.drums {
+            d.kit.reset();
+            d.clock.reset();
+            d.rejoin = false;
+        }
         self.playing = playing;
         // A mute still waiting for its bar lands now: stopped, there is none.
         self.mix = self.mix_wanted;
@@ -594,15 +704,6 @@ impl Engine {
     /// The step voice `i`'s track is in, or none while it is off.
     pub fn voice_step(&self, i: usize) -> Option<u32> {
         self.voices[i].clock().current()
-    }
-
-    /// The step the drum kit is in, or none while the steps are off.
-    pub fn current_kit_step(&self) -> Option<u32> {
-        if self.transport.running() {
-            self.kit_clock.current()
-        } else {
-            None
-        }
     }
 
     /// Bars of the transport completed since the steps started, or none
@@ -659,10 +760,13 @@ impl Engine {
             return;
         }
 
-        // The steps starting: the kit's loop starts with them, before any
+        // The steps starting: the kits' loops start with them, before any
         // voice starts its own clock.
         if self.transport.begin_block() {
-            self.kit_clock.reset();
+            for d in &mut self.drums {
+                d.clock.reset();
+                d.rejoin = false;
+            }
         }
         // No bar to wait for while the steps are off.
         if !self.transport.running() {
@@ -675,7 +779,6 @@ impl Engine {
             for (w, m) in self.wanted_audible.iter_mut().zip(&self.mix_wanted) {
                 *w = m.audible(any_solo);
             }
-            self.kit_wanted = !any_solo;
         }
         let frames = out.len() / 2;
         // The voices that play this block. One that goes idle does so at
@@ -690,6 +793,17 @@ impl Engine {
             }
         }
         let live = &live[..n];
+        // The kits that play this block, the same way: one switched out
+        // still rings out, and only then is skipped, its clock with it.
+        let mut kits = [0usize; KITS];
+        let mut kn = 0;
+        for (k, d) in self.drums.iter().enumerate() {
+            if !d.idle() {
+                kits[kn] = k;
+                kn += 1;
+            }
+        }
+        let kits = &kits[..kn];
 
         let arr = self.arr;
         // The tape: its gestures from the arrangement, its feel from voice 0.
@@ -706,14 +820,13 @@ impl Engine {
         // Who the arrangement's order names this block. Reorders, resets and
         // fades start here.
         self.arr_fx.prepare(&arr.fx);
-        let kit_pattern = self.kit_pattern;
         let swing = self.transport.swing();
 
         for frame in out.chunks_mut(2) {
             let was = self.reel.speed.value();
             let speed = self.reel.speed.process(speed_target);
             let tape = Tape { speed, was };
-            // This frame's place, read by every voice and the kit before the
+            // This frame's place, read by every voice and kit before the
             // transport moves on.
             let beat = *self.transport.beat();
             // The last gate's length before a bar line a change waits for:
@@ -739,15 +852,22 @@ impl Engine {
                 l += vl * g;
                 r += vr * g;
             }
-            // The kit, on the same clock: it reads how far the steps have
+            // The kits, on the same clock: each reads how far the steps have
             // run, so it stays on their grid at any length of its own. Its
-            // clock runs while it is off, so switching it on lands in step.
+            // clock runs while its switch is off, so switching it on lands in
+            // step.
             if self.transport.running() {
-                let at = beat.elapsed(kit_pattern.length.clamp(1, crate::steps::STEPS as u32));
-                if let Some(k) = self.kit_clock.tick(at, &kit_pattern, swing) {
-                    if arr.kit_on {
-                        for v in 0..KIT_VOICES {
-                            self.kit.hit(v, kit_pattern.hit(v, k), &arr.kit);
+                for &k in kits {
+                    let d = &mut self.drums[k];
+                    let pattern = &d.pattern;
+                    let at = beat.elapsed(pattern.length.clamp(1, crate::steps::STEPS as u32));
+                    if let Some(step) = d.clock.tick(at, pattern, swing) {
+                        if d.rejoin {
+                            d.rejoin = false;
+                        } else if d.active && d.params.on {
+                            for v in 0..KIT_VOICES {
+                                d.kit.hit(v, pattern.hit(v, step), &d.params);
+                            }
                         }
                     }
                 }
@@ -760,16 +880,21 @@ impl Engine {
 
             // Into the arrangement's own drive, crush, ring, chorus, filter
             // and output. It has no pass, so its crusher has no envelope.
-            // The kit joins here, beside the voices past their faders: past
-            // their envelopes and velocity, into the arrangement's chain.
-            // On the tape like them, so a brake slows and fades it too.
-            // Mono, into both sides.
-            let kit = self.kit.process_at(speed.abs())
-                * tape_gain(speed)
-                * self.kit_gain.process(arr.kit_gain)
-                * self
-                    .kit_gate
-                    .process(self.kit_audible && (!closing || self.kit_wanted));
+            // The kits join here, beside the voices past their faders: past
+            // no patch, into the arrangement's chain. On the tape like them,
+            // so a brake slows and fades them too. Mono, into both sides,
+            // each through its track's fader and gate.
+            let mut kit = 0.0;
+            for &k in kits {
+                let c = VOICES + k;
+                let d = &mut self.drums[k];
+                let level = d.level(arr.patch_alone);
+                let heard = self.audible[c] && (!closing || self.wanted_audible[c]);
+                kit += d.kit.process_at(speed.abs())
+                    * tape_gain(speed)
+                    * d.gain.process(level)
+                    * self.gates[c].process(heard);
+            }
             let (l, r) = self.arr_fx.front(l + kit, r + kit, &arr.fx);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
 
@@ -3620,7 +3745,14 @@ mod tests {
                 e.set_voice_active(v, true);
             }
             let arr = ParamBank::for_table(arrangement::params());
-            set(&arr, "arrangement.kit.on", 1.0);
+            e.set_kit(
+                0,
+                KitPattern::default(),
+                KitParams {
+                    on: true,
+                    ..KitParams::default()
+                },
+            );
             set(&arr, "arrangement.tape.brake", brake);
             e.set_arrangement(&arr, false);
             e.set_steps(StepParams {
@@ -3643,7 +3775,7 @@ mod tests {
             // Two seconds: sixteen sixteenths at 120.
             for _ in 0..1_500 {
                 e.process_block(&mut out, &bank);
-                let now = [e.voice_step(0), e.voice_step(1), e.current_kit_step()];
+                let now = [e.voice_step(0), e.voice_step(1), e.kit_step(0)];
                 for k in 0..3 {
                     changes[k] += usize::from(now[k] != last[k]);
                 }

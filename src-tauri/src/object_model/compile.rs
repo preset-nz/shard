@@ -418,12 +418,39 @@ fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulati
     m
 }
 
+/// A drums track node as a track: the inverse of `ShardEdit::write_track`.
+fn read_drums(t: Node<'_>) -> Track {
+    let mut kit = Kit {
+        on: t.value("drums.on") == Some(Value::Bool(true)),
+        tune: float(&t, "drums.tune"),
+        decay: float(&t, "drums.decay"),
+        kick: vec![0; STEPS],
+        snare: vec![0; STEPS],
+        hat: vec![0; STEPS],
+    };
+    for b in t.children().filter(|c| c.type_name() == BEAT) {
+        let Some(n) = step_number(&b) else { continue };
+        kit.kick[n - 1] = int(&b, "beat.kick") as u8;
+        kit.snare[n - 1] = int(&b, "beat.snare") as u8;
+        kit.hat[n - 1] = int(&b, "beat.hat") as u8;
+    }
+    Track {
+        length: int(&t, "drums.length") as u32,
+        gain: float(&t, "drums.gain"),
+        drums: Some(kit),
+        ..Track::blank()
+    }
+}
+
 /// The arrangement as a tracker: the inverse of `ShardEdit::add_arrangement`.
 pub fn read_tracker(arr: Node<'_>) -> Tracker {
     let tracks = arr
         .order(TRACKS)
         .into_iter()
         .map(|t| {
+            if t.type_name() == DRUMS {
+                return read_drums(t);
+            }
             let mut steps = vec![Step::default(); STEPS];
             for s in t.children().filter(|c| c.type_name() == STEP) {
                 let Some(n) = step_number(&s) else { continue };
@@ -441,31 +468,15 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
                 // A runtime id, which `compile` fills in.
                 patch: None,
                 steps,
+                drums: None,
             }
         })
         .collect();
-
-    let mut kit = Kit {
-        length: Kit::default().length,
-        kick: vec![0; STEPS],
-        snare: vec![0; STEPS],
-        hat: vec![0; STEPS],
-    };
-    if let Some(k) = arr.child(KIT) {
-        kit.length = int(&k, "kit.length") as u32;
-        for b in k.children().filter(|c| c.type_name() == BEAT) {
-            let Some(n) = step_number(&b) else { continue };
-            kit.kick[n - 1] = int(&b, "beat.kick") as u8;
-            kit.snare[n - 1] = int(&b, "beat.snare") as u8;
-            kit.hat[n - 1] = int(&b, "beat.hat") as u8;
-        }
-    }
 
     Tracker {
         tempo: float(&arr, "arrangement.tempo"),
         swing: float(&arr, "arrangement.swing"),
         tracks,
-        kit,
     }
 }
 
@@ -493,7 +504,8 @@ pub fn patches(tree: &Tree) -> Vec<Node<'_>> {
         .unwrap_or_default()
 }
 
-/// The arrangement's tracks, in their order: track *i* plays on voice *i*.
+/// The arrangement's tracks of both kinds, in their order. The *k*-th of
+/// each kind plays on voice or kit *k* (`tracker::slots`).
 pub fn tracks(tree: &Tree) -> Vec<Node<'_>> {
     arrangement_node(tree)
         .map(|a| a.order(TRACKS))
@@ -501,17 +513,21 @@ pub fn tracks(tree: &Tree) -> Vec<Node<'_>> {
 }
 
 /// The patch a track plays: the one its `track.patch` names, or the first
-/// patch when it names none, or one that has gone.
+/// patch when it names none, or one that has gone. None for a drums track,
+/// which plays no patch.
 pub fn played_by<'t>(tree: &'t Tree, track: Node<'t>) -> Option<Node<'t>> {
+    if track.type_name() != TRACK {
+        return None;
+    }
     track
         .resolve(TRACK_PATCH)
         .filter(|p| p.type_name() == PATCH)
         .or_else(|| patches(tree).into_iter().next())
 }
 
-/// The patch the first track plays (`played_by`), or the first patch.
+/// The patch the first melody track plays (`played_by`), or the first patch.
 pub fn track_patch(tree: &Tree) -> Option<Node<'_>> {
-    match tracks(tree).into_iter().next() {
+    match tracks(tree).into_iter().find(|t| t.type_name() == TRACK) {
         Some(t) => played_by(tree, t),
         None => patches(tree).into_iter().next(),
     }

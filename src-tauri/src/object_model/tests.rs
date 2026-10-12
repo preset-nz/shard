@@ -88,9 +88,17 @@ fn a_new_session_holds_what_a_new_session_holds_today() {
     }
 
     let a = tree.at("/arrangements/arrangement").unwrap();
-    for name in ["kit", "filter", "amp"] {
+    for name in ["filter", "amp"] {
         assert!(a.child(name).is_some(), "the arrangement has its {name}");
     }
+    // A melody track, then a drums track switched off (story d), with the
+    // beat today's Drums lane had.
+    let kinds: Vec<&str> = a.order(TRACKS).iter().map(|t| t.type_name()).collect();
+    assert_eq!(kinds, [TRACK, DRUMS]);
+    let drums = a.order(TRACKS)[1];
+    assert_eq!(drums.value("drums.on"), Some(Value::Bool(false)));
+    assert!(drums.children().any(|b| b.type_name() == BEAT));
+    assert!(a.child("kit").is_none(), "no kit beside the tracks");
     assert_eq!(a.child("amp").unwrap().type_name(), MASTER);
     assert!(a.order(CHAIN).is_empty());
     assert_eq!(a.order(TRACKS).len(), Tracker::default().tracks.len());
@@ -274,7 +282,6 @@ fn fixed_nodes_stay() {
         "/patches/patch/filter",
         "/patches/patch/grain",
         "/arrangements/arrangement/amp",
-        "/arrangements/arrangement/kit",
     ] {
         let node = id(&doc, path);
         assert!(
@@ -299,7 +306,8 @@ fn kinds_live_only_where_they_belong() {
         ("/patches", "filter"),
         ("/arrangements/arrangement", "grain"),
         ("/arrangements/arrangement", LFO),
-        ("/patches/patch", KIT),
+        ("/patches/patch", DRUMS),
+        ("/patches/patch", BEAT),
         ("/patches/patch", MASTER),
         ("/patches/patch", TRACK),
     ];

@@ -9,12 +9,14 @@
 //!   and mod envelopes children listed in `modulators`. A link is a binding
 //!   from a parameter onto one of those, carrying `lo` and `hi`.
 //! - `/arrangements/arrangement`: the level above the patch. Tempo and swing;
-//!   tracks in the order `tracks`, each playing the patch its reference
-//!   `track.patch` names (the first patch when it names none) at its fader
-//!   `track.gain`, on the engine's voice of its place in the order (epic
-//!   28), each step a child named by its number and
-//!   made only once it differs from a blank step; the kit, its beats made the
-//!   same way; its own chain, filter and output (a `master`, named `amp`).
+//!   tracks of two kinds in the one order `tracks` (epic 28). A melody
+//!   `track` plays the patch its reference `track.patch` names (the first
+//!   patch when it names none) at its fader `track.gain`, each step a child
+//!   named by its number and made only once it differs from a blank step. A
+//!   `drums` track (story d) holds its kit's switch, fader, tune, decay and
+//!   length, its beats made the same way. The *k*-th of each kind plays on
+//!   voice or kit *k* (`tracker::Slot`). Then the arrangement's own chain,
+//!   filter and output (a `master`, named `amp`).
 //! - `/materials/<sample>`: WAVs and the built-in drone. A generator reads
 //!   one through its reference `<kind>.source`.
 //!
@@ -34,7 +36,7 @@ use rhizome_pom::{Kinds, NodeValues, ObjectModel};
 use serde_json::{json, Value as Json};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
 use shard_dsp::fx::{self, Kind as Fx};
-use shard_dsp::kit::HIT_MAX;
+use shard_dsp::kit::{DECAY_MAX, DECAY_MIN, HIT_MAX, TUNE_RANGE};
 use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
 use shard_dsp::params::{ParamDef, Taper, GENERATORS, PARAMS};
 use shard_dsp::sources::OCTAVE_RANGE;
@@ -43,6 +45,7 @@ use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX}
 use crate::materials::Pool;
 use crate::modulation::{pluck_curve, MODES, NEW_RATE_HZ, NEW_SHAPE};
 use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX, TEMPO_MAX, TEMPO_MIN};
+use shard_dsp::KITS;
 
 mod compile;
 #[cfg(test)]
@@ -73,7 +76,8 @@ pub const PATCH: &str = "patch";
 pub const ARRANGEMENT: &str = "arrangement";
 pub const TRACK: &str = "track";
 pub const STEP: &str = "step";
-pub const KIT: &str = "kit";
+/// A drums track (epic 28, story d).
+pub const DRUMS: &str = "drums";
 pub const BEAT: &str = "beat";
 pub const MASTER: &str = "master";
 pub const LFO: &str = "lfo";
@@ -106,6 +110,23 @@ pub const TRACK_GAIN: &str = "track.gain";
 /// file's and never the history's.
 pub const TRACK_MUTE: &str = "track.mute";
 pub const TRACK_SOLO: &str = "track.solo";
+/// A drums track's, the same way.
+pub const DRUMS_MUTE: &str = "drums.mute";
+pub const DRUMS_SOLO: &str = "drums.solo";
+
+/// Whether a node is a track of either kind, as the order `tracks` lists.
+pub fn is_track(n: &Node<'_>) -> bool {
+    matches!(n.type_name(), TRACK | DRUMS)
+}
+
+/// A track node's mute and solo keys, by its kind.
+pub fn mix_keys(track: &Node<'_>) -> (&'static str, &'static str) {
+    if track.type_name() == DRUMS {
+        (DRUMS_MUTE, DRUMS_SOLO)
+    } else {
+        (TRACK_MUTE, TRACK_SOLO)
+    }
+}
 
 /// Played, not edited: a held button or a pedal writes them to the bank, and
 /// a document never stores them. The tape's gestures, on the arrangement's
@@ -180,7 +201,7 @@ enum Under {
     /// A patch or the arrangement: effects and the filter.
     Either,
     Track,
-    Kit,
+    Drums,
 }
 
 /// One kind as Shard declares it.
@@ -272,7 +293,7 @@ fn lives_under(node: &Node<'_>, under: Under) -> std::result::Result<(), String>
         Under::Arrangement => parent.type_name() == ARRANGEMENT,
         Under::Either => matches!(parent.type_name(), PATCH | ARRANGEMENT),
         Under::Track => parent.type_name() == TRACK,
-        Under::Kit => parent.type_name() == KIT,
+        Under::Drums => parent.type_name() == DRUMS,
     };
     if ok {
         Ok(())
@@ -641,7 +662,7 @@ pub fn kinds() -> Vec<KindDecl> {
         checked(arr, Under::Category, |n| {
             order_holds(n, CHAIN, is_effect)?;
             chain_fits(n)?;
-            order_holds(n, TRACKS, |c| c.type_name() == TRACK)
+            order_holds(n, TRACKS, is_track)
         }),
         Role::Structure,
         true,
@@ -708,21 +729,36 @@ pub fn kinds() -> Vec<KindDecl> {
         None,
     );
 
-    // The drum kit beside the tracks: a generator, its grid as beats.
-    let t = with_rows(
-        NodeType::new(KIT).in_categories(&[ARRANGEMENTS]),
-        &arrangement_rows("kit"),
-    )
-    .int(
-        "kit.length",
-        4..=STEPS as i64,
-        i64::from(Kit::default().length),
-    );
+    // A drums track (story d): a generator, so its switch and then its
+    // level, which is its fader; its kit's sound, its length, its mute and
+    // solo (only a saved file carries them), and its grid as beats.
+    let kit = Kit::default();
+    let t = NodeType::new(DRUMS)
+        .in_categories(&[ARRANGEMENTS])
+        .bool("drums.on", kit.on)
+        .float(
+            "drums.gain",
+            0.0..=float(TRACK_GAIN_MAX),
+            float(TRACK_GAIN_DEFAULT),
+        )
+        .float(
+            "drums.tune",
+            float(-TUNE_RANGE)..=float(TUNE_RANGE),
+            float(kit.tune),
+        )
+        .float(
+            "drums.decay",
+            float(DECAY_MIN)..=float(DECAY_MAX),
+            float(kit.decay),
+        )
+        .int("drums.length", 4..=STEPS as i64, i64::from(track.length))
+        .bool(DRUMS_MUTE, false)
+        .bool(DRUMS_SOLO, false);
     push(
-        checked(t, Under::Arrangement, |n| length_holds(n, "kit.length")),
+        checked(t, Under::Arrangement, |n| length_holds(n, "drums.length")),
         Role::Generator,
-        true,
-        Some(1),
+        false,
+        Some(KITS),
     );
 
     let hit = |key: &str| ValueSpec::int(key, 0..=i64::from(HIT_MAX), 0);
@@ -732,7 +768,7 @@ pub fn kinds() -> Vec<KindDecl> {
         .value(hit("beat.snare"))
         .value(hit("beat.hat"));
     push(
-        checked(t, Under::Kit, |n| {
+        checked(t, Under::Drums, |n| {
             step_number(n)
                 .map(|_| ())
                 .ok_or_else(|| format!("a beat is named 1 to {STEPS}"))
@@ -805,11 +841,16 @@ impl ObjectModel for Shard {
             }
             // A preset is a node's sound: its values and links, never its
             // switch, so applying one never switches a node in or out, and
-            // never a patch's name.
+            // never a patch's name or a drums track's mute and solo.
             if presets {
                 kind.presets(
                     NodeValues::new()
-                        .skip(|key| key.ends_with(".on") || key == PATCH_LABEL)
+                        .skip(|key| {
+                            key.ends_with(".on")
+                                || key == PATCH_LABEL
+                                || key == DRUMS_MUTE
+                                || key == DRUMS_SOLO
+                        })
                         .with_bindings(),
                 );
             }
@@ -869,20 +910,23 @@ pub trait ShardEdit {
     fn add_mod_env(&mut self, patch: NodeId) -> Result<NodeId>;
     /// `key` on `target` follows `source`, from `lo` to `hi` of its range.
     fn link(&mut self, target: NodeId, key: &str, source: NodeId, lo: f32, hi: f32) -> Result<()>;
-    /// The arrangement, its tracks and kit written from a tracker, with its
+    /// The arrangement and its tracks written from a tracker, with its
     /// filter and output at their defaults.
     fn add_arrangement(&mut self, tracker: &Tracker) -> Result<NodeId>;
-    /// A track at the end of the arrangement's order, written from `track`.
-    /// What it plays is left unset (the first patch).
+    /// A track at the end of the arrangement's order, written from `track`:
+    /// a `drums` node for a drums track, else a melody `track`, whose patch
+    /// is left unset (the first patch).
     fn add_track(&mut self, arr: NodeId, track: &Track) -> Result<NodeId>;
-    /// Makes the arrangement's tempo, swing, its tracks' steps, lengths and
-    /// faders, and the kit grid what `tracker` says, writing only what
+    /// Makes the arrangement's tempo, swing, and its tracks' steps or grids,
+    /// lengths, faders and kits what `tracker` says, writing only what
     /// differs. Tracks are matched by place, and none is added or removed:
     /// that is Add Track's and Remove Track's, so a stale tracker sent back
-    /// can't undo one. What a track plays is `track.patch`'s, never written
-    /// here.
+    /// can't undo one; a place whose kind differs (a stale tracker from
+    /// before one was added) is skipped. What a track plays is
+    /// `track.patch`'s, never written here.
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()>;
-    /// One track's steps, length and fader, writing only what differs.
+    /// One track's steps or grid, length, fader and kit, writing only what
+    /// differs.
     fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()>;
     /// Sets `key` to `want`, or resets it when `want` is its default, and
     /// writes nothing when it already is.
@@ -1037,7 +1081,6 @@ impl ShardEdit for Edit<'_> {
             ARRANGEMENT,
             ARRANGEMENT,
         )?;
-        self.add(arr, KIT, KIT)?;
         self.add(arr, "filter", "filter")?;
         self.add(arr, MASTER, "amp")?;
         for track in &tracker.tracks {
@@ -1048,7 +1091,8 @@ impl ShardEdit for Edit<'_> {
     }
 
     fn add_track(&mut self, arr: NodeId, track: &Track) -> Result<NodeId> {
-        let node = self.add_unique(arr, TRACK, TRACK)?;
+        let kind = if track.is_drums() { DRUMS } else { TRACK };
+        let node = self.add_unique(arr, kind, kind)?;
         self.append_to_order(arr, TRACKS, node)?;
         self.write_track(node, track)?;
         Ok(node)
@@ -1063,31 +1107,33 @@ impl ShardEdit for Edit<'_> {
             .map(|a| a.order(TRACKS).iter().map(|n| n.id()).collect())
             .unwrap_or_default();
         for (node, track) in existing.iter().zip(&tracker.tracks) {
-            self.write_track(*node, track)?;
-        }
-
-        let kit = self.at(arr).and_then(|a| a.child(KIT)).map(|k| k.id());
-        if let Some(kit) = kit {
-            self.put(kit, "kit.length", int(tracker.kit.length))?;
-            for i in 0..STEPS {
-                let hit = |row: &Vec<u8>| row.get(i).copied().unwrap_or(0);
-                let hits = [
-                    hit(&tracker.kit.kick),
-                    hit(&tracker.kit.snare),
-                    hit(&tracker.kit.hat),
-                ];
-                let fields = [
-                    ("beat.kick", int(hits[0])),
-                    ("beat.snare", int(hits[1])),
-                    ("beat.hat", int(hits[2])),
-                ];
-                self.put_cell(kit, BEAT, i, hits == [0; 3], fields)?;
+            let drums = self.at(*node).map(|n| n.type_name() == DRUMS);
+            if drums == Some(track.is_drums()) {
+                self.write_track(*node, track)?;
             }
         }
         Ok(())
     }
 
     fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()> {
+        if let Some(kit) = &track.drums {
+            self.put(node, "drums.on", Value::Bool(kit.on))?;
+            self.put(node, "drums.gain", Value::Float(float(track.gain)))?;
+            self.put(node, "drums.tune", Value::Float(float(kit.tune)))?;
+            self.put(node, "drums.decay", Value::Float(float(kit.decay)))?;
+            self.put(node, "drums.length", int(track.length))?;
+            for i in 0..STEPS {
+                let hit = |row: &Vec<u8>| row.get(i).copied().unwrap_or(0);
+                let hits = [hit(&kit.kick), hit(&kit.snare), hit(&kit.hat)];
+                let fields = [
+                    ("beat.kick", int(hits[0])),
+                    ("beat.snare", int(hits[1])),
+                    ("beat.hat", int(hits[2])),
+                ];
+                self.put_cell(node, BEAT, i, hits == [0; 3], fields)?;
+            }
+            return Ok(());
+        }
         self.put(node, "track.length", int(track.length))?;
         self.put(node, TRACK_GAIN, Value::Float(float(track.gain)))?;
         let blank = Step::default();

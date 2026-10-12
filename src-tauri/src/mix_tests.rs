@@ -7,7 +7,7 @@ use shard_dsp::{Engine, Mix};
 
 use crate::object_model as om;
 use crate::session::MixState;
-use crate::session_tests::{rig, Rig};
+use crate::session_tests::{melody_rig as rig, Rig};
 
 fn mix_of(r: &Rig, voice: usize) -> Mix {
     Mix::from_bits(
@@ -23,8 +23,8 @@ fn pressed(r: &Rig) -> Vec<(bool, bool)> {
 
 /// Three tracks, all on the first patch.
 fn three_tracks(r: &Rig) {
-    r.session.add_track().unwrap();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
+    r.session.add_track(false).unwrap();
     assert_eq!(r.session.track_count(), 3);
 }
 
@@ -129,7 +129,8 @@ fn a_new_session_starts_with_nothing_muted() {
     let r = rig();
     r.session.set_mute(0, true).unwrap();
     r.session.new_document(2).unwrap();
-    assert_eq!(pressed(&r), vec![(false, false)]);
+    // A new session's melody track and drums track.
+    assert_eq!(pressed(&r), vec![(false, false); 2]);
     assert!(!mix_of(&r, 0).mute);
 }
 
@@ -176,7 +177,7 @@ fn play_until(
 #[test]
 fn a_press_through_the_session_lands_on_the_next_bar() {
     let r = rig();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
     let mut e = Engine::new(48_000.0, 64);
     e.set_voice_active(0, false);
     let mut held = crate::Held::new();

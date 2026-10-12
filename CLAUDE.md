@@ -72,10 +72,13 @@ changed after every edit, undo, redo and open. **Every write goes through the
 session.** Nothing writes `bank` or `arrangement` directly except the played
 rows (`arrangement.tape.brake`, `arrangement.tape.reverse`, which slow every
 track): a direct write is reverted, silently, by
-the next edit. **Several tracks, one voice each** (epic 28): track *i* of
-the arrangement's order plays its own patch on engine voice *i*, through its
-own feed (`session::VoiceFeed`: bank, steps, readings, fader, switch and
-swap slots). The **current patch** (epic 10) is the session's, not the
+the next edit. **Several tracks, one voice or kit each** (epic 28): the
+arrangement's one order `tracks` holds melody tracks (`track` nodes) and
+drums tracks (`drums` nodes, story d). The *k*-th melody track plays its own
+patch on engine voice *k*, through its own feed (`session::VoiceFeed`: bank,
+steps, readings, fader, switch and swap slots); the *k*-th drums track plays
+engine kit *k* through `session::KitFeed`. Map a track's place to its voice
+or kit only through `tracker::Slot` (`Tracker::slots`), never by index. The **current patch** (epic 10) is the session's, not the
 document's: every patch-scoped command acts on it (`patch_node(tree,
 current)`, `locate`) and the patch view shows it, but it never decides what
 plays. A selected patch no track plays loops on the last voice
@@ -84,7 +87,8 @@ plays. A selected patch no track plays loops on the last voice
 are session state by track node (`Sent::mix`), never an edit, so a press is
 no undo step and no unsaved mark. `Session::save` writes them into a copy of
 the tree (`with_mix`) and saves that; `open` reads them back. Never write
-`track.mute` or `track.solo` into the live tree. The engine lands a press on
+`track.mute`, `track.solo` (or a drums track's `drums.mute`, `drums.solo`,
+`om::mix_keys`) into the live tree. The engine lands a press on
 the next bar (`shard_dsp::mix`; mute wins over solo).
 
 **The table is the patch, and the tracker is the level above it.** Tempo,
@@ -98,7 +102,7 @@ a block. A track's fader is `track.gain` on its node, not a row
 different patch does not belong in `params.rs`.
 
 **The arrangement has its own table.** Its chain over the tracks (its own
-palette, the filter and the output), the drum kit and the limiter live in
+palette, the filter and the output) and the limiter live in
 `shard_dsp::arrangement`, ids under `arrangement.`. Its effect rows are
 borrowed from `params.rs` so the two cannot drift. It reaches the engine
 through `Engine::set_arrangement`, once a block, and the patch preview hears

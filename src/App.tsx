@@ -49,7 +49,8 @@ import {
   lfoLimits,
   linkParam,
   listPatches,
-  MAX_TRACKS,
+  MAX_DRUMS_TRACKS,
+  MAX_MELODY_TRACKS,
   type MappingsView,
   type MaterialsView,
   type MaterialView,
@@ -88,6 +89,7 @@ import {
   type TrackerEdit,
   toggleTrackMute,
   toggleTrackSolo,
+  trackName,
   unlinkParam,
   wireMaterial,
 } from '@/audio';
@@ -159,7 +161,6 @@ export default function App() {
     grains: 0,
     playing: false,
     steps: [],
-    kit_step: -1,
     playhead: 0,
     auditioning: false,
     reversing: false,
@@ -842,14 +843,18 @@ export default function App() {
       setError(String(e));
     }
   };
-  // Add Track: one undo step, a track at the end playing the current patch,
-  // and it becomes the selection. Remove Track: one undo step, named for it.
-  const tracks = tracker?.tracks.length ?? 1;
-  const canAddTrack = tracks < MAX_TRACKS;
-  const canRemoveTrack = tracks > 1;
-  const addTrackRow = async () => {
+  // Add Track › Melody: one undo step, a track at the end playing the
+  // current patch; › Drums, a drums track at the end. Either becomes the
+  // selection, each greyed once its pool is full. Remove Track: one undo
+  // step, named for it; the last melody track stays.
+  const melodyTracks = tracker?.tracks.filter((t) => t.drums == null).length ?? 1;
+  const drumsTracks = (tracker?.tracks.length ?? 1) - melodyTracks;
+  const canAddMelody = melodyTracks < MAX_MELODY_TRACKS;
+  const canAddDrums = drumsTracks < MAX_DRUMS_TRACKS;
+  const canRemoveTrack = tracker?.tracks[selectedTrack]?.drums != null || melodyTracks > 1;
+  const addTrackRow = async (drums: boolean) => {
     try {
-      const added = await addTrack();
+      const added = await addTrack(drums);
       showTracker(await getTracker());
       await selectTrackRow(added);
     } catch (e) {
@@ -982,7 +987,10 @@ export default function App() {
         else if (deletableTrack) void removeTrackRow(selectedTrack);
         break;
       case 'track.add:melody':
-        if (canAddTrack) void addTrackRow();
+        if (canAddMelody) void addTrackRow(false);
+        break;
+      case 'track.add:drums':
+        if (canAddDrums) void addTrackRow(true);
         break;
       case 'track.remove':
         if (mode === 'tracker' && canRemoveTrack) void removeTrackRow(selectedTrack);
@@ -1026,7 +1034,8 @@ export default function App() {
       'edit.rename': canRename,
       'edit.duplicate': canDuplicate,
       'edit.delete': canDelete,
-      'track.add:melody': canAddTrack,
+      'track.add:melody': canAddMelody,
+      'track.add:drums': canAddDrums,
       'track.remove': mode === 'tracker' && canRemoveTrack,
       'track.mute': mode === 'tracker',
       'track.solo': mode === 'tracker',
@@ -1051,7 +1060,8 @@ export default function App() {
     canRename,
     canDuplicate,
     canDelete,
-    canAddTrack,
+    canAddMelody,
+    canAddDrums,
     canRemoveTrack,
     mode,
     selectedMute,
@@ -1175,7 +1185,7 @@ export default function App() {
             }
             onSelectTrack={(i) => void selectTrackRow(i)}
             onPlays={(track, id) => void pickPlays(track, id)}
-            onAddTrack={() => void addTrackRow()}
+            onAddTrack={(drums) => void addTrackRow(drums)}
             onRemoveTrack={(i) => void removeTrackRow(i)}
             mix={meter.mix}
             onMute={(i) => void toggleMute(i)}
@@ -1384,7 +1394,6 @@ export default function App() {
                 tracker={tracker}
                 index={selectedTrack}
                 step={meter.steps[selectedTrack] ?? -1}
-                kitStep={meter.kit_step}
                 // The current patch is the selected track's.
                 root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
                 patches={patches}
@@ -1422,15 +1431,23 @@ export default function App() {
                       )}
                     </div>
                     {/* The tracker's Patches lane: every track's fader first,
-                      each labelled by the patch it plays. */}
+                      a melody track labelled by the patch it plays, a drums
+                      track with its kit's switch, Tune and Decay. */}
                     {mode === 'tracker' &&
                       lane.id === 'generate' &&
                       tracker?.tracks.map((t, i) => (
                         <TrackFader
                           // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
                           key={i}
-                          index={i}
-                          patchName={patches.find((p) => p.id === t.patch)?.name ?? ''}
+                          name={trackName(tracker.tracks, i)}
+                          detail={patches.find((p) => p.id === t.patch)?.name}
+                          kit={t.drums}
+                          onKit={(drums) =>
+                            void changeTracker({
+                              ...tracker,
+                              tracks: tracker.tracks.map((x, j) => (j === i ? { ...x, drums } : x)),
+                            })
+                          }
                           gain={t.gain}
                           selected={selectedTrack === i && selection === null}
                           mix={meter.mix[i]}

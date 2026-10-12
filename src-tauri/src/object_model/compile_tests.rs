@@ -195,16 +195,24 @@ fn a_tracker_round_trips_through_the_tree() {
         ..Step::default()
     };
     let mut kit = Kit {
-        length: 16,
+        on: true,
+        tune: -3.0,
+        decay: 1.3,
         ..Kit::default()
     };
     kit.snare[3] = VELOCITY_MAX;
     kit.hat[63] = 1;
+    // A drums track between the melody tracks, and a blank one at the end.
+    let drums = Track {
+        length: 32,
+        gain: 0.7,
+        drums: Some(kit),
+        ..Track::blank()
+    };
     let tracker = Tracker {
         tempo: 87.0,
         swing: 0.12,
-        tracks: vec![first, Track::default()],
-        kit,
+        tracks: vec![first, drums, Track::default(), Track::blank_drums()],
     };
 
     let registry = new_session().tree().registry().clone();

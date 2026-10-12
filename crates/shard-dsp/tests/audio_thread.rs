@@ -534,41 +534,73 @@ fn held_steps_never_touch_the_allocator() {
 }
 
 #[test]
-fn the_drum_kit_never_touches_the_allocator() {
-    // Every voice on every step, so hits cut hits and tails overlap; the
-    // kit's length, tempo, swing and tune move along the way, and the kit
-    // switches off and on.
-    use shard_dsp::kit::{KitPattern, VOICES};
+fn every_drums_track_never_touches_the_allocator() {
+    // Every kit of the pool (story d) on every step, so hits cut hits and
+    // tails overlap; each kit's length, tune, decay and fader move along the
+    // way, its switch goes off and on, kits are switched out (ringing out)
+    // and back in mid-loop, and their mutes and solos land on the bars.
+    use shard_dsp::kit::{KitParams, KitPattern, VOICES as DRUMS};
     use shard_dsp::steps::STEPS;
+    use shard_dsp::KITS;
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(48_000));
     let bank = ParamBank::new();
     let arr = ParamBank::for_table(arrangement::params());
+    for k in 0..KITS {
+        e.set_kit_active(k, true);
+    }
     e.set_playing(true);
     let mut out = vec![0.0f32; 512];
 
     let ((), caught) = no_alloc(|| {
         for block in 0..1_200 {
-            arr.set_by_id("arrangement.kit.tune", (block % 25) as f32 - 12.0);
-            arr.set_by_id("arrangement.kit.decay", 0.25 + (block % 16) as f32 * 0.25);
-            arr.set_by_id("arrangement.kit.on", f32::from(u8::from(block % 200 < 150)));
-            e.set_arrangement(&arr, false);
+            e.set_arrangement(&arr, (block / 400) % 3 == 2);
             e.set_steps(StepParams {
                 on: true,
                 tempo_bpm: 120.0 + (block % 120) as f32,
                 swing: (block % 50) as f32 * 0.01,
                 pattern: 0xFFFF,
-                kit: KitPattern {
-                    length: [4, 8, 16, 32, 64][block / 100 % 5],
-                    hits: [[100; STEPS]; VOICES],
-                },
                 ..Default::default()
             });
+            for k in 0..KITS {
+                e.set_kit(
+                    k,
+                    KitPattern {
+                        length: [4, 8, 16, 32, 64][(block / 100 + k) % 5],
+                        hits: [[100 - k as u8 * 10; STEPS]; DRUMS],
+                    },
+                    KitParams {
+                        on: (block + k * 37) % 200 < 150,
+                        tune: ((block + k) % 25) as f32 - 12.0,
+                        decay: 0.25 + ((block + k) % 16) as f32 * 0.25,
+                    },
+                );
+                e.set_kit_gain(k, ((block + k * 7) % 40) as f32 * 0.05);
+                let m = Mix {
+                    mute: (block / (17 + k)) % 3 == 0,
+                    solo: (block / (31 + k)) % 5 == 0,
+                    solo_safe: false,
+                };
+                if block % 170 == 60 + k {
+                    e.place_kit_mix(k, m);
+                } else {
+                    e.set_kit_mix(k, m);
+                }
+                if block % 250 == 100 + k * 10 {
+                    e.set_kit_active(k, false);
+                }
+                if block % 250 == 180 + k * 10 {
+                    e.set_kit_active(k, true);
+                }
+                black_box(e.kit_mix(k));
+                black_box(e.kit_audible(k));
+                black_box(e.kit_step(k));
+            }
             e.process_block(&mut out, &bank);
             assert!(out.iter().all(|v| v.is_finite()), "block {block}");
         }
     });
-    assert_eq!(caught, 0, "the kit touched the allocator {caught} time(s)");
+    assert_eq!(caught, 0, "the kits touched the allocator {caught} time(s)");
 }
 
 #[test]
@@ -620,7 +652,18 @@ fn every_voice_playing_never_touches_the_allocator() {
         ));
     }
     let arr = ParamBank::for_table(arrangement::params());
-    arr.set_by_id("arrangement.kit.on", 1.0);
+    // Every kit playing too, under the voices.
+    for k in 0..shard_dsp::KITS {
+        e.set_kit(
+            k,
+            shard_dsp::KitPattern::default(),
+            shard_dsp::KitParams {
+                on: true,
+                ..shard_dsp::KitParams::default()
+            },
+        );
+        e.set_kit_active(k, true);
+    }
     e.set_transport(&StepParams {
         on: true,
         tempo_bpm: 180.0,
@@ -727,7 +770,17 @@ fn every_voice_playing_never_touches_the_allocator() {
                 black_box(e.voice_mix(i));
                 black_box(e.voice_audible(i));
             }
-            black_box(e.kit_audible());
+            for k in 0..shard_dsp::KITS {
+                e.set_kit_mix(
+                    k,
+                    Mix {
+                        mute: (block / (19 + k)) % 4 == 0,
+                        solo: (block / (37 + k)) % 6 == 0,
+                        solo_safe: false,
+                    },
+                );
+                black_box(e.kit_audible(k));
+            }
             // Every voice's fader moving, and what the shown voice heard,
             // where it is and how many grains it has, as the host reads them.
             for i in 0..VOICES {

@@ -5,7 +5,7 @@
 //! the patch's own chain, the envelopes, the fades, the smoothers, the
 //! modulation, the note clock, and the track's steps. The engine
 //! (`engine.rs`) holds the arrangement around it: the transport, the tape,
-//! the drum kit, the arrangement's chain and the limiter.
+//! the drums tracks' kits, the arrangement's chain and the limiter.
 //!
 //! Epic 28 (several tracks): the engine holds a fixed pool of these, each
 //! reading its own bank, modulation, materials and steps, all on the one

@@ -17,8 +17,9 @@ use shard_dsp::fx::Kind;
 pub const FX_ADD_PREFIX: &str = "fx-add:";
 
 /// The Track menu's Add ▸ kinds, by the menu standard's `<collection>.add:<kind>`
-/// scheme (epic 28). Melody today; Drums joins it in story d.
+/// scheme (epic 28): a melody track, or a drums track (story d).
 pub const TRACK_ADD_MELODY: &str = "track.add:melody";
+pub const TRACK_ADD_DRUMS: &str = "track.add:drums";
 
 /// The app's name, as the App menu and About show it.
 pub const APP_NAME: &str = "Shard";
@@ -42,6 +43,8 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     // Logic's New Tracks chord. Remove Track has none: every Cmd+Backspace
     // is taken (Remove Effect, Clear Bar) or would be stolen from text fields.
     (TRACK_ADD_MELODY, "CmdOrCtrl+Alt+N"),
+    // Logic's New Drummer Track chord.
+    (TRACK_ADD_DRUMS, "CmdOrCtrl+Alt+U"),
     // Logic's Mute Track and Solo Track: Control, not Command, so Minimise
     // and Save keep theirs.
     ("track.mute", "Ctrl+M"),
@@ -121,6 +124,7 @@ pub fn commands() -> Vec<Command> {
         // first with its kinds, then Remove on the selected track, greyed for
         // the last one. Before Pattern, which edits the selected track.
         track(TRACK_ADD_MELODY, "Melody", 0).submenu("Add Track"),
+        track(TRACK_ADD_DRUMS, "Drums", 0).submenu("Add Track"),
         track("track.remove", "Remove Track", 1),
         // Mute and solo the selected track, checked as it is pressed. They
         // land on the next bar, and are not edits (story c).

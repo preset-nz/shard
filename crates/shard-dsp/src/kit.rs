@@ -1,27 +1,28 @@
-//! The drum kit: kick, snare and hat, synthesised, on the tracker's clock.
+//! The drum kit: kick, snare and hat, synthesised, on the transport's clock.
 //!
-//! A stop-gap until roadmap row 25 (a kit sliced from a material) and row 28
-//! (several tracks). Georg, 2026-10-03: *"I need a quick way to play a drum
-//! beat, base, snare, hihat at least."* The melody track is one monophonic
-//! voice playing the patch, so a kick and a hat could not land on the same
-//! step. The kit is beside it, not inside it:
+//! A stop-gap until roadmap row 25 (a kit sliced from a material). Georg,
+//! 2026-10-03: *"I need a quick way to play a drum beat, base, snare, hihat
+//! at least."* Since epic 28, story d, **drums are a track type**: each
+//! drums track plays one `Kit` of the engine's pool (`engine::KITS`), with
+//! its own grid, length, sound, fader, mute and solo.
 //!
-//! - **A switch like any node's.** `arrangement.kit.on`, on the Drums card.
-//!   Its clock runs while it is off, so switching it on lands on the grid.
+//! - **A switch like any node's.** `KitParams::on`, on the track's card. Its
+//!   clock runs while it is off, so switching it on lands on the grid.
 //! - **Its own grid.** A row per voice and a byte per step: zero is off,
 //!   anything else is the hit's velocity. Several voices fire on one step.
 //! - **The transport's clock.** The kit does not count time itself. It reads
 //!   where the shared transport is (`steps::Beat`), so it stays on every
 //!   track's grid whatever its own length, and through a tempo change. The
 //!   arrangement's swing applies; nudge does not.
-//! - **After the patch.** It joins the mix after the patch's fader and before
-//!   the arrangement's chain, so the patch's envelope, velocity and Hold
-//!   never touch it, and the arrangement's effects and limiter do. It is on
-//!   the tape, so a brake slows it with everything else (`process_at`). In
-//!   sound scaping it is silent: that mode hears the patch alone.
+//! - **No patch.** It joins the mix after its track's fader and before the
+//!   arrangement's chain, so no patch's envelope, velocity or effects touch
+//!   it, and the arrangement's effects and limiter do. It is on the tape, so
+//!   a brake slows it with everything else (`process_at`).
 //!
 //! No samples: each voice is a few lines of synthesis, sized at construction,
 //! with nothing allocated per hit.
+
+use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::rng::Rng;
 use crate::steps::STEPS;
@@ -111,10 +112,18 @@ impl KitClock {
     }
 }
 
-/// The kit's sound, from the arrangement's table once a block.
+/// How far Tune reaches, in semitones either way.
+pub const TUNE_RANGE: f32 = 12.0;
+/// Decay's range, a factor on every voice's own.
+pub const DECAY_MIN: f32 = 0.25;
+pub const DECAY_MAX: f32 = 4.0;
+
+/// A drums track's sound, handed to its kit once a block.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KitParams {
-    /// Semitones, every voice together.
+    /// Whether it plays: off, no new hit starts and its fader closes.
+    pub on: bool,
+    /// Semitones, every voice together, up to `TUNE_RANGE` either way.
     pub tune: f32,
     /// A factor on every voice's decay: 1 is as designed.
     pub decay: f32,
@@ -123,9 +132,82 @@ pub struct KitParams {
 impl Default for KitParams {
     fn default() -> Self {
         Self {
+            on: false,
             tune: 0.0,
             decay: 1.0,
         }
+    }
+}
+
+/// Words of eight steps a byte each.
+const WORDS: usize = STEPS / 8;
+
+/// A drums track's grid and sound, shared between whatever edits it and the
+/// audio thread, the way `StepBank` shares a track's steps. Stored whole,
+/// read whole once a block.
+pub struct KitBank {
+    length: AtomicU32,
+    /// The hits, a voice at a time, a byte a step, step one in the low byte.
+    hits: [[AtomicU64; WORDS]; VOICES],
+    on: AtomicBool,
+    tune: AtomicU32,
+    decay: AtomicU32,
+}
+
+impl KitBank {
+    pub fn new(p: &KitPattern, q: &KitParams) -> Self {
+        let bank = Self {
+            length: AtomicU32::new(0),
+            hits: std::array::from_fn(|_| std::array::from_fn(|_| AtomicU64::new(0))),
+            on: AtomicBool::new(false),
+            tune: AtomicU32::new(0),
+            decay: AtomicU32::new(0),
+        };
+        bank.store(p, q);
+        bank
+    }
+
+    pub fn store(&self, p: &KitPattern, q: &KitParams) {
+        for (v, row) in p.hits.iter().enumerate() {
+            for w in 0..WORDS {
+                let word = row[w * 8..w * 8 + 8]
+                    .iter()
+                    .enumerate()
+                    .fold(0u64, |acc, (i, b)| acc | (u64::from(*b) << (i * 8)));
+                self.hits[v][w].store(word, Ordering::Relaxed);
+            }
+        }
+        self.length.store(p.length, Ordering::Relaxed);
+        self.on.store(q.on, Ordering::Relaxed);
+        self.tune.store(q.tune.to_bits(), Ordering::Relaxed);
+        self.decay.store(q.decay.to_bits(), Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn load(&self) -> (KitPattern, KitParams) {
+        let mut hits = [[0u8; STEPS]; VOICES];
+        for (v, row) in hits.iter_mut().enumerate() {
+            for (i, hit) in row.iter_mut().enumerate() {
+                *hit = (self.hits[v][i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
+            }
+        }
+        (
+            KitPattern {
+                length: self.length.load(Ordering::Relaxed),
+                hits,
+            },
+            KitParams {
+                on: self.on.load(Ordering::Relaxed),
+                tune: f32::from_bits(self.tune.load(Ordering::Relaxed)),
+                decay: f32::from_bits(self.decay.load(Ordering::Relaxed)),
+            },
+        )
+    }
+}
+
+impl Default for KitBank {
+    fn default() -> Self {
+        Self::new(&KitPattern::default(), &KitParams::default())
     }
 }
 
@@ -224,12 +306,19 @@ fn fall_over(seconds: f32, sample_rate: f32) -> f32 {
 
 impl Kit {
     pub fn new(sample_rate: f32) -> Self {
+        Self::seeded(sample_rate, 0)
+    }
+
+    /// A kit whose noise is salted by `salt` (`rng::salt` of its place in
+    /// the pool), so two drums tracks playing one grid are not the same
+    /// hiss. Salt 0 is the seed the kit always had.
+    pub fn seeded(sample_rate: f32, salt: u32) -> Self {
         Self {
             sample_rate,
             voices: [Voice::default(); VOICES],
             tails: [Voice::default(); VOICES],
             tail_left: [0.0; VOICES],
-            noise: Rng::new(0x005E_EDD2),
+            noise: Rng::new(0x005E_EDD2 ^ salt),
             tape_at: 0.0,
             tape_last: 0.0,
             tape_next: 0.0,
@@ -383,6 +472,33 @@ mod tests {
             assert!(!kit.sounding(), "voice {v} still sounding after 3 s");
             assert_eq!(*out.last().unwrap(), 0.0, "voice {v}");
         }
+    }
+
+    #[test]
+    fn a_kit_bank_hands_over_what_it_was_given() {
+        let p = KitPattern {
+            length: 32,
+            hits: std::array::from_fn(|v| std::array::from_fn(|i| ((i * 11 + v * 29) % 128) as u8)),
+        };
+        let q = KitParams {
+            on: true,
+            tune: -3.0,
+            decay: 1.3,
+        };
+        let bank = KitBank::default();
+        assert_eq!(bank.load(), (KitPattern::default(), KitParams::default()));
+        bank.store(&p, &q);
+        assert_eq!(bank.load(), (p, q));
+    }
+
+    #[test]
+    fn two_salts_are_two_hisses() {
+        let p = KitParams::default();
+        let mut a = Kit::seeded(SR, 0);
+        let mut b = Kit::seeded(SR, crate::rng::salt(1));
+        a.hit(HAT, 1.0, &p);
+        b.hit(HAT, 1.0, &p);
+        assert_ne!(render(&mut a, 480), render(&mut b, 480));
     }
 
     #[test]

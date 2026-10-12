@@ -1,50 +1,55 @@
-//! The drum kit in the engine (`kit.rs`): beside the patch, on the
-//! tracker's clock. The kit's own sound is tested in `kit.rs`; these hold
+//! The drums tracks' kits in the engine (`kit.rs`): beside the patches, on
+//! the transport's clock. The kit's own sound is tested in `kit.rs`; these hold
 //! where it joins the engine, through its public face only.
 
 use shard_dsp::arrangement;
-use shard_dsp::{Engine, ParamBank, StepParams};
+use shard_dsp::kit::{KitParams, KitPattern};
+use shard_dsp::{Engine, Mix, ParamBank, StepParams, KITS};
 
-/// Steps running with no melody step set, so the drums sound alone, as
-/// sound scaping hears the patch alone. `hits` are (voice, step) pairs.
-fn drums_alone(hits: &[(usize, usize)], length: u32) -> StepParams {
-    let mut kit = shard_dsp::kit::KitPattern {
+/// A grid of `hits`, (voice, step) pairs, at full velocity.
+fn grid(hits: &[(usize, usize)], length: u32) -> KitPattern {
+    let mut kit = KitPattern {
         length,
         hits: [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES],
     };
     for &(v, k) in hits {
         kit.hits[v][k] = shard_dsp::kit::HIT_MAX;
     }
+    kit
+}
+
+/// Steps running with no melody step set, so the drums sound alone.
+fn steps() -> StepParams {
     StepParams {
         on: true,
         pattern: 0,
-        kit,
         ..Default::default()
     }
 }
 
-/// The arrangement with the Drums card switched on.
-fn kit_on() -> ParamBank {
-    let arr = ParamBank::for_table(arrangement::params());
-    arr.set_by_id("arrangement.kit.on", 1.0);
-    arr
-}
+/// A drums track switched on.
+const ON: KitParams = KitParams {
+    on: true,
+    tune: 0.0,
+    decay: 1.0,
+};
 
-/// An engine in tracker mode with the drums switched on.
-fn drums_engine() -> Engine {
+/// An engine on a running transport, kit 0 playing `kit`.
+fn drums_engine(kit: KitPattern) -> Engine {
     let mut e = Engine::new(48_000.0, 64);
-    e.set_arrangement(&kit_on(), false);
+    e.set_arrangement(&ParamBank::for_table(arrangement::params()), false);
+    e.set_steps(steps());
+    e.set_kit(0, kit, ON);
     e
 }
 
-fn render_steps(p: StepParams, frames: usize) -> Vec<f32> {
-    render_with(p, frames, &kit_on())
+fn render_kit(kit: KitPattern, frames: usize) -> Vec<f32> {
+    render_with(kit, ON, frames)
 }
 
-fn render_with(p: StepParams, frames: usize, arr: &ParamBank) -> Vec<f32> {
-    let mut e = Engine::new(48_000.0, 64);
-    e.set_arrangement(arr, false);
-    e.set_steps(p);
+fn render_with(kit: KitPattern, params: KitParams, frames: usize) -> Vec<f32> {
+    let mut e = drums_engine(kit);
+    e.set_kit(0, kit, params);
     e.set_playing(true);
     let bank = ParamBank::new();
     let mut out = vec![0.0; 512];
@@ -61,9 +66,9 @@ fn a_kick_and_a_hat_on_one_step_both_sound() {
     use shard_dsp::kit::{HAT, KICK};
     // The whole point: the melody track is monophonic, the kit is not.
     let frames = 6_000;
-    let kick = render_steps(drums_alone(&[(KICK, 0)], 16), frames);
-    let hat = render_steps(drums_alone(&[(HAT, 0)], 16), frames);
-    let both = render_steps(drums_alone(&[(KICK, 0), (HAT, 0)], 16), frames);
+    let kick = render_kit(grid(&[(KICK, 0)], 16), frames);
+    let hat = render_kit(grid(&[(HAT, 0)], 16), frames);
+    let both = render_kit(grid(&[(KICK, 0), (HAT, 0)], 16), frames);
     let energy = |x: &[f32]| x.iter().map(|s| s * s).sum::<f32>();
     assert!(energy(&kick) > 1.0 && energy(&hat) > 0.1);
     // Neither cuts the other. The kit's glue saturates the sum, so together
@@ -88,9 +93,8 @@ fn a_kit_hit_lands_on_its_step() {
     use shard_dsp::kit::SNARE;
     // Step five at 120 bpm is four sixteenths in: 24,000 frames at 48 k,
     // then the limiter's look-ahead.
-    let mut e = drums_engine();
+    let mut e = drums_engine(grid(&[(SNARE, 4)], 16));
     let latency = e.latency();
-    e.set_steps(drums_alone(&[(SNARE, 4)], 16));
     e.set_playing(true);
     let bank = ParamBank::new();
     let mut out = vec![0.0; 512];
@@ -109,18 +113,18 @@ fn the_kit_keeps_the_melodys_grid_through_a_tempo_change() {
     // Whatever each loop's length, both are on the same sixteenth of the
     // shorter one, every block.
     for (track, kit) in [(64u32, 16u32), (16, 64), (8, 32)] {
-        let mut e = drums_engine();
+        let mut e = drums_engine(grid(&[], kit));
         e.set_playing(true);
         let bank = ParamBank::new();
         let mut out = vec![0.0; 256];
-        let mut p = drums_alone(&[], kit);
+        let mut p = steps();
         p.length = track;
         let span = track.min(kit);
         for block in 0..4_000 {
             p.tempo_bpm = 90.0 + ((block / 300) % 4) as f32 * 40.0;
             e.set_steps(p);
             e.process_block(&mut out, &bank);
-            let (Some(m), Some(k)) = (e.current_step(), e.current_kit_step()) else {
+            let (Some(m), Some(k)) = (e.current_step(), e.kit_step(0)) else {
                 panic!("block {block}: a clock is not running");
             };
             assert_eq!(
@@ -133,16 +137,13 @@ fn the_kit_keeps_the_melodys_grid_through_a_tempo_change() {
 }
 
 #[test]
-fn the_kit_is_silent_in_sound_scaping() {
+fn the_kit_is_silent_with_the_patch_alone() {
     use shard_dsp::kit::KICK;
-    // Sound scaping is the steps off and the patch alone. A kit switched
-    // on, with a beat in it, must not leak in.
-    let mut p = drums_alone(&[(KICK, 0), (KICK, 4), (KICK, 8)], 16);
-    p.on = false;
-    let mut e = Engine::new(48_000.0, 64);
+    // The patch heard alone: a kit switched on, with a beat in it, must not
+    // leak in.
+    let mut e = drums_engine(grid(&[(KICK, 0), (KICK, 4), (KICK, 8)], 16));
     e.set_playing(true);
-    e.set_steps(p);
-    e.set_arrangement(&kit_on(), true);
+    e.set_arrangement(&ParamBank::for_table(arrangement::params()), true);
     let bank = ParamBank::new();
     bank.set_by_id("material.on", 0.0);
     let mut out = vec![0.0; 512];
@@ -155,10 +156,87 @@ fn the_kit_is_silent_in_sound_scaping() {
 #[test]
 fn a_kit_switched_off_plays_nothing() {
     use shard_dsp::kit::KICK;
-    // The arrangement at its defaults: the Drums card starts off.
-    let p = drums_alone(&[(KICK, 0), (KICK, 4)], 16);
-    let off = ParamBank::for_table(arrangement::params());
-    assert!(render_with(p, 48_000, &off).iter().all(|s| *s == 0.0));
+    // A drums track's switch starts off, as the Drums card's did.
+    let p = grid(&[(KICK, 0), (KICK, 4)], 16);
+    assert!(render_with(p, KitParams::default(), 48_000)
+        .iter()
+        .all(|s| *s == 0.0));
+}
+
+/// Kits `kits` on a running transport, each with its own grid, `events`
+/// (block, kit, mix) handed over before their block. The left channel.
+fn render_kits(kits: &[(usize, KitPattern)], events: &[(usize, usize, Mix)]) -> Vec<f32> {
+    let mut e = Engine::new(48_000.0, 64);
+    let arr = ParamBank::for_table(arrangement::params());
+    arr.set_by_id("arrangement.amp.limit", 0.0);
+    e.set_arrangement(&arr, false);
+    e.set_steps(steps());
+    e.set_kit_active(0, false);
+    for &(k, p) in kits {
+        e.set_kit(k, p, ON);
+        e.set_kit_active(k, true);
+    }
+    e.set_playing(true);
+    let bank = ParamBank::new();
+    let mut out = vec![0.0; 512];
+    let mut all = Vec::new();
+    for block in 0..400 {
+        for (_, k, m) in events.iter().filter(|(b, _, _)| *b == block) {
+            e.set_kit_mix(*k, *m);
+        }
+        e.process_block(&mut out, &bank);
+        all.extend(out.iter().step_by(2));
+    }
+    all
+}
+
+#[test]
+fn two_drums_tracks_both_sound_and_differ() {
+    use shard_dsp::kit::{HAT, KICK, SNARE};
+    // Story d: each drums track plays its own kit. A kick on one and a snare
+    // on another both come through, and the same grid on two kits is not
+    // the same sound, since each kit's noise is salted by its place.
+    let kick = grid(&[(KICK, 0)], 16);
+    let snare = grid(&[(SNARE, 4)], 16);
+    let both = render_kits(&[(0, kick), (2, snare)], &[]);
+    let at = |frame: usize| {
+        both[frame..frame + 4_800]
+            .iter()
+            .map(|s| s * s)
+            .sum::<f32>()
+    };
+    assert!(at(0) > 1.0, "the kick on kit 0 is silent");
+    assert!(at(24_000) > 1.0, "the snare on kit 2 is silent");
+    let hats = grid(&[(HAT, 0)], 16);
+    let one = render_kits(&[(1, hats)], &[]);
+    let other = render_kits(&[(3, hats)], &[]);
+    assert!(one.iter().any(|s| *s != 0.0));
+    assert_ne!(one, other, "two kits on one grid are identical");
+    // Every kit at once stays in range.
+    let all = render_kits(&(0..KITS).map(|k| (k, kick)).collect::<Vec<_>>(), &[]);
+    assert!(all.iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+}
+
+#[test]
+fn a_drums_tracks_mute_lands_on_the_bar() {
+    use shard_dsp::kit::HAT;
+    // Hats on every sixteenth; a mute pressed early in the first bar. Up to
+    // the gate before the bar line the kit plays as unmuted, and from the
+    // line on it is silent.
+    let hats = grid(&(0..16).map(|k| (HAT, k)).collect::<Vec<_>>(), 16);
+    let mute = Mix {
+        mute: true,
+        ..Mix::default()
+    };
+    let open = render_kits(&[(1, hats)], &[]);
+    let muted = render_kits(&[(1, hats)], &[(10, 1, mute)]);
+    let latency = Engine::new(48_000.0, 1).latency();
+    // A bar at 120 bpm is two seconds.
+    let bar = 96_000 + latency;
+    let fade = shard_dsp::mix::gate_frames(48_000.0);
+    assert_eq!(open[..bar - fade], muted[..bar - fade]);
+    assert!(muted[bar..].iter().all(|s| *s == 0.0));
+    assert!(open[bar..].iter().any(|s| *s != 0.0));
 }
 
 #[test]
@@ -167,9 +245,7 @@ fn the_default_beat_is_loud_enough_to_stand_beside_a_patch() {
     // on drums and master". The voices peaked near full scale but fell away
     // so fast their level was -20 dBFS, and the limiter held the peaks, so
     // no fader could help. A drum loop sits nearer -12.
-    let mut p = drums_alone(&[], 16);
-    p.kit = shard_dsp::kit::KitPattern::default();
-    let out = render_steps(p, 96_000);
+    let out = render_kit(KitPattern::default(), 96_000);
     let rms = (out.iter().map(|s| s * s).sum::<f32>() / out.len() as f32).sqrt();
     let db = 20.0 * rms.log10();
     assert!(db > -15.0, "the default beat is {db:.1} dBFS");

@@ -32,10 +32,11 @@ export interface Meters {
   reduction: number;
   grains: number;
   playing: boolean;
-  /** Each track's step, in the tracks' order, from zero, or -1 while the transport is off. */
+  /**
+   * Each track's step, in the tracks' order, from zero, or -1 while the
+   * transport is off: a melody track's and a drums track's alike.
+   */
   steps: number[];
-  /** The drum kit's step, the same way. Its loop has its own length. */
-  kit_step: number;
   /** Where the current patch's plain playback has reached, 0 to 1. */
   playhead: number;
   /** True while one grain is being played on its own. */
@@ -183,13 +184,21 @@ export const newPatch = () => invoke<number>('new_patch');
  */
 export const selectPatch = (id: number) => invoke<void>('select_patch', { id });
 /**
- * Select a track: its patch becomes current and nothing is auditioned. Not an
- * edit. Followed by `document-opened` when the current patch changed.
+ * Select a track: a melody track's patch becomes current and nothing is
+ * auditioned; a drums track leaves the current patch alone. Not an edit.
+ * Followed by `document-opened` when the current patch changed.
  */
 export const selectTrack = (track: number) => invoke<void>('select_track', { track });
-/** Add Track: a melody track at the end, playing the current patch. One step of Undo. */
-export const addTrack = () => invoke<number>('add_track');
-/** Remove Track: one step of Undo, "Remove Track 2". Refused for the last track. */
+/**
+ * Add Track: a melody track at the end, playing the current patch, "Add
+ * Track"; with `drums`, a drums track switched on with an empty grid, "Add
+ * Drums". One step of Undo. Answers its place.
+ */
+export const addTrack = (drums: boolean) => invoke<number>('add_track', { drums });
+/**
+ * Remove Track: one step of Undo, "Remove Track 2" or "Remove Drums 1".
+ * Refused for the last melody track.
+ */
 export const removeTrack = (track: number) => invoke<void>('remove_track', { track });
 /**
  * Mutes a track, or unmutes it: on the next bar while playing and at once
@@ -533,51 +542,71 @@ export interface Step {
 }
 
 /**
- * A track of steps, playing one patch on its own voice. Monophonic: a new
- * step cuts the last. Track *n* is "Track n" by its place.
+ * A track, of one of two kinds (epic 28). A melody track plays one patch on
+ * its own voice, monophonic: a new step cuts the last. A drums track
+ * (`drums` set) plays a synthesised kit and no patch. Each kind is named by
+ * its place among its own kind: "Track 2", "Drums 1" (`trackName`).
  */
 export interface Track {
   /** 4, 8, 16, 32 or 64 sixteenths: up to four bars. */
   length: number;
   /** Its fader in the mix, 0 to 2. */
   gain: number;
-  /** The patch it plays, by id. Read only: a pick goes through `setTrackPatch`. */
+  /** The patch it plays, by id; null on a drums track. Read only: a pick goes through `setTrackPatch`. */
   patch: number | null;
-  /** Sixty-four steps, step one first. Those past `length` are kept, not played. */
+  /** Sixty-four steps, step one first. Those past `length` are kept, not played. Blank on a drums track. */
   steps: Step[];
+  /** A drums track's kit; null on a melody track. */
+  drums: Kit | null;
 }
 
 /**
  * The level above the patch: the arrangement's tempo and swing, and its
- * tracks, up to eight, each playing its own patch.
+ * tracks in one order: up to eight melody tracks, each playing its own
+ * patch, and up to four drums tracks.
  */
 export interface Tracker {
   tempo: number;
   /** Of a sixteenth, 0 to 0.75, on the even steps. */
   swing: number;
   tracks: Track[];
-  /** The drum kit beside the tracks, on their clock. */
-  kit: Kit;
+}
+
+/** A track's name by its place among its own kind: "Track 2", "Drums 1". */
+export function trackName(tracks: Track[], i: number): string {
+  const drums = tracks[i]?.drums != null;
+  const nth = tracks.slice(0, i + 1).filter((t) => (t.drums != null) === drums).length;
+  return `${drums ? 'Drums' : 'Track'} ${Math.max(1, nth)}`;
 }
 
 /** The kit's voices, in the order its rows are drawn. */
 export const KIT_VOICES = ['kick', 'snare', 'hat'] as const;
 export type KitVoice = (typeof KIT_VOICES)[number];
 
+/** Tune's reach in semitones either way, and Decay's range. `kit.rs` in Rust. */
+export const KIT_TUNE_RANGE = 12;
+export const KIT_DECAY_MIN = 0.25;
+export const KIT_DECAY_MAX = 4;
+
 /**
- * The drum kit: kick, snare and hat, synthesised. Each row is a velocity a
- * step, 0 to 127, zero for no hit, so several drums land on one step. A
- * stop-gap until a kit sliced from a material (roadmap row 25).
+ * A drums track's kit: kick, snare and hat, synthesised. Each row is a
+ * velocity a step, 0 to 127, zero for no hit, so several drums land on one
+ * step. Its length and fader are the track's. A stop-gap until a kit sliced
+ * from a material (roadmap row 25).
  */
 export interface Kit extends Record<KitVoice, number[]> {
-  /** 4, 8, 16, 32 or 64 sixteenths, as a track's. */
-  length: number;
+  /** Whether it plays. */
+  on: boolean;
+  /** Semitones, every drum together. */
+  tune: number;
+  /** A factor on every drum's decay; 1 is as designed. */
+  decay: number;
 }
 
 export const getTracker = () => invoke<Tracker>('tracker');
 /**
- * Takes the tempo, swing, kit and each track's steps, length and fader, by
- * place; never adds, removes or re-patches a track. Answers with it clamped
+ * Takes the tempo, swing and each track's steps or grid, length, fader and
+ * kit, by place; never adds, removes or re-patches a track. Answers with it clamped
  * and snapped, as the engine plays it.
  */
 export const setTracker = (tracker: Tracker) => invoke<Tracker>('set_tracker', { tracker });
@@ -597,8 +626,10 @@ export type TrackerEdit =
 export const editTracker = (track: number, edit: TrackerEdit) =>
   invoke<Tracker>('edit_tracker', { track, edit });
 
-/** The most tracks a session plays at once: the engine's voices. */
-export const MAX_TRACKS = 8;
+/** The most melody tracks a session plays at once: the engine's voices. */
+export const MAX_MELODY_TRACKS = 8;
+/** The most drums tracks: the engine's kits. */
+export const MAX_DRUMS_TRACKS = 4;
 
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];

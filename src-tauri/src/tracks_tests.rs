@@ -10,7 +10,7 @@ use shard_dsp::{Engine, VOICES};
 
 use crate::patch_tests::worst_jump;
 use crate::session::AUDITION;
-use crate::session_tests::{rig, Rig};
+use crate::session_tests::{melody_rig as rig, Rig};
 use crate::tracker::Step;
 
 fn active(r: &Rig, i: usize) -> bool {
@@ -39,7 +39,7 @@ fn two_tracks(r: &Rig) -> (u64, u64) {
     let first = r.session.patches()[0].id;
     let second = r.session.new_patch().unwrap();
     r.session.set_param("grain.size", 120.0).unwrap();
-    assert_eq!(r.session.add_track().unwrap(), 1);
+    assert_eq!(r.session.add_track(false).unwrap(), 1);
     (first, second)
 }
 
@@ -141,7 +141,7 @@ fn a_pattern_edit_on_one_track_leaves_the_others() {
 fn a_stale_tracker_sent_back_never_adds_or_removes_a_track() {
     let r = rig();
     let stale = r.session.tracker();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
     let mut t = stale;
     t.tempo = 99.0;
     r.session.set_tracker(t).unwrap();
@@ -156,7 +156,7 @@ fn a_stale_tracker_sent_back_never_adds_or_removes_a_track() {
 fn add_track_is_one_undo_step_and_refused_once_every_voice_has_one() {
     let r = rig();
     let before = r.session.history_labels().0.len();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
     assert_eq!(r.session.history().0.as_deref(), Some("Add Track"));
     assert_eq!(r.session.history_labels().0.len(), before + 1);
     assert!(r.session.is_unsaved());
@@ -168,10 +168,10 @@ fn add_track_is_one_undo_step_and_refused_once_every_voice_has_one() {
     assert_eq!(r.session.tracker().tracks.len(), 2);
 
     while r.session.track_count() < VOICES {
-        r.session.add_track().unwrap();
+        r.session.add_track(false).unwrap();
     }
     let history = r.session.history_labels();
-    assert!(r.session.add_track().is_err());
+    assert!(r.session.add_track(false).is_err());
     assert_eq!(r.session.history_labels(), history, "and no step");
     assert!((0..VOICES).all(|i| active(&r, i)));
 }
@@ -180,8 +180,8 @@ fn add_track_is_one_undo_step_and_refused_once_every_voice_has_one() {
 fn removing_a_middle_track_keeps_the_later_ones_and_undo_brings_it_back() {
     let r = rig();
     let patches: Vec<u64> = (0..2).map(|_| r.session.new_patch().unwrap()).collect();
-    r.session.add_track().unwrap();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
+    r.session.add_track(false).unwrap();
     r.session.set_track_patch(1, patches[0]).unwrap();
     r.session.set_track_patch(2, patches[1]).unwrap();
     let mut t = r.session.tracker();
@@ -286,7 +286,7 @@ fn an_unplayed_patch_is_auditioned_while_selected_and_only_then() {
 fn with_every_voice_on_a_track_nothing_is_auditioned() {
     let r = rig();
     while r.session.track_count() < VOICES {
-        r.session.add_track().unwrap();
+        r.session.add_track(false).unwrap();
     }
     let lone = r.session.new_patch().unwrap();
     let last = r.voice(AUDITION).steps.load();
@@ -304,7 +304,7 @@ fn with_every_voice_on_a_track_nothing_is_auditioned() {
 fn several_tracks_save_and_open_as_they_were() {
     let a = rig();
     let (_, second) = two_tracks(&a);
-    a.session.add_track().unwrap();
+    a.session.add_track(false).unwrap();
     let mut t = a.session.tracker();
     t.tracks[1].steps[9] = Step {
         on: true,
@@ -372,7 +372,7 @@ fn three_sounding(r: &Rig) {
         ] {
             r.session.set_param(id, v).unwrap();
         }
-        r.session.add_track().unwrap();
+        r.session.add_track(false).unwrap();
         let mut t = r.session.tracker();
         for (i, s) in t.tracks[track].steps.iter_mut().enumerate().take(16) {
             s.on = i % (track + 1) == 0;
@@ -400,7 +400,7 @@ fn adding_and_removing_tracks_while_playing_does_not_click() {
     });
     let added = worst_jump(&r, 53, 900, |n| {
         if n % 2 == 0 {
-            r.session.add_track().unwrap();
+            r.session.add_track(false).unwrap();
         } else {
             r.session.undo().unwrap();
         }
@@ -422,7 +422,7 @@ fn a_track_moving_onto_a_voice_with_another_material_does_not_click() {
     // voice, whose source changes from the drone to nothing.
     let r = rig();
     r.session.new_patch().unwrap();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
     r.session.new_patch().unwrap();
     for (id, v) in [
         ("fm.on", 1.0),
@@ -436,7 +436,7 @@ fn a_track_moving_onto_a_voice_with_another_material_does_not_click() {
     }
     r.session.wire_material("material", None).unwrap();
     r.session.wire_material("grain", None).unwrap();
-    r.session.add_track().unwrap();
+    r.session.add_track(false).unwrap();
     let mut t = r.session.tracker();
     for track in [1, 2] {
         for (i, s) in t.tracks[track].steps.iter_mut().enumerate().take(16) {
@@ -470,7 +470,11 @@ fn the_callbacks_hand_offs_stay_off_the_allocator_with_every_track() {
     let r = rig();
     three_sounding(&r);
     while r.session.track_count() < VOICES {
-        r.session.add_track().unwrap();
+        r.session.add_track(false).unwrap();
+    }
+    // Every kit too (story d), after the melody tracks.
+    while r.session.tracker().drums().count() < shard_dsp::KITS {
+        r.session.add_track(true).unwrap();
     }
     let drone = r.session.pool().materials[0].id;
     let mut e = Engine::new(48_000.0, 128);
@@ -495,6 +499,18 @@ fn the_callbacks_hand_offs_stay_off_the_allocator_with_every_track() {
                 let id = r.session.patches()[block / 50 % 3].id;
                 r.session.set_track_patch(block / 50 % VOICES, id).unwrap();
             }
+            // A drums track's grid, sound and mute, and one removed and back.
+            43 => {
+                let mut t = r.session.tracker();
+                let last = t.tracks.len() - 1;
+                let kit = t.tracks[last].drums.as_mut().unwrap();
+                kit.kick[block % 16] = 127;
+                kit.tune = (block % 24) as f32 - 12.0;
+                r.session.set_tracker(t).unwrap();
+                r.session.toggle_mute(last).unwrap();
+            }
+            45 => r.session.remove_track(VOICES).unwrap(),
+            47 => drop(r.session.undo().unwrap()),
             _ => {}
         }
         let ((), caught) = no_alloc(|| {

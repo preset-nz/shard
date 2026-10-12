@@ -1,6 +1,15 @@
 import { Icons } from '@preset.nz/ux-kit';
 import { type ReactNode, useRef, useState } from 'react';
-import { audible, MAX_TRACKS, type MixState, type PatchInfo, type Track } from '@/audio';
+import {
+  audible,
+  MAX_DRUMS_TRACKS,
+  MAX_MELODY_TRACKS,
+  type MixState,
+  type PatchInfo,
+  type Track,
+  trackName,
+} from '@/audio';
+import { AddMenu } from '@/components/AddMenu';
 import { MixSwitch } from '@/components/MixSwitch';
 import { PlaysPicker } from '@/components/PlaysPicker';
 import {
@@ -35,6 +44,10 @@ import {
  * Each track has M and S switches (story c). A press lands on the next bar
  * while playing, and blinks until it does; a track not heard is dimmed. They
  * are session state, not edits.
+ *
+ * Tracks are of two kinds in one list (story d): a melody track with its
+ * *Plays* picker, and a drums track, marked "kit", which plays no patch.
+ * The + offers both, as Track › Add Track does.
  */
 export function SceneView({
   tracks,
@@ -68,8 +81,9 @@ export function SceneView({
   onSelectPatch: (id: number) => void;
   /** Track `track` now plays this patch (its *Plays* picker). */
   onPlays: (track: number, id: number) => void;
-  onAddTrack: () => void;
-  /** Only offered while there is more than one track. */
+  /** Add Track › Melody, or › Drums with `drums`. */
+  onAddTrack: (drums: boolean) => void;
+  /** Only offered for a drums track, or a melody track not the last. */
   onRemoveTrack: (track: number) => void;
   /** Every track's mute and solo, pressed and heard, in order. */
   mix: MixState[];
@@ -105,7 +119,9 @@ export function SceneView({
       ? Math.min(selectedTrack, t - 1)
       : Math.max(t, t + patches.findIndex((p) => p.id === selectedPatch));
   const here = Math.min(cursor ?? selectedRow, rowCount - 1);
-  const removable = tracks.length > 1;
+  const melodyCount = tracks.filter((x) => x.drums == null).length;
+  const drumsCount = tracks.length - melodyCount;
+  const removable = (i: number) => tracks[i]?.drums != null || melodyCount > 1;
 
   const selectRow = (row: number) => {
     setCursor(null);
@@ -175,7 +191,7 @@ export function SceneView({
           e.preventDefault();
           e.stopPropagation();
           if (here < t) {
-            if (removable) {
+            if (removable(here)) {
               setCursor(null);
               onRemoveTrack(here);
             }
@@ -195,84 +211,99 @@ export function SceneView({
           <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Tracks
           </span>
-          <button
-            type="button"
-            title={
-              tracks.length >= MAX_TRACKS
-                ? `A session plays at most ${MAX_TRACKS} tracks`
-                : 'Add Track (⌥⌘N)'
-            }
-            disabled={tracks.length >= MAX_TRACKS}
-            // Keep focus off the button, so Space still starts playback.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={onAddTrack}
-            className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
-          >
-            <Icons.PlusIcon size={13} />
-          </button>
+          <AddMenu
+            title="Add a track"
+            choices={[
+              {
+                kind: 'melody',
+                label: 'Melody ⌥⌘N',
+                disabled:
+                  melodyCount >= MAX_MELODY_TRACKS ? `${MAX_MELODY_TRACKS} at most` : undefined,
+              },
+              {
+                kind: 'drums',
+                label: 'Drums ⌥⌘U',
+                disabled:
+                  drumsCount >= MAX_DRUMS_TRACKS ? `${MAX_DRUMS_TRACKS} at most` : undefined,
+              },
+            ]}
+            onAdd={(kind) => onAddTrack(kind === 'drums')}
+          />
         </div>
         {/* A row is not one button: the name selects the track, and the
             picker beside it chooses the patch it plays. */}
-        {tracks.map((track, i) => (
-          <ContextMenu
-            // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
-            key={i}
-          >
-            <ContextMenuTrigger render={<div className={rowClass(i, selectedTrack === i)} />}>
-              <button
-                type="button"
-                title={
-                  audible(mix, i)
-                    ? "Show this track's steps"
-                    : "Show this track's steps. Not heard: muted, or another track is soloed."
-                }
-                onMouseDown={focusPanel}
-                onClick={() => selectRow(i)}
-                className={`min-w-0 flex-1 truncate text-left ${audible(mix, i) ? '' : 'opacity-50'}`}
-              >
-                Track {i + 1}
-              </button>
-              <MixSwitch
-                letter="M"
-                verb="Mute"
-                track={i}
-                on={mix[i]?.mute ?? false}
-                heard={mix[i]?.heard_mute ?? false}
-                chord="⌃M"
-                onMouseDown={focusPanel}
-                onToggle={() => onMute(i)}
-              />
-              <MixSwitch
-                letter="S"
-                verb="Solo"
-                track={i}
-                on={mix[i]?.solo ?? false}
-                heard={mix[i]?.heard_solo ?? false}
-                chord="⌃S"
-                onMouseDown={focusPanel}
-                onToggle={() => onSolo(i)}
-              />
-              <PlaysPicker
-                patches={patches}
-                value={track.patch}
-                onPick={(id) => onPlays(i, id)}
-                className="w-[4.75rem]"
-              />
-            </ContextMenuTrigger>
-            <ContextMenuContent className="w-48" finalFocus={false}>
-              <ContextMenuItem onClick={() => onMute(i)}>
-                {mix[i]?.mute ? 'Unmute' : 'Mute'} Track {i + 1}
-              </ContextMenuItem>
-              <ContextMenuItem onClick={() => onSolo(i)}>
-                {mix[i]?.solo ? 'Unsolo' : 'Solo'} Track {i + 1}
-              </ContextMenuItem>
-              <ContextMenuSeparator />
-              <ContextMenuItem disabled={!removable} onClick={() => onRemoveTrack(i)}>
-                Remove Track {i + 1}
-              </ContextMenuItem>
-            </ContextMenuContent>
-          </ContextMenu>
-        ))}
+        {tracks.map((track, i) => {
+          const name = trackName(tracks, i);
+          const drums = track.drums != null;
+          return (
+            <ContextMenu
+              // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
+              key={i}
+            >
+              <ContextMenuTrigger render={<div className={rowClass(i, selectedTrack === i)} />}>
+                <button
+                  type="button"
+                  title={`Show this track's ${drums ? 'drums' : 'steps'}${
+                    audible(mix, i) ? '' : '. Not heard: muted, or another track is soloed.'
+                  }`}
+                  onMouseDown={focusPanel}
+                  onClick={() => selectRow(i)}
+                  className={`min-w-0 flex-1 truncate text-left ${audible(mix, i) ? '' : 'opacity-50'}`}
+                >
+                  {name}
+                </button>
+                <MixSwitch
+                  letter="M"
+                  verb="Mute"
+                  name={name}
+                  on={mix[i]?.mute ?? false}
+                  heard={mix[i]?.heard_mute ?? false}
+                  chord="⌃M"
+                  onMouseDown={focusPanel}
+                  onToggle={() => onMute(i)}
+                />
+                <MixSwitch
+                  letter="S"
+                  verb="Solo"
+                  name={name}
+                  on={mix[i]?.solo ?? false}
+                  heard={mix[i]?.heard_solo ?? false}
+                  chord="⌃S"
+                  onMouseDown={focusPanel}
+                  onToggle={() => onSolo(i)}
+                />
+                {drums ? (
+                  // No patch: the kit is its own sound. Where the picker would be.
+                  <span
+                    title="A drums track: a synthesised kick, snare and hat, no patch"
+                    className="w-[4.75rem] truncate pl-1 text-[10px] text-muted-foreground"
+                  >
+                    kit
+                  </span>
+                ) : (
+                  <PlaysPicker
+                    patches={patches}
+                    value={track.patch}
+                    onPick={(id) => onPlays(i, id)}
+                    className="w-[4.75rem]"
+                  />
+                )}
+              </ContextMenuTrigger>
+              <ContextMenuContent className="w-48" finalFocus={false}>
+                <ContextMenuItem onClick={() => onMute(i)}>
+                  {mix[i]?.mute ? 'Unmute' : 'Mute'} {name}
+                </ContextMenuItem>
+                <ContextMenuItem onClick={() => onSolo(i)}>
+                  {mix[i]?.solo ? 'Unsolo' : 'Solo'} {name}
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem disabled={!removable(i)} onClick={() => onRemoveTrack(i)}>
+                  Remove {name}
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
+          );
+        })}
       </div>
 
       <div className="py-2">
