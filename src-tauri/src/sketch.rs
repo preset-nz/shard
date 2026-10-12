@@ -8,7 +8,7 @@
 //!   "tracker": { "tempo": 87, "swing": 0, "tracks": [ ... ] },
 //!   "patch": { "fm.on": 1, "patch.length": 2 },
 //!   "effects": [ { "kind": "drive", "amount": 14, "mix": 0.4 } ],
-//!   "arrangement": { "arrangement.track.gain": 0.8 }
+//!   "arrangement": { "arrangement.kit.gain": 0.7 }
 //! }
 //! ```
 //!
@@ -84,10 +84,10 @@ fn write_a_sketch() {
 fn a_sketch_writes_its_tracker_values_and_chain() {
     let sketch: Sketch = serde_json::from_str(
         r#"{
-            "tracker": { "tempo": 87, "tracks": [ { "on": true, "length": 16 } ] },
+            "tracker": { "tempo": 87, "tracks": [ { "length": 16, "gain": 0.8 } ] },
             "patch": { "fm.on": 1, "filter.cutoff": 420 },
             "effects": [ { "kind": "drive", "amount": 14 }, { "kind": "drive", "mix": 0.5 } ],
-            "arrangement": { "arrangement.track.gain": 0.8 }
+            "arrangement": { "arrangement.kit.gain": 0.7 }
         }"#,
     )
     .unwrap();
@@ -95,7 +95,8 @@ fn a_sketch_writes_its_tracker_values_and_chain() {
     apply(&sketch, &r.session).unwrap();
     assert_eq!(r.session.tracker().tempo, 87.0);
     assert_eq!(r.bank.get_by_id("filter.cutoff"), Some(420.0));
-    assert_eq!(r.arrangement.get_by_id("arrangement.track.gain"), Some(0.8));
+    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(0.7));
+    assert_eq!(r.session.tracker().tracks[0].gain, 0.8);
     let order = fx::order_of(&r.bank);
     assert_eq!(order.len(), 2, "two drives, in order");
     let (first, second) = (order.as_slice()[0] as usize, order.as_slice()[1] as usize);

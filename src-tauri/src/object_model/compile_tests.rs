@@ -43,8 +43,12 @@ fn a_new_session_compiles_to_todays_banks_bit_for_bit() {
         bits(&plan.arrangement),
         bank_bits(&ParamBank::for_table(arrangement::params()))
     );
-    assert_eq!(plan.tracker, Tracker::default());
-    assert_eq!(plan.steps(), Tracker::default().params());
+    // The same tracker, its track naming the patch it plays.
+    let mut tracker = plan.tracker.clone();
+    assert!(tracker.tracks[0].patch.is_some());
+    tracker.tracks[0].patch = None;
+    assert_eq!(tracker, Tracker::default());
+    assert_eq!(plan.tracker.params(0), Tracker::default().params(0));
     assert_eq!(plan.modulation, crate::modulation::Modulation::default());
 }
 

@@ -22,8 +22,7 @@ use serde::Serialize;
 use shard_dsp::arrangement;
 use shard_dsp::params::{ParamDef, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
-use shard_dsp::steps::StepBank;
-use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, ReadingBank};
+use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, VOICES};
 
 mod controllers;
 mod document;
@@ -46,6 +45,8 @@ mod session_tests;
 mod sketch;
 mod source;
 mod tracker;
+#[cfg(test)]
+mod tracks_tests;
 
 /// Debug builds count every allocator call made inside the audio callback,
 /// and `meters` reports the running total. Release builds keep the plain
@@ -54,7 +55,7 @@ mod tracker;
 #[global_allocator]
 static GUARD: rt::GuardedAlloc = rt::GuardedAlloc;
 
-use session::SourceSlots;
+use session::{SourceSlots, Voices};
 
 /// Shared between the UI thread and the audio thread.
 /// The live engine's grain pool. The preview renders with the same, or the
@@ -65,12 +66,17 @@ pub struct Audio {
     /// The open session: the document, and the engine kept in step with it.
     /// Every edit goes through here (`session.rs`).
     session: Arc<session::Session>,
+    /// The current patch's values: what the patch view, the controllers and
+    /// the preview read. The audio thread reads each voice's own bank.
     bank: Arc<ParamBank>,
-    /// The arrangement's values: its chain over the patch, the patch's
-    /// fader and the limiter. Read by the audio thread once a block.
+    /// The arrangement's values: its chain over the tracks, the drum kit and
+    /// the limiter. Read by the audio thread once a block.
     arrangement: Arc<ParamBank>,
-    /// Every parameter as the engine last heard it, LFOs included. Written by
-    /// the audio thread once a block; the bank above stays the hand's.
+    /// Every voice's feed, from the session to the audio thread.
+    voices: Arc<Voices>,
+    /// Every parameter as the voice playing the current patch last heard it,
+    /// LFOs included. Written by the audio thread once a block; the bank
+    /// above stays the hand's.
     heard: Arc<ParamBank>,
     /// Peak since the UI last asked, as f32 bits. Written by the audio thread.
     peak: Arc<AtomicU32>,
@@ -80,8 +86,8 @@ pub struct Audio {
     grains: Arc<AtomicU32>,
     /// Transport, mirrored out of the audio thread for the UI.
     playing: Arc<AtomicBool>,
-    /// The sequencer's step, plus one; zero while it is off.
-    step: Arc<AtomicU32>,
+    /// Each voice's step, plus one; zero while it is off.
+    steps: Arc<[AtomicU32; VOICES]>,
     /// The drum kit's step, the same way. Its loop has its own length.
     kit_step: Arc<AtomicU32>,
     /// Every grain the cloud has spawned, drained by the UI at poll rate.
@@ -97,11 +103,6 @@ pub struct Audio {
     playhead: Arc<AtomicU32>,
     /// Set by the UI, read by the audio thread at the top of each block.
     play_request: Arc<AtomicBool>,
-    /// Source buffers the audio thread swapped out and handed back, waiting
-    /// for `meters` to free them here rather than on the audio thread.
-    retired: Arc<Mutex<SourceSlots>>,
-    /// A modulation set the audio thread replaced, handed back the same way.
-    mod_retired: Arc<Mutex<Option<ModSet>>>,
     /// The slowest block since `meters` last asked.
     timer: Arc<BlockTimer>,
     /// The audio-thread allocation count `meters` last logged, so a new one is
@@ -135,11 +136,12 @@ pub struct Meters {
     pub reduction: f32,
     pub grains: u32,
     pub playing: bool,
-    /// The sequencer's current step, from zero, or -1 while it is off.
-    pub step: i32,
+    /// Each track's current step, from zero, or -1 while it is off, in the
+    /// tracks' order.
+    pub steps: Vec<i32>,
     /// The drum kit's current step, the same way.
     pub kit_step: i32,
-    /// Where plain playback has reached, 0 to 1.
+    /// Where the current patch's plain playback has reached, 0 to 1.
     pub playhead: f32,
     /// True while one grain is being auditioned on its own.
     pub auditioning: bool,
@@ -298,11 +300,17 @@ fn get_params(state: tauri::State<'_, Audio>) -> Vec<f32> {
     (0..PARAMS.len()).map(|i| state.bank.get(i)).collect()
 }
 
-/// Every parameter as the engine last heard it, indexed as `get_params`. Differs
-/// from it only where a parameter follows an LFO.
+/// Every parameter as the engine last heard it on the current patch,
+/// indexed as `get_params`. Differs from it only where a parameter follows an
+/// LFO; the same as it while no voice plays the current patch.
 #[tauri::command]
 fn get_heard(state: tauri::State<'_, Audio>) -> Vec<f32> {
-    (0..PARAMS.len()).map(|i| state.heard.get(i)).collect()
+    let from = if state.voices.shown().is_some() {
+        &state.heard
+    } else {
+        &state.bank
+    };
+    (0..PARAMS.len()).map(|i| from.get(i)).collect()
 }
 
 #[tauri::command]
@@ -312,13 +320,16 @@ fn set_param(state: tauri::State<'_, Audio>, id: String, value: f32) -> Result<(
 
 #[tauri::command]
 fn meters(state: tauri::State<'_, Audio>) -> Meters {
-    // Free whatever source buffer the audio thread retired since the last
-    // poll. Blocking here is fine; the audio thread only ever tries the lock.
-    if let Ok(mut slot) = state.retired.lock() {
-        drop(std::mem::take(&mut *slot));
-    }
-    if let Ok(mut slot) = state.mod_retired.lock() {
-        drop(slot.take());
+    // Free whatever source buffers and modulation sets the audio thread
+    // retired since the last poll. Blocking here is fine; the audio thread
+    // only ever tries the locks.
+    for v in &state.voices.voice {
+        if let Ok(mut slot) = v.retired.lock() {
+            drop(std::mem::take(&mut *slot));
+        }
+        if let Ok(mut slot) = v.mod_retired.lock() {
+            drop(slot.take());
+        }
     }
 
     let audio_allocs = rt::violations();
@@ -338,7 +349,10 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         reduction: f32::from_bits(state.reduction.swap(1.0f32.to_bits(), Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
         playing: state.playing.load(Ordering::Relaxed),
-        step: state.step.load(Ordering::Relaxed) as i32 - 1,
+        steps: state.steps[..state.session.track_count().min(VOICES)]
+            .iter()
+            .map(|s| s.load(Ordering::Relaxed) as i32 - 1)
+            .collect(),
         kit_step: state.kit_step.load(Ordering::Relaxed) as i32 - 1,
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
@@ -722,8 +736,8 @@ fn reset_sound(state: tauri::State<'_, Audio>) -> Result<bool, String> {
     state.session.reset_sound()
 }
 
-/// The session's patches in order, which is current and which the track
-/// plays (epic 10). For the scene view.
+/// The session's patches in order, which is current, which a track plays
+/// and which is auditioned (epics 10 and 28). For the scene view.
 #[tauri::command]
 fn patches(state: tauri::State<'_, Audio>) -> Vec<session::PatchInfo> {
     state.session.patches()
@@ -739,20 +753,48 @@ fn new_patch(app: tauri::AppHandle, state: tauri::State<'_, Audio>) -> Result<u6
     Ok(id)
 }
 
-/// Makes another patch current: the one every patch command acts on and the
-/// engine plays. Not an edit. Read again as after New Patch.
+/// Selects a patch: the one every patch command acts on, auditioned while
+/// no track plays it. Not an edit, and what the tracks play never changes.
+/// Read again as after New Patch when the current patch changed.
 #[tauri::command]
 fn select_patch(
     app: tauri::AppHandle,
     state: tauri::State<'_, Audio>,
     id: u64,
 ) -> Result<(), String> {
-    if state.session.current_patch() == Some(id) {
-        return Ok(());
-    }
+    let moved = state.session.current_patch() != Some(id);
     state.session.select_patch(id)?;
-    state.replaced(&app, session::LoadReport::default());
+    if moved {
+        state.replaced(&app, session::LoadReport::default());
+    }
     Ok(())
+}
+
+/// Selects a track: its patch becomes current and nothing is auditioned.
+/// Not an edit. Read again when the current patch changed.
+#[tauri::command]
+fn select_track(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Audio>,
+    track: usize,
+) -> Result<(), String> {
+    if state.session.select_track(track)? {
+        state.replaced(&app, session::LoadReport::default());
+    }
+    Ok(())
+}
+
+/// Add Track: a melody track at the end, playing the current patch. One step
+/// of Undo, "Add Track". Answers its place.
+#[tauri::command]
+fn add_track(state: tauri::State<'_, Audio>) -> Result<usize, String> {
+    state.session.add_track()
+}
+
+/// Remove Track: one step of Undo, "Remove Track 2". Refused for the last.
+#[tauri::command]
+fn remove_track(state: tauri::State<'_, Audio>, track: usize) -> Result<(), String> {
+    state.session.remove_track(track)
 }
 
 /// Renames a patch. One step of Undo, "Rename Patch 2"; an empty or
@@ -762,7 +804,7 @@ fn rename_patch(state: tauri::State<'_, Audio>, id: u64, name: String) -> Result
     state.session.rename_patch(id, &name)
 }
 
-/// Deletes a patch, refused for the last one and the one the track plays.
+/// Deletes a patch, refused for the last one and one a track plays.
 /// One step of Undo, "Delete Patch 2". When it was current the track's patch
 /// takes over, and the webview reads everything again along
 /// `document-opened`.
@@ -791,16 +833,17 @@ fn duplicate_patch(
     Ok(copy)
 }
 
-/// Sets the patch the track plays (the *Plays* picker): one step of Undo,
-/// "Set Plays". In tracker mode the engine follows, so the webview reads
-/// everything again as after selecting a patch.
+/// Sets the patch track `track` plays (its *Plays* picker): one step of
+/// Undo, "Set Plays". With that track selected the current patch follows,
+/// and the webview reads everything again as after selecting a patch.
 #[tauri::command]
 fn set_track_patch(
     app: tauri::AppHandle,
     state: tauri::State<'_, Audio>,
+    track: usize,
     id: u64,
 ) -> Result<(), String> {
-    if state.session.set_track_patch(id)? {
+    if state.session.set_track_patch(track, id)? {
         state.replaced(&app, session::LoadReport::default());
     }
     Ok(())
@@ -812,16 +855,17 @@ fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
     state.play_request.store(playing, Ordering::Relaxed);
 }
 
-/// The tracker, as saved and as the engine plays it. The first track is on
-/// in tracker mode.
+/// The tracker, as saved and as the engine plays it, each track with the
+/// patch it plays.
 #[tauri::command]
 fn tracker(state: tauri::State<'_, Audio>) -> tracker::Tracker {
     state.session.tracker()
 }
 
-/// Replace the tracker whole. The first track's switch is the mode and not an
-/// edit. Answers with what the engine now plays, which differs from what was
-/// sent only where a value was out of range.
+/// Takes the tempo, swing, kit and each track's steps, length and fader from
+/// `tracker`, by place; never adds, removes or re-patches a track. Answers
+/// with what the engine now plays, which differs from what was sent only
+/// where a value was out of range.
 #[tauri::command]
 fn set_tracker(
     state: tauri::State<'_, Audio>,
@@ -830,14 +874,16 @@ fn set_tracker(
     state.session.set_tracker(tracker)
 }
 
-/// A whole-pattern edit: clear, paste or repeat a bar, rotate, transpose
-/// (`tracker::Edit`). One step of Undo, and none when it changes nothing.
+/// A whole-pattern edit on track `track`: clear, paste or repeat a bar,
+/// rotate, transpose (`tracker::Edit`). One step of Undo, and none when it
+/// changes nothing.
 #[tauri::command]
 fn edit_tracker(
     state: tauri::State<'_, Audio>,
+    track: usize,
     edit: tracker::Edit,
 ) -> Result<tracker::Tracker, String> {
-    state.session.edit_tracker(&edit)
+    state.session.edit_tracker(track, &edit)
 }
 
 /// A material's waveform for drawing. Refused for a material whose file could
@@ -1487,61 +1533,146 @@ impl Audio {
     }
 }
 
+/// What the audio callback holds between blocks: materials and modulation
+/// sets the engine gave back, waiting for their voice's retired slot to come
+/// free. Sized here, so a block never allocates.
+pub(crate) struct Held {
+    retiring: [SourceSlots; VOICES],
+    mods: [Option<ModSet>; VOICES],
+}
+
+impl Held {
+    pub(crate) fn new() -> Self {
+        Self {
+            retiring: std::array::from_fn(|_| [None, None]),
+            mods: std::array::from_fn(|_| None),
+        }
+    }
+}
+
+/// One block's hand-offs from the session's feeds into the engine, voice by
+/// voice: buffers and sets given back, new materials (once the voice is
+/// silent) and modulation taken, then the steps, readings and fader, and last
+/// whether it plays; then the transport and the arrangement. Locks are only ever tried: a slot the
+/// command thread holds this block is taken on the next.
+pub(crate) fn hand_over(
+    engine: &mut Engine,
+    voices: &Voices,
+    arrangement: &ParamBank,
+    held: &mut Held,
+) {
+    for (i, feed) in voices.voice.iter().enumerate() {
+        // A retired source waits here until `meters` collects it, and no new
+        // swap is taken while one is waiting, so a buffer is never freed on
+        // this thread. Each generator's source swaps on its own.
+        let retiring = &mut held.retiring[i];
+        if retiring.iter().any(Option::is_some) {
+            if let Ok(mut slot) = feed.retired.try_lock() {
+                if slot.iter().all(Option::is_none) {
+                    *slot = std::mem::take(retiring);
+                }
+            }
+        }
+        // A new material for a voice that is sounding waits for it to fade
+        // out: swapping under it would cut its pass mid-sample (a track
+        // moving down a voice, an audition or a pick changing material). It
+        // stays in its slot, the voice is switched out, and once idle the
+        // swap lands and the voice wakes clean on it.
+        let mut parked = false;
+        if retiring.iter().all(Option::is_none) {
+            if let Ok(mut pending) = feed.swap.try_lock() {
+                let waiting = pending.iter().any(Option::is_some);
+                if waiting && engine.playing() && !engine.voice_idle(i) {
+                    parked = true;
+                } else {
+                    for g in Generator::ALL {
+                        if let Some(buf) = pending[g.index()].take() {
+                            retiring[g.index()] = Some(engine.swap_voice_source(i, g, buf));
+                        }
+                    }
+                }
+            }
+        }
+        // LFOs and links arrive the same way, with their own pair of slots.
+        // The engine carries running LFOs across by id.
+        if let Some(old) = held.mods[i].take() {
+            match feed.mod_retired.try_lock() {
+                Ok(mut slot) if slot.is_none() => *slot = Some(old),
+                _ => held.mods[i] = Some(old),
+            }
+        }
+        if held.mods[i].is_none() {
+            if let Ok(mut pending) = feed.mod_swap.try_lock() {
+                if let Some(set) = pending.take() {
+                    held.mods[i] = Some(engine.set_voice_modulation(i, set));
+                }
+            }
+        }
+        engine.set_voice_steps(i, feed.steps.load());
+        let (player, grain) = feed.readings.load();
+        engine.set_voice_readings(i, player, grain);
+        engine.set_voice_gain(i, feed.gain());
+        let active = feed.active.load(Ordering::Acquire) && !parked;
+        if active != engine.voice_active(i) {
+            engine.set_voice_active(i, active);
+        }
+    }
+    // The transport always runs: every track plays while it does, and an
+    // auditioned patch loops free over them because its own steps are off.
+    engine.set_transport(&voices.transport.load());
+    engine.set_arrangement(arrangement, false);
+}
+
+/// One block of every voice into `out`, and what the voice playing the
+/// current patch heard into `heard`.
+pub(crate) fn render(engine: &mut Engine, voices: &Voices, heard: &ParamBank, out: &mut [f32]) {
+    let banks: [&ParamBank; VOICES] = std::array::from_fn(|i| &voices.voice[i].bank);
+    engine.process_voices(out, &banks);
+    if let Some(i) = voices.shown() {
+        engine.publish_voice_heard(i, &voices.voice[i].bank, heard);
+    }
+}
+
 fn build_audio() -> Result<Audio, String> {
     let bank = Arc::new(ParamBank::new());
     let arrangement = Arc::new(ParamBank::for_table(arrangement::params()));
     let heard = Arc::new(ParamBank::new());
+    let voices = Arc::new(Voices::new());
     let peak = Arc::new(AtomicU32::new(0));
     let reduction = Arc::new(AtomicU32::new(1.0f32.to_bits()));
     let grains = Arc::new(AtomicU32::new(0));
     let playing = Arc::new(AtomicBool::new(false));
-    let step = Arc::new(AtomicU32::new(0));
+    let steps: Arc<[AtomicU32; VOICES]> = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
     let kit_step = Arc::new(AtomicU32::new(0));
-    let steps = Arc::new(StepBank::new(tracker::Tracker::default().params()));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
-    let swap: Arc<Mutex<SourceSlots>> = Arc::new(Mutex::new([None, None]));
     let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
     let auditioning = Arc::new(AtomicBool::new(false));
     let reversing = Arc::new(AtomicBool::new(false));
-    let retired: Arc<Mutex<SourceSlots>> = Arc::new(Mutex::new([None, None]));
-    let readings = Arc::new(ReadingBank::new());
-    let mod_swap: Arc<Mutex<Option<ModSet>>> = Arc::new(Mutex::new(None));
-    let mod_retired: Arc<Mutex<Option<ModSet>>> = Arc::new(Mutex::new(None));
     let timer = Arc::new(BlockTimer::new());
 
     // Lock every slot the callback hands off through once, here. On macOS a
     // mutex allocates on its first lock, and without this that first lock
     // would land on the audio thread. `tests/audio_thread.rs` in shard-dsp
-    // holds the pattern. The tracker's `steps` and the materials' `readings`
-    // are not here on purpose: they are atomics, like the bank, and have no
-    // lock to prime.
-    drop(swap.lock());
+    // holds the pattern. The voices' banks, steps, readings and switches are
+    // atomics and have no lock to prime.
+    voices.prime();
     drop(audition.lock());
-    drop(retired.lock());
-    drop(mod_swap.lock());
-    drop(mod_retired.lock());
 
-    let audio_bank = Arc::clone(&bank);
     let audio_heard = Arc::clone(&heard);
+    let audio_voices = Arc::clone(&voices);
     let audio_peak = Arc::clone(&peak);
     let audio_reduction = Arc::clone(&reduction);
     let audio_grains = Arc::clone(&grains);
-    let audio_swap = Arc::clone(&swap);
     let audio_playing = Arc::clone(&playing);
     let audio_playhead = Arc::clone(&playhead);
-    let audio_step = Arc::clone(&step);
-    let audio_kit_step = Arc::clone(&kit_step);
     let audio_steps = Arc::clone(&steps);
+    let audio_kit_step = Arc::clone(&kit_step);
     let audio_arrangement = Arc::clone(&arrangement);
-    let audio_readings = Arc::clone(&readings);
     let audio_request = Arc::clone(&play_request);
     let audio_audition = Arc::clone(&audition);
     let audio_auditioning = Arc::clone(&auditioning);
     let audio_reversing = Arc::clone(&reversing);
-    let audio_retired = Arc::clone(&retired);
-    let audio_mod_swap = Arc::clone(&mod_swap);
-    let audio_mod_retired = Arc::clone(&mod_retired);
     let audio_timer = Arc::clone(&timer);
 
     // The log is created by the engine, which only exists inside the audio
@@ -1562,14 +1693,13 @@ fn build_audio() -> Result<Audio, String> {
                 let sample_rate = config.sample_rate().0 as f32;
                 let channels = config.channels().max(1) as usize;
 
+                // Every voice starts idle; the session switches in one per
+                // track, with its materials, before anything plays.
                 let mut engine = Engine::new(sample_rate, LIVE_MAX_GRAINS);
-                engine.set_source(source::startup_drone(sample_rate).samples);
+                engine.set_voice_active(0, false);
                 let log = engine.grain_log();
                 let mut scratch = vec![0.0f32; 8192];
-                // Swapped-out sources, held until the UI side can take them.
-                let mut retiring: SourceSlots = [None, None];
-                // A swapped-out modulation set, held the same way.
-                let mut mods_retiring: Option<ModSet> = None;
+                let mut held = Held::new();
 
                 let stream = device
                     .build_output_stream(
@@ -1583,49 +1713,12 @@ fn build_audio() -> Result<Audio, String> {
                             // calls this on its own thread rather than the one
                             // that built the stream.
                             rt::no_alloc(|| {
-                                // A retired source waits here until `meters`
-                                // collects it, and no new swap is taken while
-                                // one is waiting, so a buffer is never freed
-                                // on this thread.
-                                if retiring.iter().any(Option::is_some) {
-                                    if let Ok(mut slot) = audio_retired.try_lock() {
-                                        if slot.iter().all(Option::is_none) {
-                                            *slot = std::mem::take(&mut retiring);
-                                        }
-                                    }
-                                }
-
-                                // Locks on this thread are only ever tried,
-                                // never waited on. If the UI holds one this
-                                // block, the hand-off happens on the next.
-                                // Each generator's source swaps on its own.
-                                if retiring.iter().all(Option::is_none) {
-                                    if let Ok(mut pending) = audio_swap.try_lock() {
-                                        for g in Generator::ALL {
-                                            if let Some(buf) = pending[g.index()].take() {
-                                                retiring[g.index()] =
-                                                    Some(engine.swap_source(g, buf));
-                                            }
-                                        }
-                                    }
-                                }
-
-                                // LFOs and links arrive the same way as a
-                                // sample, with their own pair of slots. The
-                                // engine carries running LFOs across by id.
-                                if let Some(old) = mods_retiring.take() {
-                                    match audio_mod_retired.try_lock() {
-                                        Ok(mut slot) if slot.is_none() => *slot = Some(old),
-                                        _ => mods_retiring = Some(old),
-                                    }
-                                }
-                                if mods_retiring.is_none() {
-                                    if let Ok(mut pending) = audio_mod_swap.try_lock() {
-                                        if let Some(set) = pending.take() {
-                                            mods_retiring = Some(engine.set_modulation(set));
-                                        }
-                                    }
-                                }
+                                hand_over(
+                                    &mut engine,
+                                    &audio_voices,
+                                    &audio_arrangement,
+                                    &mut held,
+                                );
 
                                 // The transport is a request the audio thread
                                 // honours at a block boundary, so a stop never
@@ -1650,20 +1743,12 @@ fn build_audio() -> Result<Audio, String> {
                                     out.fill(0.0);
                                     return;
                                 }
-                                // The tracker, once a block, as the bank is.
-                                let steps = audio_steps.load();
-                                engine.set_steps(steps);
-                                // The arrangement, the same way. Sound scaping
-                                // hears the patch alone, and the mode is what
-                                // switches the steps, so the steps being off is
-                                // the patch alone. One line of coupling, here in
-                                // the host rather than in the engine.
-                                engine.set_arrangement(&audio_arrangement, !steps.on);
-                                // How each generator reads its material, the same way.
-                                let (player, grain) = audio_readings.load();
-                                engine.set_readings(player, grain);
-                                engine.process_block(&mut scratch[..needed], &audio_bank);
-                                engine.publish_heard(&audio_bank, &audio_heard);
+                                render(
+                                    &mut engine,
+                                    &audio_voices,
+                                    &audio_heard,
+                                    &mut scratch[..needed],
+                                );
 
                                 for (i, frame) in out.chunks_mut(channels).enumerate() {
                                     let l = scratch[i * 2];
@@ -1690,14 +1775,25 @@ fn build_audio() -> Result<Audio, String> {
                                 let prev = f32::from_bits(audio_reduction.load(Ordering::Relaxed));
                                 audio_reduction
                                     .store(block_red.min(prev).to_bits(), Ordering::Relaxed);
-                                audio_grains
-                                    .store(engine.active_grains() as u32, Ordering::Relaxed);
-                                audio_playhead
-                                    .store(engine.play_position().to_bits(), Ordering::Relaxed);
-                                audio_step.store(
-                                    engine.current_step().map_or(0, |s| s + 1),
+                                // The patch view follows the voice playing the
+                                // current patch.
+                                let shown = audio_voices.shown();
+                                audio_grains.store(
+                                    shown.map_or(0, |i| engine.voice_active_grains(i)) as u32,
                                     Ordering::Relaxed,
                                 );
+                                audio_playhead.store(
+                                    shown
+                                        .map_or(0.0, |i| engine.voice_play_position(i))
+                                        .to_bits(),
+                                    Ordering::Relaxed,
+                                );
+                                for (i, step) in audio_steps.iter().enumerate() {
+                                    step.store(
+                                        engine.voice_step(i).map_or(0, |s| s + 1),
+                                        Ordering::Relaxed,
+                                    );
+                                }
                                 audio_kit_step.store(
                                     engine.current_kit_step().map_or(0, |s| s + 1),
                                     Ordering::Relaxed,
@@ -1749,16 +1845,13 @@ fn build_audio() -> Result<Audio, String> {
 
     // A new session plays the built-in drone through both generators, and
     // lists it, so nothing sounds that the pool does not show (Georg,
-    // 2026-09-15). The engine above starts on the same drone.
+    // 2026-09-15).
     let drone = Arc::new(source::startup_drone(sample_rate));
     let session = session::Session::new(
         session::Feeds {
             bank: Arc::clone(&bank),
             arrangement: Arc::clone(&arrangement),
-            steps,
-            mod_swap,
-            swap,
-            readings,
+            voices: Arc::clone(&voices),
         },
         drone,
         sample_rate,
@@ -1768,12 +1861,13 @@ fn build_audio() -> Result<Audio, String> {
         session: Arc::new(session),
         bank,
         arrangement,
+        voices,
         heard,
         peak,
         reduction,
         grains,
         playing,
-        step,
+        steps,
         kit_step,
         grain_log,
         audition,
@@ -1781,8 +1875,6 @@ fn build_audio() -> Result<Audio, String> {
         reversing,
         playhead,
         play_request,
-        retired,
-        mod_retired,
         timer,
         reported_allocs: AtomicU64::new(0),
         sample_rate,
@@ -1892,6 +1984,9 @@ pub fn run() {
             patches,
             new_patch,
             select_patch,
+            select_track,
+            add_track,
+            remove_track,
             set_track_patch,
             rename_patch,
             delete_patch,
@@ -2006,7 +2101,7 @@ mod tests {
             reduction: 1.0,
             grains: 0,
             playing: false,
-            step: -1,
+            steps: vec![-1],
             kit_step: -1,
             playhead: 0.0,
             auditioning: false,
@@ -2020,7 +2115,7 @@ mod tests {
             "peak",
             "reduction",
             "grains",
-            "step",
+            "steps",
             "kit_step",
             "playing",
             "playhead",
@@ -2038,7 +2133,7 @@ mod tests {
         for key in ["tempo", "swing", "tracks", "kit"] {
             assert!(tracker.get(key).is_some(), "Tracker lost `{key}`");
         }
-        for key in ["on", "length", "steps"] {
+        for key in ["length", "gain", "patch", "steps"] {
             assert!(
                 tracker["tracks"][0].get(key).is_some(),
                 "Track lost `{key}`"

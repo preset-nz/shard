@@ -13,7 +13,8 @@
 //!
 //! **Borrowed rows** are the patch's own rows under `arrangement.`, with the
 //! same range, taper and smoothing, so the two chains cannot drift apart.
-//! **Own rows** are the patch's fader and the limiter.
+//! **Own rows** are the drum kit's and the limiter. The tracks' faders are
+//! per track, not rows here (`TRACK_GAIN_MAX`).
 //!
 //! Ids are a wire format, as in the patch table.
 
@@ -32,21 +33,17 @@ enum Row {
     Fx,
 }
 
-/// In panel order: the patch's fader, the process lane, then the master.
+/// A track's fader (epic 28): its level in the mix, a mixer's channel fader.
+/// Not the patch's own Output, so one patch can sit at different levels on
+/// two tracks. Not a row of this table: there is one per track, saved on the
+/// track node as `track.gain`, and it reaches the engine through
+/// `Engine::set_voice_gain`, smoothed there over `TRACK_GAIN_MS`.
+pub const TRACK_GAIN_MAX: f32 = 2.0;
+pub const TRACK_GAIN_DEFAULT: f32 = 1.0;
+pub const TRACK_GAIN_MS: f32 = 20.0;
+
+/// In panel order: the drum kit, the process lane, then the master.
 const ROWS: &[Row] = &[
-    // The patch's level in the arrangement, a mixer's channel fader. Not the
-    // patch's own Output, so one patch can sit at different levels in
-    // different arrangements. One today; one per track with roadmap row 10.
-    Row::Own(ParamDef {
-        id: "arrangement.track.gain",
-        name: "Gain",
-        min: 0.0,
-        max: 2.0,
-        default: 1.0,
-        taper: Taper::Linear,
-        unit: Unit::Percent,
-        smooth_ms: 20.0,
-    }),
     // The drum kit beside the patch (`kit.rs`), a stop-gap until roadmap
     // row 25. A generator, so its switch and then its Gain, drawn on its
     // card like every other node's. Its grid is in the tracker. Off by

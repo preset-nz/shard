@@ -648,6 +648,7 @@ fn every_voice_playing_never_touches_the_allocator() {
     let mut retired_sources = Vec::with_capacity(16);
     let mut retired_sets = Vec::with_capacity(16);
     let mut out = vec![0.0f32; 512];
+    let heard = ParamBank::new();
 
     for block in 0..900 {
         let ((), caught) = no_alloc(|| {
@@ -709,8 +710,18 @@ fn every_voice_playing_never_touches_the_allocator() {
                 "arrangement.tape.reverse",
                 if block % 400 > 330 { 1.0 } else { 0.0 },
             );
+            // Every voice's fader moving, and what the shown voice heard,
+            // where it is and how many grains it has, as the host reads them.
+            for i in 0..VOICES {
+                e.set_voice_gain(i, ((block + i * 11) % 40) as f32 * 0.05);
+            }
             e.set_arrangement(&arr, false);
             e.process_voices(&mut out, &refs);
+            let shown = (block / 90) % VOICES;
+            e.publish_voice_heard(shown, refs[shown], &heard);
+            black_box(e.voice_play_position(shown));
+            black_box(e.voice_active_grains(shown));
+            black_box(e.voice_step(shown));
         });
         assert_eq!(
             caught, 0,

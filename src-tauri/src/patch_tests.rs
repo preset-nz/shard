@@ -1,8 +1,9 @@
 //! Several patches in a session (epic 10, story a): the current patch is the
-//! session's, every patch-scoped command acts on it, and the engine follows
-//! it without a click.
+//! session's and every patch-scoped command acts on it. Since epic 28 it is
+//! never what the tracks play: a selected patch no track plays is auditioned,
+//! and switching that audition doesn't click.
 
-use shard_dsp::{Engine, Generator};
+use shard_dsp::Engine;
 
 use crate::object_model::{self as om, ShardEdit};
 use crate::session::PatchInfo;
@@ -189,44 +190,23 @@ fn a_patch_with_no_label_shows_its_place() {
     assert_eq!(names(&r)[2], "Patch 3");
 }
 
-/// The audio callback's hand-offs, as `lib.rs` makes them, then one block.
-fn block(r: &Rig, e: &mut Engine, out: &mut [f32], retired: &mut Vec<shard_dsp::ModSet>) {
-    if let Some(set) = r.mod_swap.lock().unwrap().take() {
-        retired.push(e.set_modulation(set));
-    }
-    {
-        let mut slots = r.swap.lock().unwrap();
-        for g in Generator::ALL {
-            if let Some(buf) = slots[g.index()].take() {
-                e.swap_source(g, buf);
-            }
-        }
-    }
-    let steps = r.steps.load();
-    e.set_steps(steps);
-    e.set_arrangement(&r.arrangement, !steps.on);
-    let (player, grain) = r.readings.load();
-    e.set_readings(player, grain);
-    e.process_block(out, &r.bank);
-}
-
 /// The largest sample-to-sample jump on the left channel over `blocks`,
-/// switching to `switch_to` (cycling) every `every` blocks, after a settle.
-fn worst_jump(r: &Rig, switch_to: &[u64], every: usize, blocks: usize) -> f32 {
+/// through the audio callback's own hand-offs, running `act` with the count
+/// every `every` blocks, after a settle.
+pub(crate) fn worst_jump(r: &Rig, every: usize, blocks: usize, mut act: impl FnMut(usize)) -> f32 {
     let mut e = Engine::new(48_000.0, 128);
+    e.set_voice_active(0, false);
     e.set_playing(true);
     let mut out = vec![0.0f32; 256];
-    let mut retired = Vec::new();
+    let mut held = crate::Held::new();
     let (mut prev, mut worst) = (0.0f32, 0.0f32);
     let mut next = 0;
     for n in 0..blocks {
-        if !switch_to.is_empty() && n > 0 && n % every == 0 {
-            r.session
-                .select_patch(switch_to[next % switch_to.len()])
-                .unwrap();
+        if every > 0 && n > 0 && n % every == 0 {
+            act(next);
             next += 1;
         }
-        block(r, &mut e, &mut out, &mut retired);
+        r.block(&mut e, &mut out, &mut held);
         for s in out.iter().step_by(2) {
             assert!(s.is_finite());
             if n > 40 {
@@ -238,14 +218,23 @@ fn worst_jump(r: &Rig, switch_to: &[u64], every: usize, blocks: usize) -> f32 {
     worst
 }
 
+/// The first track's steps off its patch: its voice falls silent, so only
+/// an audition is heard.
+fn quiet_track(r: &Rig) {
+    let mut t = r.session.tracker();
+    t.tracks[0].steps.iter_mut().for_each(|s| s.on = false);
+    r.session.set_tracker(t).unwrap();
+}
+
 #[test]
-fn switching_the_current_patch_while_playing_does_not_click() {
-    // Two patches as different as a switch can make them, each smooth on
-    // its own so a cut would stand out: the plain drone, against a low FM
-    // sine with the material off, a darker filter, another output level and
-    // drive in its chain.
+fn switching_the_auditioned_patch_while_playing_does_not_click() {
+    // Two patches no track plays, as different as a switch can make them,
+    // each smooth on its own so a cut would stand out: the plain drone,
+    // against a low FM sine with the material off, a darker filter, another
+    // output level and drive in its chain. The track plays a third, silent.
     let r = rig();
-    let first = current(&r).id;
+    quiet_track(&r);
+    let first = r.session.new_patch().unwrap();
     let second = r.session.new_patch().unwrap();
     for (id, v) in [
         ("material.on", 0.0),
@@ -268,9 +257,9 @@ fn switching_the_current_patch_while_playing_does_not_click() {
 
     // Each patch alone, steady: the yardstick is the larger of the two.
     r.session.select_patch(first).unwrap();
-    let steady_first = worst_jump(&r, &[], 0, 400);
+    let steady_first = worst_jump(&r, 0, 400, |_| {});
     r.session.select_patch(second).unwrap();
-    let steady_second = worst_jump(&r, &[], 0, 400);
+    let steady_second = worst_jump(&r, 0, 400, |_| {});
     let steady = steady_first.max(steady_second);
     assert!(
         steady > 1e-4,
@@ -278,7 +267,9 @@ fn switching_the_current_patch_while_playing_does_not_click() {
     );
 
     r.session.select_patch(first).unwrap();
-    let switched = worst_jump(&r, &[second, first], 47, 600);
+    let switched = worst_jump(&r, 47, 600, |n| {
+        r.session.select_patch([second, first][n % 2]).unwrap();
+    });
     assert!(
         switched < steady * 2.0,
         "switching jumped by {switched} against a steady {steady} \
@@ -288,22 +279,28 @@ fn switching_the_current_patch_while_playing_does_not_click() {
 
 #[test]
 fn switching_rebuilds_modulation_only_when_it_differs() {
-    // A ModSet is built on the command thread, and only for a patch whose
-    // modulation is not the one the engine has.
+    // A ModSet is built on the command thread, and only for a voice whose
+    // modulation is not the one it has: here the audition voice.
+    let audition = crate::session::AUDITION;
     let r = rig();
-    let first = current(&r).id;
+    let first = r.session.new_patch().unwrap();
     let second = r.session.new_patch().unwrap();
-    r.mod_swap.lock().unwrap().take();
+    r.voice(0).mod_swap.lock().unwrap().take();
+    r.voice(audition).mod_swap.lock().unwrap().take();
     r.session.select_patch(first).unwrap();
     assert!(
-        r.mod_swap.lock().unwrap().take().is_none(),
+        r.voice(audition).mod_swap.lock().unwrap().take().is_none(),
         "the same empty modulation is not handed over again"
     );
     r.session.select_patch(second).unwrap();
     r.session.add_lfo().unwrap();
-    r.mod_swap.lock().unwrap().take();
+    r.voice(audition).mod_swap.lock().unwrap().take();
     r.session.select_patch(first).unwrap();
-    assert!(r.mod_swap.lock().unwrap().take().is_some());
+    assert!(r.voice(audition).mod_swap.lock().unwrap().take().is_some());
+    assert!(
+        r.voice(0).mod_swap.lock().unwrap().take().is_none(),
+        "the track's voice is left alone"
+    );
 }
 
 #[test]
@@ -330,7 +327,10 @@ fn set_plays_is_one_undo_step_and_undo_restores_the_previous_patch() {
     let second = r.session.new_patch().unwrap();
     let before = r.session.history_labels().0.len();
 
-    assert!(!r.session.set_track_patch(second).unwrap(), "sound scaping");
+    assert!(
+        !r.session.set_track_patch(0, second).unwrap(),
+        "a patch selected"
+    );
     assert_eq!(played(&r).id, second);
     assert_eq!(r.session.history().0.as_deref(), Some("Set Plays"));
     assert_eq!(r.session.history_labels().0.len(), before + 1);
@@ -350,13 +350,13 @@ fn an_unchanged_or_refused_pick_adds_no_step() {
     let history = r.session.history_labels();
     let tree = r.session.read(|d| d.tree().serialise());
 
-    assert!(!r.session.set_track_patch(first).unwrap());
+    assert!(!r.session.set_track_patch(0, first).unwrap());
     assert_eq!(r.session.history_labels(), history, "already played");
 
-    assert!(r.session.set_track_patch(u64::MAX).is_err());
+    assert!(r.session.set_track_patch(0, u64::MAX).is_err());
     // A material is a node with a runtime id, and not a patch.
     let material = r.session.pool().materials[0].id;
-    assert!(r.session.set_track_patch(material).is_err());
+    assert!(r.session.set_track_patch(0, material).is_err());
     assert_eq!(r.session.history_labels(), history);
     assert_eq!(r.session.read(|d| d.tree().serialise()), tree);
     assert_eq!(played(&r).id, first);
@@ -364,47 +364,50 @@ fn an_unchanged_or_refused_pick_adds_no_step() {
 }
 
 #[test]
-fn in_tracker_mode_the_engine_follows_what_the_track_plays() {
+fn with_its_track_selected_the_current_patch_follows_what_it_plays() {
     let r = rig();
     r.session.set_param("grain.size", 80.0).unwrap();
     let first = played(&r).id;
     let second = r.session.new_patch().unwrap();
     r.session.set_param("grain.size", 120.0).unwrap();
-    r.session.select_patch(first).unwrap();
-    r.session.set_mode(true);
+    r.session.select_track(0).unwrap();
+    assert_eq!(current(&r).id, first);
     assert_eq!(get(&r, "grain.size"), 80.0);
 
     assert!(
-        r.session.set_track_patch(second).unwrap(),
+        r.session.set_track_patch(0, second).unwrap(),
         "the current patch moved"
     );
     assert_eq!(current(&r).id, second);
-    assert_eq!(get(&r, "grain.size"), 120.0, "the engine plays the pick");
     assert_eq!(
-        r.session
-            .plan()
-            .current
-            .and_then(|n| r.session.plan().id_of(n)),
-        Some(second)
+        get(&r, "grain.size"),
+        120.0,
+        "the patch view shows the pick"
+    );
+    assert_eq!(
+        r.voice(0).bank.get_by_id("grain.size"),
+        Some(120.0),
+        "and the track's voice plays it"
     );
 
     assert_eq!(r.session.undo().unwrap().as_deref(), Some("Set Plays"));
     assert_eq!(current(&r).id, first);
-    assert_eq!(get(&r, "grain.size"), 80.0, "undo returns the engine too");
+    assert_eq!(get(&r, "grain.size"), 80.0, "undo returns the view too");
+    assert_eq!(r.voice(0).bank.get_by_id("grain.size"), Some(80.0));
     r.session.redo().unwrap();
     assert_eq!(current(&r).id, second);
     assert_eq!(get(&r, "grain.size"), 120.0);
 }
 
 #[test]
-fn outside_tracker_mode_set_plays_leaves_what_is_heard() {
+fn with_a_patch_selected_set_plays_leaves_the_patch_being_shaped() {
     let r = rig();
     r.session.set_param("grain.size", 80.0).unwrap();
     let first = played(&r).id;
     let second = r.session.new_patch().unwrap();
     r.session.select_patch(first).unwrap();
 
-    r.session.set_track_patch(second).unwrap();
+    r.session.set_track_patch(0, second).unwrap();
     assert_eq!(current(&r).id, first, "the patch being shaped stays");
     assert_eq!(get(&r, "grain.size"), 80.0);
     r.session.undo().unwrap();
@@ -554,7 +557,7 @@ fn the_last_patch_and_the_played_patch_cannot_be_deleted() {
     let all = listed(&r);
     assert!(!all[0].deletable && all[1].deletable);
 
-    r.session.set_track_patch(second).unwrap();
+    r.session.set_track_patch(0, second).unwrap();
     let all = listed(&r);
     assert!(all[0].deletable && !all[1].deletable);
     assert!(r.session.delete_patch(second).is_err());
@@ -714,28 +717,27 @@ fn a_copy_of_a_patch_missing_from_the_order_still_sits_after_it() {
 }
 
 #[test]
-fn a_pick_made_before_the_mode_switch_still_ends_on_the_tracks_patch() {
-    // The track row's picker: the Plays pick reaches Rust while the patch
-    // being shaped is current, and the switch to tracker mode after it.
-    let r = rig();
-    r.session.set_param("fm.on", 1.0).unwrap();
-    r.session.set_param("material.on", 0.0).unwrap();
-    let first = r.session.patches()[0].id;
-    let second = r.session.new_patch().unwrap();
-    r.session.select_patch(first).unwrap();
-    assert!(
-        !r.session.set_track_patch(second).unwrap(),
-        "not tracking yet"
-    );
-    assert_eq!(get(&r, "fm.on"), 1.0, "still shaping the first");
-
-    r.session.set_mode(true);
-    assert_eq!(current(&r).id, second);
-    assert_eq!(get(&r, "fm.on"), 0.0, "the track's patch plays");
-    assert_eq!(get(&r, "material.on"), 1.0);
-    assert_eq!(
-        undo_label(&r).as_deref(),
-        Some("Set Plays"),
-        "no step of its own"
-    );
+fn a_pick_and_a_selection_in_either_order_play_the_same() {
+    // The track row's picker and the row's selection can reach Rust in
+    // either order; what the track plays is the pick either way, and the
+    // patch being shaped is whatever was selected last.
+    for pick_first in [true, false] {
+        let r = rig();
+        r.session.set_param("fm.on", 1.0).unwrap();
+        r.session.set_param("material.on", 0.0).unwrap();
+        let first = r.session.patches()[0].id;
+        let second = r.session.new_patch().unwrap();
+        r.session.select_patch(first).unwrap();
+        if pick_first {
+            r.session.set_track_patch(0, second).unwrap();
+            r.session.select_track(0).unwrap();
+        } else {
+            r.session.select_track(0).unwrap();
+            r.session.set_track_patch(0, second).unwrap();
+        }
+        assert_eq!(current(&r).id, second, "pick first: {pick_first}");
+        assert_eq!(r.voice(0).bank.get_by_id("fm.on"), Some(0.0));
+        assert_eq!(r.voice(0).bank.get_by_id("material.on"), Some(1.0));
+        assert_eq!(undo_label(&r).as_deref(), Some("Set Plays"));
+    }
 }

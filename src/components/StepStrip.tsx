@@ -32,8 +32,10 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
 /**
  * The tracker: the level above the patch (Georg, 2026-09-14).
  *
- * Tempo and swing belong to the arrangement, the steps to its one track, and none of
- * it to the patch, so none of it is a parameter row. One button per
+ * Tempo and swing belong to the arrangement, the steps to the track the
+ * scene view has selected, and none of it to the patch, so none of it is a
+ * parameter row. Every track plays while the transport runs; this strip
+ * shows and edits one. One button per
  * sixteenth, the step playing ringed. Buttons keep a sixteenth's width
  * whatever the length, so four steps read as one beat rather than a bar
  * stretched out, and a longer track is drawn a bar of sixteen to a row.
@@ -47,6 +49,7 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
  */
 export function StepStrip({
   tracker,
+  index,
   step,
   kitStep,
   root,
@@ -56,7 +59,9 @@ export function StepStrip({
   onEdit,
 }: {
   tracker: Tracker;
-  /** The step playing, from zero, or -1. */
+  /** The track shown and edited, by its place. */
+  index: number;
+  /** The step that track is playing, from zero, or -1. */
   step: number;
   /** The drum kit's step playing, from zero, or -1. */
   kitStep: number;
@@ -67,12 +72,15 @@ export function StepStrip({
   /** The track now plays this patch. */
   onPlays: (id: number) => void;
   onChange: (next: Tracker) => void;
-  /** A whole-pattern edit: clear, paste or repeat a bar, rotate, transpose. */
+  /** A whole-pattern edit on this track: clear, paste or repeat a bar, rotate, transpose. */
   onEdit: (edit: TrackerEdit) => void;
 }) {
-  const track = tracker.tracks[0];
+  const track = tracker.tracks[index] ?? tracker.tracks[0];
   const setTrack = (change: Partial<Track>) =>
-    onChange({ ...tracker, tracks: [{ ...track, ...change }, ...tracker.tracks.slice(1)] });
+    onChange({
+      ...tracker,
+      tracks: tracker.tracks.map((t, i) => (i === index ? { ...t, ...change } : t)),
+    });
   const stepAt = (i: number): Step =>
     track.steps[i] ?? { on: false, pitch: 0, hold: 0, velocity: VELOCITY_MAX, nudge: 0 };
   const setStep = (i: number, change: Partial<Step>) => {
@@ -222,18 +230,13 @@ export function StepStrip({
   };
 
   return (
-    <div
-      className={`flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground ${
-        track.on ? '' : 'opacity-60'
-      }`}
-    >
-      {/* No switch: the mode decides whether the steps play, and this strip
-          only shows in tracker mode. */}
-      <span className="text-[11px] font-semibold uppercase tracking-wider">Tracker</span>
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+      {/* No switch: every track plays while the transport runs. */}
+      <span className="text-[11px] font-semibold uppercase tracking-wider">Track {index + 1}</span>
 
       <div className="flex items-center gap-1.5">
         <span>Plays</span>
-        <PlaysPicker patches={patches} onPick={onPlays} />
+        <PlaysPicker patches={patches} value={track.patch} onPick={onPlays} />
       </div>
 
       <label className="flex items-center gap-1">
@@ -326,7 +329,7 @@ export function StepStrip({
               >
                 {cells.map((i) => {
                   const set = stepAt(i).on;
-                  const playing = track.on && step === i;
+                  const playing = step === i;
                   return (
                     <button
                       key={i}
@@ -410,11 +413,7 @@ export function StepStrip({
         </span>
       )}
 
-      <KitGrid
-        kit={tracker.kit}
-        step={track.on ? kitStep : -1}
-        onChange={(kit) => onChange({ ...tracker, kit })}
-      />
+      <KitGrid kit={tracker.kit} step={kitStep} onChange={(kit) => onChange({ ...tracker, kit })} />
     </div>
   );
 }

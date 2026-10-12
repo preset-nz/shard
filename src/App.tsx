@@ -18,6 +18,7 @@ import {
   addEnvelope,
   addLfo,
   addMaterial,
+  addTrack,
   arrangementDefs,
   auditionGrain,
   type ChainLevel,
@@ -48,6 +49,7 @@ import {
   lfoLimits,
   linkParam,
   listPatches,
+  MAX_TRACKS,
   type MappingsView,
   type MaterialsView,
   type MaterialView,
@@ -69,10 +71,12 @@ import {
   removeEnvelope,
   removeLfo,
   removeMaterial,
+  removeTrack,
   renamePatch,
   resetSound,
   type SourceInfo,
   selectPatch,
+  selectTrack,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -98,6 +102,7 @@ import { PatchPreview } from '@/components/PatchPreview';
 import { SceneView } from '@/components/SceneView';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { StepStrip } from '@/components/StepStrip';
+import { TrackFader } from '@/components/TrackFader';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
 import {
@@ -128,14 +133,11 @@ import { useSelection } from '@/stores/selection';
 const GRAIN_SCROLLBACK = 200;
 
 /**
- * The two ways of working (Georg, 2026-09-14). They change what plays as well
- * as what shows: tracker plays the steps, and sound scaping loops the patch
- * freely so it can be heard the whole time it is shaped. Remembered across
- * launches as UI state, and written to the track's switch, which stays the one
- * thing that decides whether steps play.
- *
- * Since epic 10 the scene view picks the mode: selecting the track is tracker,
- * selecting a patch is sound scaping. There is no switch for it.
+ * What the middle shows: a track's steps (`tracker`) or a patch's lanes
+ * (`soundscape`). The scene view picks it: selecting a track is the one,
+ * selecting a patch the other. Since epic 28 it never changes what plays:
+ * every track plays while the transport runs, and a selected patch no track
+ * plays loops on its own over them. Remembered across launches as UI state.
  */
 type Mode = 'tracker' | 'soundscape';
 
@@ -154,7 +156,7 @@ export default function App() {
     reduction: 1,
     grains: 0,
     playing: false,
-    step: -1,
+    steps: [],
     kit_step: -1,
     playhead: 0,
     auditioning: false,
@@ -194,9 +196,15 @@ export default function App() {
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
+  // Read once at startup, to tell Rust a track is selected.
+  const startMode = useRef(mode);
   /** The session's patches, in order, as the scene view lists them. */
   const [patches, setPatches] = useState<PatchInfo[]>([]);
-  const playedPatch = patches.find((p) => p.played);
+  /**
+   * The track the tracker shows and edits, by place. Rust keeps the same
+   * index, brought within the tracks there are, so both clamp alike.
+   */
+  const [selectedTrack, setSelectedTrack] = useState(0);
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
   /** The active controller map, as the rows draw it. */
@@ -212,38 +220,35 @@ export default function App() {
   /** The tracker, the level above the patch. Shown at once, then as Rust answers. */
   const [tracker, setTrackerView] = useState<Tracker | null>(null);
   const trackerSeq = useRef(0);
-  const editTrackerView = useCallback(async (edit: TrackerEdit) => {
-    try {
-      setTrackerView(await editTracker(edit));
-    } catch (e) {
-      setError(String(e));
-    }
+  /** A tracker as Rust answered with it, the selected track kept within it. */
+  const showTracker = useCallback((t: Tracker) => {
+    setTrackerView(t);
+    setSelectedTrack((s) => Math.min(s, Math.max(0, t.tracks.length - 1)));
   }, []);
-  const changeTracker = useCallback(async (next: Tracker) => {
-    setTrackerView(next);
-    const seq = ++trackerSeq.current;
-    try {
-      const played = await setTracker(next);
-      // Only the newest answer, or a slow one would undo a quicker click.
-      if (seq === trackerSeq.current) setTrackerView(played);
-      // Entering tracker mode moves the engine to the track's patch.
-      setPatches(await listPatches());
-    } catch (e) {
-      setError(String(e));
-    }
-  }, []);
-
-  // The mode decides whether the steps play, so the track's switch follows
-  // it: on launch, on every switch, and after a document brings its own.
-  useEffect(() => {
-    const track = tracker?.tracks[0];
-    const want = mode === 'tracker';
-    if (!tracker || !track || track.on === want) return;
-    void changeTracker({
-      ...tracker,
-      tracks: [{ ...track, on: want }, ...tracker.tracks.slice(1)],
-    });
-  }, [mode, tracker, changeTracker]);
+  const editTrackerView = useCallback(
+    async (track: number, edit: TrackerEdit) => {
+      try {
+        showTracker(await editTracker(track, edit));
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [showTracker],
+  );
+  const changeTracker = useCallback(
+    async (next: Tracker) => {
+      setTrackerView(next);
+      const seq = ++trackerSeq.current;
+      try {
+        const played = await setTracker(next);
+        // Only the newest answer, or a slow one would undo a quicker click.
+        if (seq === trackerSeq.current) showTracker(played);
+      } catch (e) {
+        setError(String(e));
+      }
+    },
+    [showTracker],
+  );
 
   // Each mode edits its own level, so a selection does not cross between
   // them: a patch node, a material or an LFO means nothing in the tracker,
@@ -284,7 +289,10 @@ export default function App() {
         setPool(await readMaterials());
         setMod(await readModulation());
         setLimits(await lfoLimits());
-        setTrackerView(await getTracker());
+        showTracker(await getTracker());
+        // Remembered on the tracker: its first track is the selection, so
+        // nothing is auditioned.
+        if (startMode.current === 'tracker') await selectTrack(0);
         setPatches(await listPatches());
       } catch (e) {
         setError(String(e));
@@ -293,7 +301,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [showTracker]);
 
   // Poll. Thirty hertz is enough for a meter and for the controls to follow a
   // patch load or a preset, and it keeps the boundary quiet. Nothing here is on the
@@ -531,9 +539,9 @@ export default function App() {
         // The document's tracker replaces the one on screen, and no answer to
         // an edit made before the load may put the old one back.
         trackerSeq.current++;
-        const loaded = await getTracker();
-        // The mode is the session's, not the document's, so it stays.
-        setTrackerView(loaded);
+        // What the middle shows is the session's, not the document's, so it
+        // stays; the selected track is kept within the tracks there are.
+        showTracker(await getTracker());
         useSelection.getState().clear();
         setError(null);
 
@@ -559,7 +567,7 @@ export default function App() {
     return () => {
       void unlisten.then((off) => off());
     };
-  }, []);
+  }, [showTracker]);
 
   /** Run one material command, and draw the pool Rust answers with. */
   const editMaterials = useCallback(async (run: () => Promise<MaterialsView>) => {
@@ -686,7 +694,7 @@ export default function App() {
   useEffect(() => {
     const unlisten = listen<{ undid: boolean; label: string }>('history-stepped', async (e) => {
       try {
-        setTrackerView(await getTracker());
+        showTracker(await getTracker());
         setMod(await readModulation());
         setPool(await readMaterials());
         setPatches(await listPatches());
@@ -698,7 +706,7 @@ export default function App() {
     return () => {
       void unlisten.then((off) => off());
     };
-  }, []);
+  }, [showTracker]);
 
   const togglePlay = useCallback(async () => {
     await setPlaying(!meter.playing);
@@ -796,25 +804,27 @@ export default function App() {
   // same function the keyboard fallback above calls. Read through a ref, so
   // the bindings are made once. The tracker's Pattern items are the strip's
   // own. Undo and Redo, in a text field too, are app-kit's.
-  // The scene view's selections decide the mode (epic 10). None of them edits
-  // the document. The track shows the tracker and plays its steps; a patch
-  // becomes the current one if it is not, then shows its lanes and loops.
-  // The engine plays one patch, and with the track selected it is the one the
-  // track plays, so selecting the track moves it there first.
-  const selectTrack = async () => {
+  // The scene view's selections decide what the middle shows (epics 10 and
+  // 28). None of them edits the document, and none changes what a track
+  // plays. A track shows the tracker on its steps, and its patch becomes the
+  // current one; a patch becomes current and shows its lanes, and loops on
+  // its own while no track plays it. Rust says so along `document-opened`
+  // when the current patch changes.
+  const selectTrackRow = async (track: number) => {
     try {
-      const played = patches.find((p) => p.played);
-      if (played && !played.current) await selectPatch(played.id);
+      await selectTrack(track);
+      setSelectedTrack(track);
       setMode('tracker');
+      setPatches(await listPatches());
     } catch (e) {
       setError(String(e));
     }
   };
-  // The *Plays* picker: one undo step, "Set Plays". In tracker mode Rust also
-  // moves the engine to the pick and says so along `document-opened`.
-  const pickPlays = async (id: number) => {
+  // A track's *Plays* picker: one undo step, "Set Plays".
+  const pickPlays = async (track: number, id: number) => {
     try {
-      await setTrackPatch(id);
+      await setTrackPatch(track, id);
+      showTracker(await getTracker());
       setPatches(await listPatches());
     } catch (e) {
       setError(String(e));
@@ -822,8 +832,34 @@ export default function App() {
   };
   const selectPatchRow = async (id: number) => {
     try {
-      if (!patches.find((p) => p.id === id)?.current) await selectPatch(id);
+      await selectPatch(id);
       setMode('soundscape');
+      setPatches(await listPatches());
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  // Add Track: one undo step, a track at the end playing the current patch,
+  // and it becomes the selection. Remove Track: one undo step, named for it.
+  const tracks = tracker?.tracks.length ?? 1;
+  const canAddTrack = tracks < MAX_TRACKS;
+  const canRemoveTrack = tracks > 1;
+  const addTrackRow = async () => {
+    try {
+      const added = await addTrack();
+      showTracker(await getTracker());
+      await selectTrackRow(added);
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const removeTrackRow = async (track: number) => {
+    try {
+      await removeTrack(track);
+      // The selection stays on the track it was on, as Rust keeps it.
+      setSelectedTrack((s) => (s > track ? s - 1 : s));
+      showTracker(await getTracker());
+      setPatches(await listPatches());
     } catch (e) {
       setError(String(e));
     }
@@ -879,7 +915,9 @@ export default function App() {
   const typing = useTextFocus();
   const canRename = !typing && patchSelected !== null;
   const canDuplicate = !typing && (mode === 'tracker' ? tracker !== null : patchSelected !== null);
-  const canDelete = selectedFx !== null || deletablePatch !== null;
+  // With a track showing and nothing in it selected, Delete removes the track.
+  const deletableTrack = mode === 'tracker' && selection === null && canRemoveTrack;
+  const canDelete = selectedFx !== null || deletablePatch !== null || deletableTrack;
 
   const menuRef = useRef<(id: string) => void>(() => {});
   menuRef.current = (id) => {
@@ -910,7 +948,7 @@ export default function App() {
           .catch((e) => setError(String(e)));
         break;
       case 'edit.duplicate':
-        if (mode === 'tracker') void editTrackerView({ op: 'duplicate' });
+        if (mode === 'tracker') void editTrackerView(selectedTrack, { op: 'duplicate' });
         else if (patchSelected) void duplicatePatchRow(patchSelected.id);
         break;
       case 'edit.rename':
@@ -919,6 +957,13 @@ export default function App() {
       case 'edit.delete':
         if (node?.fx) removeEffect(node);
         else if (deletablePatch) void deletePatchRow(deletablePatch.id);
+        else if (deletableTrack) void removeTrackRow(selectedTrack);
+        break;
+      case 'track.add:melody':
+        if (canAddTrack) void addTrackRow();
+        break;
+      case 'track.remove':
+        if (mode === 'tracker' && canRemoveTrack) void removeTrackRow(selectedTrack);
         break;
       case 'fx-remove':
         if (node?.fx) removeEffect(node);
@@ -930,7 +975,7 @@ export default function App() {
         if (node?.fx) moveEffect(node, 1);
         break;
       case 'view-tracker':
-        void selectTrack();
+        void selectTrackRow(selectedTrack);
         break;
       case 'view-soundscape': {
         const current = patches.find((p) => p.current);
@@ -951,6 +996,8 @@ export default function App() {
       'edit.rename': canRename,
       'edit.duplicate': canDuplicate,
       'edit.delete': canDelete,
+      'track.add:melody': canAddTrack,
+      'track.remove': mode === 'tracker' && canRemoveTrack,
     };
     return Object.fromEntries(
       (commandTable ?? []).map((c) => [
@@ -958,7 +1005,7 @@ export default function App() {
         { run: () => menuRef.current(c.id), enabled: enabled[c.id] ?? true },
       ]),
     );
-  }, [commandTable, canRename, canDuplicate, canDelete]);
+  }, [commandTable, canRename, canDuplicate, canDelete, canAddTrack, canRemoveTrack, mode]);
   useCommands(bindings);
 
   // How many parameters follow each modulator, for the tree and the editors.
@@ -1065,17 +1112,20 @@ export default function App() {
         </header>
 
         <div className="flex min-h-0 flex-1">
-          {/* The scene view: the track, the patches and the materials, in
-            both what were the modes. Its selection decides the mode. The
-            current patch carries its generators and modulators. */}
+          {/* The scene view: the tracks, the patches and the materials. Its
+            selection decides what the middle shows. The current patch
+            carries its generators and modulators. */}
           <SceneView
+            tracks={tracker?.tracks ?? []}
             patches={patches}
-            trackSelected={mode === 'tracker'}
+            selectedTrack={mode === 'tracker' ? selectedTrack : null}
             selectedPatch={
               mode === 'soundscape' ? (patches.find((p) => p.current)?.id ?? null) : null
             }
-            onSelectTrack={() => void selectTrack()}
-            onPlays={(id) => void pickPlays(id)}
+            onSelectTrack={(i) => void selectTrackRow(i)}
+            onPlays={(track, id) => void pickPlays(track, id)}
+            onAddTrack={() => void addTrackRow()}
+            onRemoveTrack={(i) => void removeTrackRow(i)}
             onSelectPatch={(id) => void selectPatchRow(id)}
             onNewPatch={newPatchRow}
             renaming={renaming}
@@ -1278,12 +1328,14 @@ export default function App() {
             {mode === 'tracker' && tracker && (
               <StepStrip
                 tracker={tracker}
-                step={meter.step}
+                index={selectedTrack}
+                step={meter.steps[selectedTrack] ?? -1}
                 kitStep={meter.kit_step}
+                // The current patch is the selected track's.
                 root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
                 patches={patches}
-                onPlays={(id) => void pickPlays(id)}
-                onEdit={(edit) => void editTrackerView(edit)}
+                onPlays={(id) => void pickPlays(selectedTrack, id)}
+                onEdit={(edit) => void editTrackerView(selectedTrack, edit)}
                 onChange={(next) => void changeTracker(next)}
               />
             )}
@@ -1315,6 +1367,27 @@ export default function App() {
                         <AddMenu title="Add an effect" choices={addChoices} onAdd={addEffect} />
                       )}
                     </div>
+                    {/* The tracker's Patches lane: every track's fader first,
+                      each labelled by the patch it plays. */}
+                    {mode === 'tracker' &&
+                      lane.id === 'generate' &&
+                      tracker?.tracks.map((t, i) => (
+                        <TrackFader
+                          // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
+                          key={i}
+                          index={i}
+                          patchName={patches.find((p) => p.id === t.patch)?.name ?? ''}
+                          gain={t.gain}
+                          selected={selectedTrack === i && selection === null}
+                          onSelect={() => void selectTrackRow(i)}
+                          onGain={(gain) =>
+                            void changeTracker({
+                              ...tracker,
+                              tracks: tracker.tracks.map((x, j) => (j === i ? { ...x, gain } : x)),
+                            })
+                          }
+                        />
+                      ))}
                     {[
                       // The chain first, in its order; then the fixed nodes.
                       ...(lane.id === 'process' ? chain : []),
@@ -1325,12 +1398,7 @@ export default function App() {
                     ].map((node) => (
                       <NodeCard
                         key={node.id}
-                        // The track's card is the patch it plays, by name.
-                        node={
-                          mode === 'tracker' && node.id === 'arrangement.track' && playedPatch
-                            ? { ...node, label: playedPatch.name }
-                            : node
-                        }
+                        node={node}
                         defs={defs}
                         values={values}
                         ctx={panelCtx}

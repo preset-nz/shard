@@ -8,20 +8,24 @@ import {
 } from '@/components/ui/select';
 
 /**
- * The track's *Plays* picker (epic 10, story c): which patch the track plays
+ * A track's *Plays* picker (epic 10, story c): which patch the track plays
  * its steps on. Changing it is one undo step, "Set Plays". The caller sends
- * the pick and reads the patches again; this only draws the choice.
+ * the pick and reads the tracker and the patches again; this only draws the
+ * choice.
  */
 export function PlaysPicker({
   patches,
+  value,
   onPick,
   className = 'w-24',
 }: {
   patches: PatchInfo[];
+  /** The patch the track plays now, by id. */
+  value: number | null;
   onPick: (id: number) => void;
   className?: string;
 }) {
-  const played = patches.find((p) => p.played);
+  const played = patches.find((p) => p.id === value);
   if (!played) return null;
   return (
     <Select

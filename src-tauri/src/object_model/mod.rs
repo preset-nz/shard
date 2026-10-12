@@ -10,8 +10,9 @@
 //!   from a parameter onto one of those, carrying `lo` and `hi`.
 //! - `/arrangements/arrangement`: the level above the patch. Tempo and swing;
 //!   tracks in the order `tracks`, each playing the patch its reference
-//!   `track.patch` names (the first patch when it names none), each step a
-//!   child named by its number and
+//!   `track.patch` names (the first patch when it names none) at its fader
+//!   `track.gain`, on the engine's voice of its place in the order (epic
+//!   28), each step a child named by its number and
 //!   made only once it differs from a blank step; the kit, its beats made the
 //!   same way; its own chain, filter and output (a `master`, named `amp`).
 //! - `/materials/<sample>`: WAVs and the built-in drone. A generator reads
@@ -31,7 +32,7 @@ use rhizome_core::{
 };
 use rhizome_pom::{Kinds, NodeValues, ObjectModel};
 use serde_json::{json, Value as Json};
-use shard_dsp::arrangement;
+use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::HIT_MAX;
 use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
@@ -59,7 +60,7 @@ pub fn float(v: f32) -> f64 {
 
 pub use compile::{
     arrangement_node, as_f32, compile, instance_of, locate, patch_node, patches, patches_in,
-    read_tracker, to_value, track_patch, Plan,
+    played_by, read_tracker, to_value, track_patch, tracks, write_values, PatchPlan, Plan,
 };
 
 pub const EXTENSION: &str = "shard";
@@ -97,6 +98,8 @@ pub const PATCH_LABEL: &str = "patch.label";
 /// The patch a track plays, a reference to it. Unset, or naming a patch that
 /// has gone, the track plays the first patch.
 pub const TRACK_PATCH: &str = "track.patch";
+/// A track's fader, 0 to `TRACK_GAIN_MAX` (epic 28).
+pub const TRACK_GAIN: &str = "track.gain";
 
 /// Played, not edited: a held button or a pedal writes them to the bank, and
 /// a document never stores them. The tape's gestures, on the arrangement's
@@ -639,12 +642,16 @@ pub fn kinds() -> Vec<KindDecl> {
         Some(1),
     );
 
-    // A track, with the patch's fader (one today, read from the first track,
-    // as only the first track sounds). Whether it plays is the mode's, not
-    // the document's (Georg, 2026-10-06), so it has no switch here.
+    // A track, with its fader and the patch it plays (epic 28). Every track
+    // plays while the transport runs; muting one is story c's.
     let track = Track::default();
-    let t = NodeType::new(TRACK).in_categories(&[ARRANGEMENTS]);
-    let t = with_rows(t, &arrangement_rows("track"))
+    let t = NodeType::new(TRACK)
+        .in_categories(&[ARRANGEMENTS])
+        .float(
+            TRACK_GAIN,
+            0.0..=float(TRACK_GAIN_MAX),
+            float(TRACK_GAIN_DEFAULT),
+        )
         .int("track.length", 4..=STEPS as i64, i64::from(track.length))
         .reference(TRACK_PATCH);
     push(
@@ -857,10 +864,18 @@ pub trait ShardEdit {
     /// The arrangement, its tracks and kit written from a tracker, with its
     /// filter and output at their defaults.
     fn add_arrangement(&mut self, tracker: &Tracker) -> Result<NodeId>;
-    /// Makes the arrangement's tempo, swing, tracks and kit grid what
-    /// `tracker` says, writing only what differs. A track's switch is the
-    /// mode's and is not written.
+    /// A track at the end of the arrangement's order, written from `track`.
+    /// What it plays is left unset (the first patch).
+    fn add_track(&mut self, arr: NodeId, track: &Track) -> Result<NodeId>;
+    /// Makes the arrangement's tempo, swing, its tracks' steps, lengths and
+    /// faders, and the kit grid what `tracker` says, writing only what
+    /// differs. Tracks are matched by place, and none is added or removed:
+    /// that is Add Track's and Remove Track's, so a stale tracker sent back
+    /// can't undo one. What a track plays is `track.patch`'s, never written
+    /// here.
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()>;
+    /// One track's steps, length and fader, writing only what differs.
+    fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()>;
     /// Sets `key` to `want`, or resets it when `want` is its default, and
     /// writes nothing when it already is.
     fn put(&mut self, node: NodeId, key: &str, want: Value) -> Result<()>;
@@ -1017,8 +1032,18 @@ impl ShardEdit for Edit<'_> {
         self.add(arr, KIT, KIT)?;
         self.add(arr, "filter", "filter")?;
         self.add(arr, MASTER, "amp")?;
+        for track in &tracker.tracks {
+            self.add_track(arr, track)?;
+        }
         self.write_tracker(arr, tracker)?;
         Ok(arr)
+    }
+
+    fn add_track(&mut self, arr: NodeId, track: &Track) -> Result<NodeId> {
+        let node = self.add_unique(arr, TRACK, TRACK)?;
+        self.append_to_order(arr, TRACKS, node)?;
+        self.write_track(node, track)?;
+        Ok(node)
     }
 
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()> {
@@ -1029,31 +1054,8 @@ impl ShardEdit for Edit<'_> {
             .at(arr)
             .map(|a| a.order(TRACKS).iter().map(|n| n.id()).collect())
             .unwrap_or_default();
-        let blank = Step::default();
-        for (t, track) in tracker.tracks.iter().enumerate() {
-            let node = match existing.get(t) {
-                Some(n) => *n,
-                None => {
-                    let n = self.add_unique(arr, TRACK, TRACK)?;
-                    self.append_to_order(arr, TRACKS, n)?;
-                    n
-                }
-            };
-            self.put(node, "track.length", int(track.length))?;
-            for i in 0..STEPS {
-                let s = track.steps.get(i).copied().unwrap_or(blank);
-                let fields = [
-                    ("step.on", Value::Bool(s.on)),
-                    ("step.pitch", int(s.pitch)),
-                    ("step.hold", int(s.hold)),
-                    ("step.velocity", int(s.velocity)),
-                    ("step.nudge", int(s.nudge)),
-                ];
-                self.put_cell(node, STEP, i, s == blank, fields)?;
-            }
-        }
-        for gone in existing.iter().skip(tracker.tracks.len()) {
-            self.remove(*gone)?;
+        for (node, track) in existing.iter().zip(&tracker.tracks) {
+            self.write_track(*node, track)?;
         }
 
         let kit = self.at(arr).and_then(|a| a.child(KIT)).map(|k| k.id());
@@ -1073,6 +1075,24 @@ impl ShardEdit for Edit<'_> {
                 ];
                 self.put_cell(kit, BEAT, i, hits == [0; 3], fields)?;
             }
+        }
+        Ok(())
+    }
+
+    fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()> {
+        self.put(node, "track.length", int(track.length))?;
+        self.put(node, TRACK_GAIN, Value::Float(float(track.gain)))?;
+        let blank = Step::default();
+        for i in 0..STEPS {
+            let s = track.steps.get(i).copied().unwrap_or(blank);
+            let fields = [
+                ("step.on", Value::Bool(s.on)),
+                ("step.pitch", int(s.pitch)),
+                ("step.hold", int(s.hold)),
+                ("step.velocity", int(s.velocity)),
+                ("step.nudge", int(s.nudge)),
+            ];
+            self.put_cell(node, STEP, i, s == blank, fields)?;
         }
         Ok(())
     }

@@ -187,13 +187,13 @@ const arrangementNode = (node: string, label: string, lane: Lane): NodeInfo => {
 };
 
 /**
- * The arrangement's nodes, in the tracker's lanes. One patch today, shown by
- * its fader; one per track with roadmap row 10. The crusher has no envelope
- * here, since the arrangement has no pass for one to follow.
+ * The arrangement's nodes, in the tracker's lanes. The tracks' faders are
+ * per track and not rows of this table, so the Patches lane draws them
+ * itself, one card per track. The crusher has no envelope here, since the
+ * arrangement has no pass for one to follow.
  */
 export const ARRANGEMENT_NODES: NodeInfo[] = [
-  arrangementNode('track', 'Patch', 'generate'),
-  // The drum kit beside the patch: its switch, fader, tune and decay. Its
+  // The drum kit beside the tracks: its switch, fader, tune and decay. Its
   // grid is in the tracker strip.
   arrangementNode('kit', 'Drums', 'generate'),
   arrangementNode('filter', 'Filter', 'master'),

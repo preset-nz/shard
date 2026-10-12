@@ -7,7 +7,8 @@
 //! `new`. Voice `i` reads its own bank (`process_voices`), modulation
 //! (`set_voice_modulation`), materials (`swap_voice_source`), readings
 //! (`set_voice_readings`) and steps (`set_voice_steps`), and is switched in
-//! and out with `set_voice_active`, which fades it. Voice 0 starts active and
+//! and out with `set_voice_active`, which fades it, and has its own fader,
+//! its track's gain (`set_voice_gain`). Voice 0 starts active and
 //! the rest idle; an idle voice is skipped whole and costs nothing. The calls
 //! without `voice` in their name (`process_block`, `set_steps`,
 //! `swap_source` and the rest) are the single-track shorthand: they address
@@ -48,7 +49,6 @@ pub const VOICES: usize = 8;
 /// Where the arrangement's rows sit in its own table.
 struct ArrangementSlots {
     fx: ChainSlots,
-    track_gain: usize,
     kit_on: usize,
     kit_gain: usize,
     kit_tune: usize,
@@ -67,7 +67,6 @@ impl ArrangementSlots {
         };
         Self {
             fx: ChainSlots::resolve(at),
-            track_gain: at("track.gain"),
             kit_on: at("kit.on"),
             kit_gain: at("kit.gain"),
             kit_tune: at("kit.tune"),
@@ -85,7 +84,8 @@ impl ArrangementSlots {
 #[derive(Clone, Copy)]
 struct ArrangementBlock {
     fx: ChainParams,
-    track_gain: f32,
+    /// The patch alone: every track's fader at unity. See `read`.
+    patch_alone: bool,
     /// Whether the drum kit plays, its level (zero when it is off and for
     /// the patch alone) and its sound.
     kit_on: bool,
@@ -103,23 +103,22 @@ impl ArrangementBlock {
     /// read as the hand set it.
     fn read(s: &ArrangementSlots, value: impl Fn(usize) -> f32 + Copy, patch_alone: bool) -> Self {
         let mut fx = ChainParams::read(&s.fx, value, value);
-        let mut track_gain = value(s.track_gain);
         let kit_on = value(s.kit_on) >= 0.5;
         let mut kit_gain = if kit_on { value(s.kit_gain) } else { 0.0 };
         // The patch alone, as sound scaping hears it (Georg, 2026-09-26). Not
         // a separate path: the arrangement's chain is emptied and both gains
-        // go to unity, so the ramps fade the change in 10 ms, and once they
+        // go to unity (the tracks' faders too), so the ramps fade the change
+        // in 10 ms, and once they
         // land the chain is bit-exact with no arrangement at all. The filter
         // keeps running, so one switched back in has no stale state. The
         // tape is everyone's, so the patch alone still brakes.
         if patch_alone {
             fx = fx.without_effects();
-            track_gain = 1.0;
             kit_gain = 0.0;
         }
         Self {
             fx,
-            track_gain,
+            patch_alone,
             kit_on,
             kit_gain,
             kit: KitParams {
@@ -196,11 +195,14 @@ pub struct Engine {
     transport: Transport,
     /// The tape's speed, shared the same way.
     reel: Reel,
-    /// The arrangement's chain, over the voices, and their fader into it.
+    /// The arrangement's chain, over the voices.
     arr_slots: ArrangementSlots,
     arr_fx: Chain,
     arr: ArrangementBlock,
-    track_gain: OnePole,
+    /// Each voice's fader into it, its track's gain: what the host last set
+    /// (`set_voice_gain`) and where the glide has got to.
+    gain_targets: [f32; VOICES],
+    gains: [OnePole; VOICES],
     /// The drum kit beside the voices, its grid, its place in its own loop,
     /// and its fader. See `kit.rs`.
     kit: Kit,
@@ -218,9 +220,12 @@ impl Engine {
         let arr_defs = arrangement::params();
         let arr_slots = ArrangementSlots::resolve();
         let arr = ArrangementBlock::read(&arr_slots, |slot| arr_defs[slot].default, false);
-        let mut track_gain = OnePole::new();
-        track_gain.set_time(arr_defs[arr_slots.track_gain].smooth_ms, sample_rate);
-        track_gain.reset(arr_defs[arr_slots.track_gain].default);
+        let gains = std::array::from_fn(|_| {
+            let mut g = OnePole::new();
+            g.set_time(arrangement::TRACK_GAIN_MS, sample_rate);
+            g.reset(arrangement::TRACK_GAIN_DEFAULT);
+            g
+        });
         let mut kit_gain = OnePole::new();
         kit_gain.set_time(arr_defs[arr_slots.kit_gain].smooth_ms, sample_rate);
         kit_gain.reset(arr.kit_gain);
@@ -238,7 +243,8 @@ impl Engine {
             arr_fx: Chain::new(sample_rate, arr_defs, &arr_slots.fx, 0),
             arr_slots,
             arr,
-            track_gain,
+            gain_targets: [arrangement::TRACK_GAIN_DEFAULT; VOICES],
+            gains,
             kit: Kit::new(sample_rate),
             kit_pattern: steps.kit,
             kit_clock: KitClock::default(),
@@ -256,13 +262,33 @@ impl Engine {
     /// played before) and fades in; out, it fades out and then goes idle,
     /// where it is skipped whole. At a block boundary, like every hand-off.
     pub fn set_voice_active(&mut self, i: usize, on: bool) {
+        if on && self.voices[i].idle() {
+            // Woken clean, its fader already where its track has it.
+            self.gains[i].reset(self.gain_targets[i]);
+        }
         self.voices[i].set_active(on);
+    }
+
+    /// Voice `i`'s fader: its track's gain, 0 to `TRACK_GAIN_MAX`, glided
+    /// over `TRACK_GAIN_MS`. Once a block, like the steps.
+    pub fn set_voice_gain(&mut self, i: usize, gain: f32) {
+        self.gain_targets[i] = if gain.is_finite() {
+            gain.clamp(0.0, arrangement::TRACK_GAIN_MAX)
+        } else {
+            arrangement::TRACK_GAIN_DEFAULT
+        };
     }
 
     /// Whether voice `i` is switched in. A voice switched out may still be
     /// fading.
     pub fn voice_active(&self, i: usize) -> bool {
         self.voices[i].active()
+    }
+
+    /// Whether voice `i` has faded out and is skipped: silent, so its
+    /// materials can be swapped under it without a cut.
+    pub fn voice_idle(&self, i: usize) -> bool {
+        self.voices[i].idle()
     }
 
     /// Replace one of voice `i`'s materials and hand back the old buffer.
@@ -352,7 +378,12 @@ impl Engine {
     /// The hand's `bank` is only read. Atomic stores only, so it is safe to
     /// call from the audio callback once a block.
     pub fn publish_heard(&self, bank: &ParamBank, heard: &ParamBank) {
-        self.voices[0].publish_heard(bank, heard);
+        self.publish_voice_heard(0, bank, heard);
+    }
+
+    /// `publish_heard` for voice `i`, which reads `bank`.
+    pub fn publish_voice_heard(&self, i: usize, bank: &ParamBank, heard: &ParamBank) {
+        self.voices[i].publish_heard(bank, heard);
     }
 
     /// Voice 0's spawn log, for whatever wants to draw it. Cloning the handle
@@ -424,7 +455,12 @@ impl Engine {
     /// source, so the drawn playhead lines up with the drawn waveform rather
     /// than with the trimmed window.
     pub fn play_position(&self) -> f32 {
-        self.voices[0].play_position()
+        self.voice_play_position(0)
+    }
+
+    /// `play_position` for voice `i`.
+    pub fn voice_play_position(&self, i: usize) -> f32 {
+        self.voices[i].play_position()
     }
 
     /// How long one of voice 0's materials is, in samples.
@@ -438,7 +474,12 @@ impl Engine {
 
     /// Grains sounding in voice 0's cloud.
     pub fn active_grains(&self) -> usize {
-        self.voices[0].active_grains()
+        self.voice_active_grains(0)
+    }
+
+    /// Grains sounding in voice `i`'s cloud.
+    pub fn voice_active_grains(&self, i: usize) -> usize {
+        self.voices[i].active_grains()
     }
 
     /// The step voice 0's track is in, or none while it is off. For the UI.
@@ -558,11 +599,19 @@ impl Engine {
             // This frame's place, read by every voice and the kit before the
             // transport moves on.
             let beat = *self.transport.beat();
+            // Each voice through its track's fader. The patch alone hears
+            // every voice at unity, and the glide carries the change.
             let (mut l, mut r) = (0.0, 0.0);
             for &i in live {
                 let (vl, vr) = self.voices[i].frame(tape, &beat, swing);
-                l += vl;
-                r += vr;
+                let want = if arr.patch_alone {
+                    1.0
+                } else {
+                    self.gain_targets[i]
+                };
+                let g = self.gains[i].process(want);
+                l += vl * g;
+                r += vr * g;
             }
             // The kit, on the same clock: it reads how far the steps have
             // run, so it stays on their grid at any length of its own. Its
@@ -579,18 +628,16 @@ impl Engine {
             }
             self.transport.advance(speed);
 
-            // Into the arrangement: the voices' fader, then the
-            // arrangement's own drive, crush, ring, chorus, filter and
-            // output. It has no pass, so its crusher has no envelope.
-            let t = self.track_gain.process(arr.track_gain);
-            // The kit joins here, beside the voices at their fader: past
+            // Into the arrangement's own drive, crush, ring, chorus, filter
+            // and output. It has no pass, so its crusher has no envelope.
+            // The kit joins here, beside the voices past their faders: past
             // their envelopes and velocity, into the arrangement's chain.
             // On the tape like them, so a brake slows and fades it too.
             // Mono, into both sides.
             let kit = self.kit.process_at(speed.abs())
                 * tape_gain(speed)
                 * self.kit_gain.process(arr.kit_gain);
-            let (l, r) = self.arr_fx.front(l * t + kit, r * t + kit, &arr.fx);
+            let (l, r) = self.arr_fx.front(l + kit, r + kit, &arr.fx);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
 
             // The limiter holds peaks under the ceiling, a millisecond late.
@@ -3113,7 +3160,6 @@ mod tests {
     fn busy_arrangement() -> ParamBank {
         let arr = ParamBank::for_table(arrangement::params());
         for (id, v) in [
-            ("arrangement.track.gain", 0.4),
             ("arrangement.fx.1.crush.on", 1.0),
             ("arrangement.fx.1.crush.mix", 1.0),
             ("arrangement.fx.1.crush.bits", 4.0),
@@ -3126,8 +3172,12 @@ mod tests {
         arr
     }
 
-    fn render_arranged(arr: &ParamBank, patch_alone: bool, blocks: usize) -> Vec<f32> {
+    /// The busy arrangement's track fader, set beside it.
+    const BUSY_GAIN: f32 = 0.4;
+
+    fn render_arranged(arr: &ParamBank, gain: f32, patch_alone: bool, blocks: usize) -> Vec<f32> {
         let mut e = Engine::new(48_000.0, 64);
+        e.set_voice_gain(0, gain);
         e.set_source(tone(48_000));
         e.set_playing(true);
         let bank = busy_patch();
@@ -3145,8 +3195,13 @@ mod tests {
     fn the_patch_alone_is_bit_exact_with_an_arrangement_at_its_defaults() {
         // Sound scaping hears the patch alone. However busy the arrangement
         // is, stepping it aside must leave exactly the patch, not nearly.
-        let defaults = render_arranged(&ParamBank::for_table(arrangement::params()), false, 100);
-        let alone = render_arranged(&busy_arrangement(), true, 100);
+        let defaults = render_arranged(
+            &ParamBank::for_table(arrangement::params()),
+            1.0,
+            false,
+            100,
+        );
+        let alone = render_arranged(&busy_arrangement(), BUSY_GAIN, true, 100);
         assert!(
             defaults.iter().any(|s| s.abs() > 0.1),
             "the patch was not heard"
@@ -3159,8 +3214,13 @@ mod tests {
 
     #[test]
     fn an_arrangement_effect_that_is_on_is_heard() {
-        let defaults = render_arranged(&ParamBank::for_table(arrangement::params()), false, 100);
-        let busy = render_arranged(&busy_arrangement(), false, 100);
+        let defaults = render_arranged(
+            &ParamBank::for_table(arrangement::params()),
+            1.0,
+            false,
+            100,
+        );
+        let busy = render_arranged(&busy_arrangement(), BUSY_GAIN, false, 100);
         let most = defaults
             .iter()
             .zip(&busy)
@@ -3175,10 +3235,9 @@ mod tests {
     #[test]
     fn the_fader_silences_the_patch_only_when_arranged() {
         let arr = ParamBank::for_table(arrangement::params());
-        set(&arr, "arrangement.track.gain", 0.0);
         // The fader glides from unity over 20 ms; half a second later it is
         // far below anything audible.
-        let arranged = render_arranged(&arr, false, 400);
+        let arranged = render_arranged(&arr, 0.0, false, 400);
         let loudest = arranged[arranged.len() / 2..]
             .iter()
             .fold(0.0f32, |m, s| m.max(s.abs()));
@@ -3187,8 +3246,8 @@ mod tests {
             "a fader at zero still let through {loudest}"
         );
 
-        let defaults = render_arranged(&ParamBank::for_table(arrangement::params()), true, 100);
-        let alone = render_arranged(&arr, true, 100);
+        let defaults = render_arranged(&arr, 1.0, true, 100);
+        let alone = render_arranged(&arr, 0.0, true, 100);
         assert!(defaults == alone, "the patch alone heard the fader");
     }
 
@@ -3200,6 +3259,7 @@ mod tests {
             e.set_playing(true);
             let bank = busy_patch();
             let arr = busy_arrangement();
+            e.set_voice_gain(0, BUSY_GAIN);
             let mut out = vec![0.0; 256];
             let (mut prev, mut worst) = (0.0f32, 0.0f32);
             for block in 0..400 {
@@ -3312,6 +3372,48 @@ mod tests {
             toggled < steady * 2.0 + 0.02,
             "switching a voice jumped by {toggled} against a steady {steady}"
         );
+    }
+
+    #[test]
+    fn a_voices_fader_moves_that_voice_only() {
+        // Voice 0 at 220 Hz, voice 1 at 330 Hz. Voice 1's fader down leaves
+        // exactly voice 0 alone, once the 20 ms glide has landed.
+        let render = |gains: [f32; 2], active: [bool; 2]| {
+            let mut e = Engine::new(48_000.0, 64);
+            e.set_source(tone(48_000));
+            let other: Vec<f32> = (0..48_000)
+                .map(|i| (core::f32::consts::TAU * 330.0 * i as f32 / 48_000.0).sin())
+                .collect();
+            e.set_voice_source(1, other);
+            // Set before it wakes, so it wakes there.
+            for (i, g) in gains.iter().enumerate() {
+                e.set_voice_gain(i, *g);
+            }
+            e.set_voice_active(1, active[1]);
+            e.set_voice_active(0, active[0]);
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            set(&bank, "material.gain", 0.4);
+            let mut out = vec![0.0; 256];
+            let mut all = Vec::new();
+            for _ in 0..200 {
+                e.process_block(&mut out, &bank);
+                all.extend_from_slice(&out);
+            }
+            all.split_off(all.len() / 2)
+        };
+        let both = render([1.0, 0.0], [true, true]);
+        let first = render([1.0, 1.0], [true, false]);
+        let most = both
+            .iter()
+            .zip(&first)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0f32, f32::max);
+        assert!(most < 1e-4, "voice 1 at zero still differed by {most}");
+        let half = render([0.5, 1.0], [true, false]);
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let ratio = peak(&half) / peak(&first);
+        assert!((ratio - 0.5).abs() < 0.05, "half the fader gave {ratio}");
     }
 
     #[test]

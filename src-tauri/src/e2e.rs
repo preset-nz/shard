@@ -1,5 +1,5 @@
 //! End to end: a `.shard` document in, audio out, through the paths the app
-//! takes on open and in tracker mode, with no window and no sound card.
+//! takes on open and on play, with no window and no sound card.
 //!
 //! The document is `tests/fixtures/trip-hop-acid.shard`, in rhizome's format
 //! since epic 32 (Georg, 2026-10-04:
@@ -36,9 +36,8 @@ struct Loaded {
 fn open(path: &str) -> (Loaded, crate::session::LoadReport) {
     let rig = rig();
     let report = rig.session.open(Path::new(path)).expect("the file opens");
-    // Tracker mode is what switches the steps on.
-    let mut steps = rig.session.plan().steps();
-    steps.on = true;
+    // What the first track's voice plays: its steps, on the transport.
+    let steps = rig.session.plan().tracker.params(0);
     (Loaded { rig, steps }, report)
 }
 

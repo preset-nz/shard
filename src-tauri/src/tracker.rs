@@ -6,20 +6,23 @@
 //! tempo, the swing, and tracks of steps. Loading a different patch leaves
 //! the beat alone, and a patch never carries a pattern.
 //!
-//! **One track today, playing the document's one patch.** Tracks are a list
-//! so the file already has the right shape; only the first sounds. A track
-//! is up to four bars of sixteen steps, each step with its own pitch and hold. A track
-//! names the patch it plays when a document holds more than one (roadmap row
-//! 10, node API decision 23). Each track is monophonic, as in a tracker: a
-//! new step cuts the last.
+//! **Several tracks, each playing its own patch** (epic 28). Up to
+//! `shard_dsp::VOICES` of them, and every one sounds while the transport
+//! runs. Track *i* plays on the engine's voice *i*, by its place in the
+//! arrangement's order. A track is up to four bars of sixteen steps, each
+//! step with its own pitch and hold, a fader (`gain`), and the patch it
+//! plays (`track.patch` in the tree; `patch` here is that patch's runtime
+//! id, for the webview's *Plays* pickers, and is never written back). Each
+//! track is monophonic, as in a tracker: a new step cuts the last.
 //!
 //! Saved in the same `.shard` file as the patch, in the arrangement node
 //! (`object_model::write_tracker`).
 
 use serde::{Deserialize, Serialize};
+use shard_dsp::arrangement::{TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
 use shard_dsp::kit::{KitPattern, HAT, HIT_MAX, KICK, SNARE};
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
-use shard_dsp::StepParams;
+use shard_dsp::{StepParams, VOICES};
 
 pub const TEMPO_MIN: f32 = 40.0;
 pub const TEMPO_MAX: f32 = 240.0;
@@ -85,9 +88,13 @@ impl Kit {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Track {
-    pub on: bool,
     /// 4, 8, 16, 32 or 64 sixteenths.
     pub length: u32,
+    /// Its fader in the mix, 0 to `TRACK_GAIN_MAX`.
+    pub gain: f32,
+    /// The runtime id of the patch it plays, as the session compiled it.
+    /// Read only: a pick goes through `Session::set_track_patch`.
+    pub patch: Option<u64>,
     /// Every step the track can hold, `STEPS` of them, step one first. Steps
     /// past `length` are kept, so shortening a track and lengthening it again
     /// gives them back.
@@ -139,11 +146,13 @@ impl Default for Tracker {
 }
 
 impl Default for Track {
+    /// A new session's first track: the pattern the engine starts with.
     fn default() -> Self {
         let p = StepParams::default();
         Self {
-            on: p.on,
             length: p.length,
+            gain: TRACK_GAIN_DEFAULT,
+            patch: None,
             steps: (0..STEPS)
                 .map(|i| Step {
                     on: (p.pattern >> i) & 1 == 1,
@@ -157,10 +166,23 @@ impl Default for Track {
     }
 }
 
+impl Track {
+    /// What Add Track adds: sixteen empty steps at unity.
+    pub fn blank() -> Self {
+        Self {
+            length: 16,
+            gain: TRACK_GAIN_DEFAULT,
+            patch: None,
+            steps: vec![Step::default(); STEPS],
+        }
+    }
+}
+
 impl Tracker {
     /// Brought into range: tempo and swing clamped, each length snapped to
     /// the nearest of 4, 8, 16, 32 and 64, each track padded or cut to exactly
-    /// `STEPS` steps with pitches and holds in range, and at least one track.
+    /// `STEPS` steps with pitches and holds in range, each fader in range, and
+    /// between one track and `VOICES`.
     /// Everything the UI or a hand-edited file sends passes through here
     /// before the engine hears it.
     pub fn sanitised(mut self) -> Self {
@@ -178,6 +200,7 @@ impl Tracker {
         if self.tracks.is_empty() {
             self.tracks.push(Track::default());
         }
+        self.tracks.truncate(VOICES);
         let snap = |length: u32| {
             LENGTHS
                 .iter()
@@ -194,6 +217,11 @@ impl Tracker {
         }
         for t in &mut self.tracks {
             t.length = snap(t.length);
+            t.gain = if t.gain.is_finite() {
+                t.gain.clamp(0.0, TRACK_GAIN_MAX)
+            } else {
+                TRACK_GAIN_DEFAULT
+            };
             t.steps.resize(STEPS, Step::default());
             for step in &mut t.steps {
                 step.pitch = step.pitch.clamp(-PITCH_RANGE, PITCH_RANGE);
@@ -205,11 +233,26 @@ impl Tracker {
         self
     }
 
-    /// What the engine plays: the first track, at the arrangement's tempo and swing.
-    pub fn params(&self) -> StepParams {
-        let t = self.tracks.first().cloned().unwrap_or_default();
+    /// The transport: the steps running, at the arrangement's tempo and
+    /// swing, with the kit's grid (`Engine::set_transport`).
+    pub fn transport(&self) -> StepParams {
+        StepParams {
+            on: true,
+            tempo_bpm: self.tempo,
+            swing: self.swing,
+            kit: self.kit.pattern(),
+            ..StepParams::default()
+        }
+    }
+
+    /// What track `i`'s voice plays (`Engine::set_voice_steps`), its steps
+    /// following the transport, or a blank track when there is no such
+    /// track. The transport's half is filled in too.
+    pub fn params(&self, i: usize) -> StepParams {
+        let blank = Track::blank();
+        let t = self.tracks.get(i).unwrap_or(&blank);
         let mut p = StepParams {
-            on: t.on,
+            on: true,
             tempo_bpm: self.tempo,
             length: t.length,
             swing: self.swing,
@@ -232,7 +275,7 @@ impl Tracker {
 }
 
 /// A whole-pattern edit, for entering music faster than one step at a time
-/// (roadmap row 23 d). They act on the first track, the one that plays. Each
+/// (roadmap row 23 d). Each acts on one track, the one the tracker shows. Each
 /// is brought into range afterwards by `sanitised`, so a bad number cannot
 /// put the tracker out of range.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
@@ -271,11 +314,11 @@ impl Tracker {
         }
     }
 
-    /// Apply a whole-pattern edit to the first track. Out-of-range bars are
-    /// ignored rather than guessed at.
-    pub fn apply(mut self, edit: &Edit) -> Self {
+    /// Apply a whole-pattern edit to track `track`. Out-of-range bars, and a
+    /// track that does not exist, are ignored rather than guessed at.
+    pub fn apply(mut self, track: usize, edit: &Edit) -> Self {
         self = self.sanitised();
-        let Some(t) = self.tracks.first_mut() else {
+        let Some(t) = self.tracks.get_mut(track) else {
             return self;
         };
         let bars = (t.length as usize / BAR).max(1);
@@ -332,7 +375,6 @@ mod tests {
     /// A track from a pattern (bit 0 first) and nothing else set.
     fn track(length: u32, pattern: u64) -> Track {
         let mut t = Track {
-            on: true,
             length,
             ..Track::default()
         };
@@ -421,7 +463,7 @@ mod tests {
         }
         .sanitised();
         assert!(t.tracks[0].steps[11].on);
-        assert_eq!(t.params().pattern, 0b1000_0000_0001);
+        assert_eq!(t.params(0).pattern, 0b1000_0000_0001);
     }
 
     #[test]
@@ -454,7 +496,7 @@ mod tests {
         };
         let kept = sent.sanitised();
         let bank = StepBank::default();
-        bank.store(&kept.params());
+        bank.store(&kept.params(0));
         assert_eq!(
             bank.load(),
             StepParams {
@@ -481,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn the_engine_plays_the_first_track_at_the_songs_tempo() {
+    fn each_track_plays_its_own_steps_at_the_songs_tempo() {
         let mut first = track(8, 0b1001);
         for step in &mut first.steps {
             step.pitch = 7;
@@ -496,7 +538,7 @@ mod tests {
             kit: Kit::default(),
         };
         assert_eq!(
-            t.params(),
+            t.params(0),
             StepParams {
                 on: true,
                 tempo_bpm: 82.0,
@@ -510,6 +552,47 @@ mod tests {
                 kit: KitPattern::default(),
             }
         );
+        let second = t.params(1);
+        assert_eq!((second.length, second.pattern), (4, 0b1));
+        // A track that is not there plays nothing.
+        assert_eq!(t.params(5).pattern, 0);
+        let transport = t.transport();
+        assert!(transport.on);
+        assert_eq!((transport.tempo_bpm, transport.swing), (82.0, 0.12));
+    }
+
+    #[test]
+    fn a_new_track_is_sixteen_empty_steps_at_unity() {
+        let t = Track::blank();
+        assert_eq!(t.length, 16);
+        assert_eq!(t.gain, TRACK_GAIN_DEFAULT);
+        assert!(t.steps.iter().all(|s| *s == Step::default()));
+        assert_eq!(t.steps.len(), STEPS);
+    }
+
+    #[test]
+    fn there_are_never_more_tracks_than_voices_and_faders_stay_in_range() {
+        let mut t = Tracker {
+            tracks: vec![Track::blank(); VOICES + 3],
+            ..Tracker::default()
+        };
+        t.tracks[0].gain = 9.0;
+        t.tracks[1].gain = f32::NAN;
+        let t = t.sanitised();
+        assert_eq!(t.tracks.len(), VOICES);
+        assert_eq!(t.tracks[0].gain, TRACK_GAIN_MAX);
+        assert_eq!(t.tracks[1].gain, TRACK_GAIN_DEFAULT);
+    }
+
+    #[test]
+    fn a_pattern_edit_acts_on_its_own_track_only() {
+        let mut t = counted(16);
+        t.tracks.push(t.tracks[0].clone());
+        let edited = t.clone().apply(1, &Edit::ClearBar { bar: 0 });
+        assert_eq!(edited.tracks[0], t.clone().sanitised().tracks[0]);
+        assert!(edited.tracks[1].steps[..16].iter().all(|s| !s.on));
+        // A track that does not exist changes nothing.
+        assert_eq!(t.clone().apply(4, &Edit::Duplicate), t.sanitised());
     }
 
     #[test]
@@ -527,7 +610,7 @@ mod tests {
             ..Tracker::default()
         }
         .sanitised()
-        .params();
+        .params(0);
         assert_eq!(p.length, 64);
         assert_eq!(p.pattern, 1 << 63);
         assert_eq!(
@@ -578,7 +661,7 @@ mod tests {
 
     #[test]
     fn clearing_a_bar_empties_only_that_bar() {
-        let t = counted(32).apply(&Edit::ClearBar { bar: 1 });
+        let t = counted(32).apply(0, &Edit::ClearBar { bar: 1 });
         let steps = &t.tracks[0].steps;
         assert!(steps[16..32].iter().all(|s| *s == Step::default()));
         assert_eq!(steps[3].pitch, 3, "the first bar is untouched");
@@ -588,70 +671,80 @@ mod tests {
     #[test]
     fn pasting_a_bar_puts_the_copied_steps_there() {
         let source = counted(16).tracks[0].steps[..BAR].to_vec();
-        let t = counted(32)
-            .apply(&Edit::ClearBar { bar: 1 })
-            .apply(&Edit::PasteBar {
+        let t = counted(32).apply(0, &Edit::ClearBar { bar: 1 }).apply(
+            0,
+            &Edit::PasteBar {
                 bar: 1,
                 steps: source.clone(),
-            });
+            },
+        );
         assert_eq!(&t.tracks[0].steps[16..32], &source[..]);
     }
 
     #[test]
     fn duplicating_plays_the_pattern_twice_and_stops_at_the_longest_track() {
         let one_bar = counted(16);
-        let t = one_bar.clone().apply(&Edit::Duplicate);
+        let t = one_bar.clone().apply(0, &Edit::Duplicate);
         assert_eq!(t.tracks[0].length, 32);
         assert_eq!(&t.tracks[0].steps[16..32], &one_bar.tracks[0].steps[..16]);
         assert_eq!(&t.tracks[0].steps[..16], &one_bar.tracks[0].steps[..16]);
-        let short = counted(4).apply(&Edit::Duplicate);
+        let short = counted(4).apply(0, &Edit::Duplicate);
         assert_eq!(short.tracks[0].length, 8);
         assert_eq!(&short.tracks[0].steps[4..8], &short.tracks[0].steps[..4]);
         let full = counted(64);
-        assert_eq!(full.clone().apply(&Edit::Duplicate), full);
+        assert_eq!(full.clone().apply(0, &Edit::Duplicate), full);
     }
 
     #[test]
     fn repeating_a_bar_fills_the_rest_of_the_track_and_no_further() {
-        let t = counted(32).apply(&Edit::RepeatBar { from: 0 });
+        let t = counted(32).apply(0, &Edit::RepeatBar { from: 0 });
         let steps = &t.tracks[0].steps;
         assert_eq!(&steps[16..32], &steps[..16]);
         // Bars past the track's length are not touched.
         assert_eq!(steps[32].pitch, 12);
-        let four = counted(64).apply(&Edit::RepeatBar { from: 1 });
+        let four = counted(64).apply(0, &Edit::RepeatBar { from: 1 });
         assert_eq!(&four.tracks[0].steps[..16], &four.tracks[0].steps[16..32]);
         assert_eq!(&four.tracks[0].steps[48..], &four.tracks[0].steps[16..32]);
     }
 
     #[test]
     fn rotating_slides_within_the_length_and_wraps() {
-        let t = counted(8).apply(&Edit::Rotate { by: 1 });
+        let t = counted(8).apply(0, &Edit::Rotate { by: 1 });
         let steps = &t.tracks[0].steps;
         assert_eq!(steps[0].pitch, 7, "the last step came round to the front");
         assert_eq!(steps[1].pitch, 0);
         assert_eq!(steps[8].pitch, 8, "past the length is not moved");
-        let back = counted(8).apply(&Edit::Rotate { by: -1 });
+        let back = counted(8).apply(0, &Edit::Rotate { by: -1 });
         assert_eq!(back.tracks[0].steps[7].pitch, 0);
-        let full = counted(8).apply(&Edit::Rotate { by: 8 });
+        let full = counted(8).apply(0, &Edit::Rotate { by: 8 });
         assert_eq!(full, counted(8).sanitised());
     }
 
     #[test]
     fn transposing_moves_every_pitch_and_stops_at_the_range() {
-        let t = counted(16).apply(&Edit::Transpose {
-            semis: 5,
-            bar: None,
-        });
+        let t = counted(16).apply(
+            0,
+            &Edit::Transpose {
+                semis: 5,
+                bar: None,
+            },
+        );
         assert_eq!(t.tracks[0].steps[3].pitch, 8);
-        let high = counted(16).apply(&Edit::Transpose {
-            semis: 100,
-            bar: None,
-        });
+        let high = counted(16).apply(
+            0,
+            &Edit::Transpose {
+                semis: 100,
+                bar: None,
+            },
+        );
         assert_eq!(high.tracks[0].steps[3].pitch, PITCH_RANGE);
-        let one = counted(32).apply(&Edit::Transpose {
-            semis: 1,
-            bar: Some(1),
-        });
+        let one = counted(32).apply(
+            0,
+            &Edit::Transpose {
+                semis: 1,
+                bar: Some(1),
+            },
+        );
         assert_eq!(one.tracks[0].steps[3].pitch, 3);
         assert_eq!(one.tracks[0].steps[17].pitch, 18);
     }
@@ -659,13 +752,16 @@ mod tests {
     #[test]
     fn a_bar_that_does_not_exist_changes_nothing() {
         let before = counted(16).sanitised();
-        assert_eq!(counted(16).apply(&Edit::ClearBar { bar: 9 }), before);
-        assert_eq!(counted(16).apply(&Edit::RepeatBar { from: 9 }), before);
+        assert_eq!(counted(16).apply(0, &Edit::ClearBar { bar: 9 }), before);
+        assert_eq!(counted(16).apply(0, &Edit::RepeatBar { from: 9 }), before);
         assert_eq!(
-            counted(16).apply(&Edit::Transpose {
-                semis: 3,
-                bar: Some(7)
-            }),
+            counted(16).apply(
+                0,
+                &Edit::Transpose {
+                    semis: 3,
+                    bar: Some(7)
+                }
+            ),
             before
         );
     }

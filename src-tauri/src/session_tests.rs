@@ -4,43 +4,55 @@
 //! The undo tests here were `lib.rs`'s, against Shard's own history; they now
 //! hold rhizome's to the same behaviour.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use shard_dsp::arrangement;
 use shard_dsp::fx;
-use shard_dsp::steps::StepBank;
-use shard_dsp::{ParamBank, ReadingBank};
+use shard_dsp::{Engine, ParamBank};
 
-use crate::session::{Feeds, Session};
+use crate::session::{Feeds, Session, VoiceFeed, Voices};
 use crate::source;
 use crate::tracker::{self, Tracker};
 
 /// A session with no sound card, and the engine inputs it feeds.
 pub(crate) struct Rig {
     pub(crate) session: Session,
+    /// The current patch's values, as the patch view reads them.
     pub(crate) bank: Arc<ParamBank>,
     pub(crate) arrangement: Arc<ParamBank>,
-    pub(crate) steps: Arc<StepBank>,
-    pub(crate) mod_swap: Arc<Mutex<Option<shard_dsp::ModSet>>>,
-    pub(crate) swap: Arc<Mutex<crate::session::SourceSlots>>,
-    pub(crate) readings: Arc<ReadingBank>,
+    pub(crate) voices: Arc<Voices>,
+    /// What the voice playing the current patch heard, as `render` writes it.
+    pub(crate) heard: ParamBank,
+}
+
+impl Rig {
+    /// Voice `i`'s feed: track `i`'s, or the audition's.
+    pub(crate) fn voice(&self, i: usize) -> &VoiceFeed {
+        &self.voices.voice[i]
+    }
+
+    /// One block through the audio callback's own hand-offs and render, as
+    /// `lib.rs` makes them, then what `meters` frees collected.
+    pub(crate) fn block(&self, e: &mut Engine, out: &mut [f32], held: &mut crate::Held) {
+        crate::hand_over(e, &self.voices, &self.arrangement, held);
+        crate::render(e, &self.voices, &self.heard, out);
+        for v in &self.voices.voice {
+            drop(std::mem::take(&mut *v.retired.lock().unwrap()));
+            drop(v.mod_retired.lock().unwrap().take());
+        }
+    }
 }
 
 pub(crate) fn rig() -> Rig {
     let sample_rate = 48_000.0;
     let bank = Arc::new(ParamBank::new());
     let arrangement = Arc::new(ParamBank::for_table(arrangement::params()));
-    let steps = Arc::new(StepBank::new(Tracker::default().params()));
-    let mod_swap = Arc::new(Mutex::new(None));
-    let swap = Arc::new(Mutex::new([None, None]));
-    let readings = Arc::new(ReadingBank::new());
+    let voices = Arc::new(Voices::new());
+    voices.prime();
     let feeds = Feeds {
         bank: Arc::clone(&bank),
         arrangement: Arc::clone(&arrangement),
-        steps: Arc::clone(&steps),
-        mod_swap: Arc::clone(&mod_swap),
-        swap: Arc::clone(&swap),
-        readings: Arc::clone(&readings),
+        voices: Arc::clone(&voices),
     };
     let drone = Arc::new(source::startup_drone(sample_rate));
     let session = Session::new(feeds, drone, sample_rate).expect("a session starts");
@@ -48,10 +60,8 @@ pub(crate) fn rig() -> Rig {
         session,
         bank,
         arrangement,
-        steps,
-        mod_swap,
-        swap,
-        readings,
+        voices,
+        heard: ParamBank::new(),
     }
 }
 
@@ -192,15 +202,12 @@ fn an_effect_moved_past_its_own_kind_takes_the_other_copy() {
 #[test]
 fn the_arrangement_is_undone_with_the_patch() {
     let r = rig();
-    r.session.set_param("arrangement.track.gain", 0.25).unwrap();
-    assert_eq!(
-        r.arrangement.get_by_id("arrangement.track.gain"),
-        Some(0.25)
-    );
+    r.session.set_param("arrangement.kit.gain", 0.25).unwrap();
+    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(0.25));
     r.session.set_param("grain.size", 99.0).unwrap();
     r.session.undo().unwrap();
     r.session.undo().unwrap();
-    assert_eq!(r.arrangement.get_by_id("arrangement.track.gain"), Some(1.0));
+    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(1.0));
 }
 
 #[test]
@@ -222,10 +229,13 @@ fn undo_restores_the_tracker_the_engine_plays() {
     let mut t = r.session.tracker();
     t.tempo = 90.0;
     r.session.set_tracker(t).unwrap();
-    assert_eq!(r.steps.load().tempo_bpm, 90.0);
+    assert_eq!(r.voices.transport.load().tempo_bpm, 90.0);
     r.session.undo().unwrap();
     assert_eq!(r.session.tracker().tempo, Tracker::default().tempo);
-    assert_eq!(r.steps.load().tempo_bpm, Tracker::default().tempo);
+    assert_eq!(
+        r.voices.transport.load().tempo_bpm,
+        Tracker::default().tempo
+    );
 }
 
 #[test]
@@ -233,45 +243,51 @@ fn a_pattern_edit_is_one_undo_and_one_that_changes_nothing_is_none() {
     let r = rig();
     let before = r.session.tracker();
     r.session
-        .edit_tracker(&tracker::Edit::ClearBar { bar: 0 })
+        .edit_tracker(0, &tracker::Edit::ClearBar { bar: 0 })
         .unwrap();
     assert!(!r.session.tracker().tracks[0].steps[0].on);
-    assert_eq!(r.steps.load().pattern & 0xFFFF, 0, "the engine hears it");
+    assert_eq!(
+        r.voice(0).steps.load().pattern & 0xFFFF,
+        0,
+        "the engine hears it"
+    );
     assert_eq!(r.session.undo().unwrap().as_deref(), Some("Clear a bar"));
     assert_eq!(r.session.tracker(), before);
-    assert_eq!(r.steps.load().pattern & 0xFFFF, 0x1111);
+    assert_eq!(r.voice(0).steps.load().pattern & 0xFFFF, 0x1111);
 
     // A bar that is already empty, or does not exist, leaves no step.
     r.session
-        .edit_tracker(&tracker::Edit::ClearBar { bar: 3 })
+        .edit_tracker(0, &tracker::Edit::ClearBar { bar: 3 })
         .unwrap();
     r.session
-        .edit_tracker(&tracker::Edit::ClearBar { bar: 9 })
+        .edit_tracker(0, &tracker::Edit::ClearBar { bar: 9 })
         .unwrap();
     assert!(r.session.undo().unwrap().is_none());
 }
 
 #[test]
-fn switching_the_mode_is_not_an_edit_and_undo_does_not_flip_it() {
+fn every_track_plays_its_steps_and_selecting_is_not_an_edit() {
     let r = rig();
-    // What the mode switch does: turn the track on through `set_tracker`.
-    let mut on = r.session.tracker();
-    on.tracks[0].on = true;
-    r.session.set_tracker(on).unwrap();
-    assert!(r.steps.load().on, "the engine plays the steps");
+    // There is no mode: the first track's voice follows its steps, on a
+    // transport that always runs.
+    assert!(r.voice(0).steps.load().on, "the engine plays the steps");
+    assert!(r.voices.transport.load().on);
+    assert!(r.voice(0).active.load(std::sync::atomic::Ordering::Relaxed));
+    r.session.select_track(0).unwrap();
+    let first = r.session.patches()[0].id;
+    r.session.select_patch(first).unwrap();
     assert!(
         r.session.undo().unwrap().is_none(),
-        "the mode is not an edit"
+        "selecting is not an edit"
     );
     assert!(!r.session.read(|d| d.is_unsaved()));
 
-    // A real edit, then undo: the steps go back and the track stays on.
+    // A real edit, then undo: the steps go back and still play.
     r.session
-        .edit_tracker(&tracker::Edit::ClearBar { bar: 0 })
+        .edit_tracker(0, &tracker::Edit::ClearBar { bar: 0 })
         .unwrap();
     r.session.undo().unwrap();
-    assert!(r.session.tracker().tracks[0].on, "undo left the mode alone");
-    assert!(r.steps.load().on);
+    assert!(r.voice(0).steps.load().on);
     assert!(
         r.session.tracker().tracks[0].steps[0].on,
         "and restored the steps"
@@ -295,10 +311,10 @@ fn a_link_reaches_the_engine() {
     let r = rig();
     r.session.add_lfo().unwrap();
     let lfo = r.session.modulation().0.lfos[0].id;
-    r.mod_swap.lock().unwrap().take();
+    r.voice(0).mod_swap.lock().unwrap().take();
     r.session.link_param("grain.size", lfo, 0.25, 0.75).unwrap();
     assert!(
-        r.mod_swap.lock().unwrap().take().is_some(),
+        r.voice(0).mod_swap.lock().unwrap().take().is_some(),
         "a new set waits"
     );
     let (m, refused) = r.session.modulation();
@@ -307,7 +323,7 @@ fn a_link_reaches_the_engine() {
 
     // Changing a value hands no new set over.
     r.session.set_param("grain.size", 80.0).unwrap();
-    assert!(r.mod_swap.lock().unwrap().take().is_none());
+    assert!(r.voice(0).mod_swap.lock().unwrap().take().is_none());
 
     r.session.unlink_param("grain.size").unwrap();
     assert!(r.session.modulation().0.links.is_empty());
@@ -331,7 +347,7 @@ fn resetting_the_sound_restores_defaults_in_one_undoable_step() {
         .set_param(&fx::row_id(n, "delay.time"), 777.0)
         .unwrap();
     // Things the reset must leave alone.
-    r.session.set_param("arrangement.track.gain", 0.25).unwrap();
+    r.session.set_param("arrangement.kit.gain", 0.25).unwrap();
     let mut t = r.session.tracker();
     t.tempo = 90.0;
     r.session.set_tracker(t).unwrap();
@@ -344,10 +360,7 @@ fn resetting_the_sound_restores_defaults_in_one_undoable_step() {
         fx::order_of(&r.bank).is_empty(),
         "the chain empties with it"
     );
-    assert_eq!(
-        r.arrangement.get_by_id("arrangement.track.gain"),
-        Some(0.25)
-    );
+    assert_eq!(r.arrangement.get_by_id("arrangement.kit.gain"), Some(0.25));
     assert_eq!(r.session.tracker().tempo, 90.0);
 
     assert_eq!(
@@ -410,13 +423,13 @@ fn materials_are_listed_in_the_order_added_and_a_removal_undoes() {
 #[test]
 fn unwiring_a_generator_hands_it_silence() {
     let r = rig();
-    r.swap.lock().unwrap()[0].take();
+    r.voice(0).swap.lock().unwrap()[0].take();
     r.session.wire_material("material", None).unwrap();
-    let slot = r.swap.lock().unwrap()[0].take();
+    let slot = r.voice(0).swap.lock().unwrap()[0].take();
     assert_eq!(slot, Some(Vec::new()), "silence is an empty buffer");
     r.session.undo().unwrap();
     assert!(
-        r.swap.lock().unwrap()[0]
+        r.voice(0).swap.lock().unwrap()[0]
             .take()
             .is_some_and(|s| !s.is_empty()),
         "undo hands the drone back"
@@ -448,7 +461,7 @@ fn a_session_saves_and_opens_with_its_sound() {
     for i in 0..a.bank.defs().len() {
         assert_eq!(a.bank.get(i), b.bank.get(i), "{}", a.bank.defs()[i].id);
     }
-    assert_eq!(b.steps.load().tempo_bpm, 101.0);
+    assert_eq!(b.voices.transport.load().tempo_bpm, 101.0);
     assert!(
         b.session.undo().unwrap().is_none(),
         "an opened file has no history"
@@ -687,7 +700,7 @@ fn first_envelope(r: &Rig) -> EnvelopeRecord {
 /// Where the engine's envelope stands 20 ms into a one second pass, from the
 /// set the session last handed over (or the one before it, if none waits).
 fn engine_level(r: &Rig, held: &mut Option<shard_dsp::ModSet>) -> f32 {
-    if let Some(set) = r.mod_swap.lock().unwrap().take() {
+    if let Some(set) = r.voice(0).mod_swap.lock().unwrap().take() {
         *held = Some(set);
     }
     let set = held.as_mut().expect("the engine has a set");

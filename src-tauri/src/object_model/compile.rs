@@ -1,13 +1,14 @@
 //! The projection: the tree compiled into what the engine reads today
 //! (epic 32, story 2, slice B).
 //!
-//! The engine plays one patch. A session holds several (epic 10), and every
-//! one is compiled, so the session can hand the engine whichever is current
-//! without compiling again; the N-patch engine in `object-model.md`, with a
-//! bank per patch, waits for several tracks. A plan is today's inputs,
-//! rebuilt from the tree after every change:
+//! A session holds several patches (epic 10) and several tracks (epic 28),
+//! each track playing one patch on its own voice. Every patch is compiled
+//! (`patch_plan`), and which patch each track plays (`track_patches`), so the
+//! session hands each voice its track's patch without compiling again. A
+//! plan is rebuilt from the tree after every change:
 //!
-//! - **which patch it plays,** `current`. Compiled, that is the patch the
+//! - **the current patch,** `current`: the one patch-scoped commands edit and
+//!   the patch view shows, never what plays. Compiled, that is the patch the
 //!   first track plays (`track_patch`). The session's own copy is selected
 //!   onto its current patch with `Plan::select`: the projection is rhizome's
 //!   and can't hear about a selection, which is session state, not the
@@ -35,7 +36,7 @@ use shard_dsp::arrangement;
 use shard_dsp::fx::{self, Kind as Fx, Order, INSTANCES};
 use shard_dsp::params::{ParamDef, PARAMS};
 use shard_dsp::steps::STEPS;
-use shard_dsp::{ModSet, ParamBank, StepParams};
+use shard_dsp::{ModSet, ParamBank};
 
 use super::*;
 use crate::materials::{MaterialRecord, Pool, Wires};
@@ -48,6 +49,8 @@ pub struct Plan {
     /// The patch `patch`, `modulation` and the pool's wires are: the one the
     /// first track plays, or the session's current one once it is selected.
     pub current: Option<NodeId>,
+    /// The patch each track plays, by place, as `tracker.tracks` lists them.
+    pub track_patches: Vec<Option<NodeId>>,
     /// The current patch's values, indexed as `PARAMS`.
     pub patch: Vec<f32>,
     /// The arrangement's values, indexed as `arrangement::params()`.
@@ -63,18 +66,20 @@ pub struct Plan {
     ids: BTreeMap<NodeId, u64>,
 }
 
-/// One patch as the engine would play it.
+/// One patch as a voice plays it.
 #[derive(Clone, Debug, PartialEq)]
-struct PatchPlan {
-    values: Vec<f32>,
-    modulation: Modulation,
-    wires: Wires,
+pub struct PatchPlan {
+    /// Indexed as `PARAMS`.
+    pub values: Vec<f32>,
+    pub modulation: Modulation,
+    pub wires: Wires,
 }
 
 impl Default for Plan {
     fn default() -> Self {
         Self {
             current: None,
+            track_patches: Vec::new(),
             patch: PARAMS.iter().map(|p| p.default).collect(),
             arrangement: arrangement::params().iter().map(|p| p.default).collect(),
             modulation: Modulation::default(),
@@ -100,18 +105,22 @@ impl Plan {
         true
     }
 
+    /// A patch as it compiled, if it did.
+    pub fn patch_plan(&self, patch: NodeId) -> Option<&PatchPlan> {
+        self.patches
+            .iter()
+            .find(|(n, _)| *n == patch)
+            .map(|(_, p)| p)
+    }
+
     /// Writes the patch's values into the live bank, all but the played rows,
     /// so a held brake stays held through an edit.
     pub fn write_patch(&self, bank: &ParamBank) {
-        write(&self.patch, bank);
+        write_values(&self.patch, bank);
     }
 
     pub fn write_arrangement(&self, bank: &ParamBank) {
-        write(&self.arrangement, bank);
-    }
-
-    pub fn steps(&self) -> StepParams {
-        self.tracker.params()
+        write_values(&self.arrangement, bank);
     }
 
     /// The `ModSet` for `Engine::set_modulation`, and what it refused.
@@ -130,7 +139,8 @@ impl Plan {
     }
 }
 
-fn write(values: &[f32], bank: &ParamBank) {
+/// Values into a bank indexed as they are, all but the played rows.
+pub fn write_values(values: &[f32], bank: &ParamBank) {
     for (i, (v, def)) in values.iter().zip(bank.defs()).enumerate() {
         if !PLAYED.contains(&def.id) {
             bank.set(i, *v);
@@ -298,7 +308,7 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
             (p.id(), compile_patch(p, &mut ids))
         })
         .collect();
-    // The patch the track plays, or the defaults with no patch at all.
+    // The patch the first track plays, or the defaults with no patch at all.
     plan.patch.clear();
     plan.patch.extend(PARAMS.iter().map(|p| p.default));
     plan.modulation = Modulation::default();
@@ -312,17 +322,17 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
         arrangement::params(),
         arrangement::PREFIX,
         &arr_chain,
-        |prefix| {
-            let a = arr?;
-            if prefix == TRACK {
-                a.order(TRACKS).into_iter().next()
-            } else {
-                a.child(prefix)
-            }
-        },
+        |prefix| arr?.child(prefix),
         &mut plan.arrangement,
     );
     plan.tracker = arr.map(read_tracker).unwrap_or_default();
+    plan.track_patches = tracks(tree)
+        .into_iter()
+        .map(|t| played_by(tree, t).map(|p| p.id()))
+        .collect();
+    for (t, patch) in plan.tracker.tracks.iter_mut().zip(&plan.track_patches) {
+        t.patch = patch.map(|p| ids.of(p));
+    }
 
     plan.ids = ids.new;
 }
@@ -426,9 +436,10 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
                 };
             }
             Track {
-                // The mode's, not the document's: the session sets it.
-                on: false,
                 length: int(&t, "track.length") as u32,
+                gain: float(&t, TRACK_GAIN),
+                // A runtime id, which `compile` fills in.
+                patch: None,
                 steps,
             }
         })
@@ -482,18 +493,32 @@ pub fn patches(tree: &Tree) -> Vec<Node<'_>> {
         .unwrap_or_default()
 }
 
-/// The patch the first track plays: the one its `track.patch` names, or the
-/// first patch when it names none, or one that has gone.
-pub fn track_patch(tree: &Tree) -> Option<Node<'_>> {
+/// The arrangement's tracks, in their order: track *i* plays on voice *i*.
+pub fn tracks(tree: &Tree) -> Vec<Node<'_>> {
     arrangement_node(tree)
-        .and_then(|a| a.order(TRACKS).into_iter().next())
-        .and_then(|t| t.resolve(TRACK_PATCH))
+        .map(|a| a.order(TRACKS))
+        .unwrap_or_default()
+}
+
+/// The patch a track plays: the one its `track.patch` names, or the first
+/// patch when it names none, or one that has gone.
+pub fn played_by<'t>(tree: &'t Tree, track: Node<'t>) -> Option<Node<'t>> {
+    track
+        .resolve(TRACK_PATCH)
         .filter(|p| p.type_name() == PATCH)
         .or_else(|| patches(tree).into_iter().next())
 }
 
+/// The patch the first track plays (`played_by`), or the first patch.
+pub fn track_patch(tree: &Tree) -> Option<Node<'_>> {
+    match tracks(tree).into_iter().next() {
+        Some(t) => played_by(tree, t),
+        None => patches(tree).into_iter().next(),
+    }
+}
+
 /// The patch an edit acts on: `current` while it is a patch in the tree, and
-/// the one the track plays otherwise (after undoing the New Patch that made
+/// the one the first track plays otherwise (after undoing the New Patch that made
 /// it current, say).
 pub fn patch_node(tree: &Tree, current: Option<NodeId>) -> Option<Node<'_>> {
     current
@@ -526,7 +551,6 @@ pub fn locate(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(NodeId,
     let prefix = key_prefix(bare);
     let node = match (owner.type_name(), prefix) {
         (PATCH, PATCH) => owner,
-        (ARRANGEMENT, TRACK) => owner.order(TRACKS).into_iter().next()?,
         _ => owner.child(prefix)?,
     };
     node.node_type()?.spec(bare)?;

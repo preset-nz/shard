@@ -32,11 +32,11 @@ export interface Meters {
   reduction: number;
   grains: number;
   playing: boolean;
-  /** The sequencer's step, from zero, or -1 while it or the transport is off. */
-  step: number;
+  /** Each track's step, in the tracks' order, from zero, or -1 while the transport is off. */
+  steps: number[];
   /** The drum kit's step, the same way. Its loop has its own length. */
   kit_step: number;
-  /** Where plain playback has reached, 0 to 1. */
+  /** Where the current patch's plain playback has reached, 0 to 1. */
   playhead: number;
   /** True while one grain is being played on its own. */
   auditioning: boolean;
@@ -138,9 +138,11 @@ export interface PatchInfo {
   name: string;
   /** The patch the engine plays and every patch command acts on. */
   current: boolean;
-  /** The patch the track plays. */
+  /** Whether any track plays it. */
   played: boolean;
-  /** Whether Delete may take it: not the last patch, nor the one the track plays. */
+  /** Looping on its own over the mix: selected, and played by no track. */
+  auditioned: boolean;
+  /** Whether Delete may take it: not the last patch, and played by no track. */
   deletable: boolean;
 }
 
@@ -151,15 +153,30 @@ export const listPatches = () => invoke<PatchInfo[]>('patches');
  * emits `document-opened` afterwards, so the panels read everything again.
  */
 export const newPatch = () => invoke<number>('new_patch');
-/** Make another patch current. Not an edit. Followed by `document-opened`. */
+/**
+ * Select a patch: it becomes current, and loops on its own while no track
+ * plays it. Not an edit, and no track's patch changes. Followed by
+ * `document-opened` when the current patch changed.
+ */
 export const selectPatch = (id: number) => invoke<void>('select_patch', { id });
+/**
+ * Select a track: its patch becomes current and nothing is auditioned. Not an
+ * edit. Followed by `document-opened` when the current patch changed.
+ */
+export const selectTrack = (track: number) => invoke<void>('select_track', { track });
+/** Add Track: a melody track at the end, playing the current patch. One step of Undo. */
+export const addTrack = () => invoke<number>('add_track');
+/** Remove Track: one step of Undo, "Remove Track 2". Refused for the last track. */
+export const removeTrack = (track: number) => invoke<void>('remove_track', { track });
 
 /**
- * The patch the track plays (the *Plays* picker). One step of Undo, "Set
- * Plays". Reread `listPatches` afterwards; in tracker mode Rust also emits
- * `document-opened`, because the engine moves to that patch.
+ * The patch a track plays (its *Plays* picker). One step of Undo, "Set
+ * Plays". Reread the tracker and `listPatches` afterwards; with that track
+ * selected Rust also emits `document-opened`, because the current patch
+ * follows it.
  */
-export const setTrackPatch = (id: number) => invoke<void>('set_track_patch', { id });
+export const setTrackPatch = (track: number, id: number) =>
+  invoke<void>('set_track_patch', { track, id });
 
 /**
  * Rename a patch. One step of Undo, "Rename Patch 2"; an empty or unchanged
@@ -169,7 +186,7 @@ export const renamePatch = (id: number, name: string) =>
   invoke<boolean>('rename_patch', { id, name });
 /**
  * Delete a patch. One step of Undo, "Delete Patch 2". Refused for the last
- * patch and the one the track plays. When it was current, Rust emits
+ * patch and one a track plays. When it was current, Rust emits
  * `document-opened`; reread `listPatches` either way.
  */
 export const deletePatch = (id: number) => invoke<void>('delete_patch', { id });
@@ -481,18 +498,24 @@ export interface Step {
   nudge: number;
 }
 
-/** A track of steps. Monophonic: a new step cuts the last. */
+/**
+ * A track of steps, playing one patch on its own voice. Monophonic: a new
+ * step cuts the last. Track *n* is "Track n" by its place.
+ */
 export interface Track {
-  on: boolean;
   /** 4, 8, 16, 32 or 64 sixteenths: up to four bars. */
   length: number;
+  /** Its fader in the mix, 0 to 2. */
+  gain: number;
+  /** The patch it plays, by id. Read only: a pick goes through `setTrackPatch`. */
+  patch: number | null;
   /** Sixty-four steps, step one first. Those past `length` are kept, not played. */
   steps: Step[];
 }
 
 /**
- * The level above the patch: the arrangement's tempo and swing, and its tracks. One
- * track today, playing the document's one patch.
+ * The level above the patch: the arrangement's tempo and swing, and its
+ * tracks, up to eight, each playing its own patch.
  */
 export interface Tracker {
   tempo: number;
@@ -518,11 +541,15 @@ export interface Kit extends Record<KitVoice, number[]> {
 }
 
 export const getTracker = () => invoke<Tracker>('tracker');
-/** Replaces the tracker whole; answers with it clamped and snapped, as the engine plays it. */
+/**
+ * Takes the tempo, swing, kit and each track's steps, length and fader, by
+ * place; never adds, removes or re-patches a track. Answers with it clamped
+ * and snapped, as the engine plays it.
+ */
 export const setTracker = (tracker: Tracker) => invoke<Tracker>('set_tracker', { tracker });
 
 /**
- * A whole-pattern edit on the first track (`tracker::Edit` in Rust): clear,
+ * A whole-pattern edit on one track (`tracker::Edit` in Rust): clear,
  * paste or repeat a bar, rotate the steps, transpose. One step of Undo.
  * Answers with the tracker as it now is.
  */
@@ -533,7 +560,11 @@ export type TrackerEdit =
   | { op: 'duplicate' }
   | { op: 'rotate'; by: number }
   | { op: 'transpose'; semis: number; bar: number | null };
-export const editTracker = (edit: TrackerEdit) => invoke<Tracker>('edit_tracker', { edit });
+export const editTracker = (track: number, edit: TrackerEdit) =>
+  invoke<Tracker>('edit_tracker', { track, edit });
+
+/** The most tracks a session plays at once: the engine's voices. */
+export const MAX_TRACKS = 8;
 
 /** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
 export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];

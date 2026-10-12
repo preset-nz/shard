@@ -1,6 +1,6 @@
 import { Icons } from '@preset.nz/ux-kit';
 import { type ReactNode, useRef, useState } from 'react';
-import type { PatchInfo } from '@/audio';
+import { MAX_TRACKS, type PatchInfo, type Track } from '@/audio';
 import { PlaysPicker } from '@/components/PlaysPicker';
 import {
   ContextMenu,
@@ -11,31 +11,35 @@ import {
 } from '@/components/ui/context-menu';
 
 /**
- * The scene view (epic 10): the left panel, in both what were the modes. It
- * lists the session's track, its patches and its materials, and what is
- * selected here decides what the middle shows and what plays: the track shows
- * the tracker and plays its steps, a patch shows its lanes and loops it.
- * Selecting is session state, never an edit.
+ * The scene view (epics 10 and 28): the left panel. It lists the session's
+ * tracks, its patches and its materials, and what is selected here decides
+ * what the middle shows: a track shows the tracker on its steps, a patch its
+ * lanes and inspector. Every track plays whatever is selected; a patch no
+ * track plays loops on its own over them while it is selected. Selecting is
+ * session state, never an edit.
  *
  * The current patch carries its own generators and modulators, nested under
  * its row; materials are the session's, so they sit apart. Those trees are
  * the caller's, passed in as `patchChildren` and `materials`.
  *
  * Keyboard: focus the panel (Tab, or click a row), then Up and Down move a
- * cursor through the track and the patches and Return selects the row under
+ * cursor through the tracks and the patches and Return selects the row under
  * it. Moving the cursor does not select, because selecting a patch changes
  * what you hear. Return on the patch already selected renames it, as Return
  * on a selected item does in the Finder, and so does a double-click. Delete
- * takes the patch under the cursor, when it may go. Right-click a patch for
- * Rename, Duplicate and Delete.
+ * takes the track or patch under the cursor, when it may go. Right-click a
+ * patch for Rename, Duplicate and Delete, a track for Remove.
  */
 export function SceneView({
+  tracks,
   patches,
-  trackSelected,
+  selectedTrack,
   selectedPatch,
   onSelectTrack,
   onSelectPatch,
   onPlays,
+  onAddTrack,
+  onRemoveTrack,
   onNewPatch,
   renaming,
   onRenaming,
@@ -45,15 +49,19 @@ export function SceneView({
   patchChildren,
   materials,
 }: {
+  tracks: Track[];
   patches: PatchInfo[];
-  /** The track is the selection, so the tracker shows. */
-  trackSelected: boolean;
+  /** The track that is the selection, by place, so the tracker shows. */
+  selectedTrack: number | null;
   /** The patch that is the selection, if one is. */
   selectedPatch: number | null;
-  onSelectTrack: () => void;
+  onSelectTrack: (track: number) => void;
   onSelectPatch: (id: number) => void;
-  /** The track now plays this patch (the *Plays* picker). */
-  onPlays: (id: number) => void;
+  /** Track `track` now plays this patch (its *Plays* picker). */
+  onPlays: (track: number, id: number) => void;
+  onAddTrack: () => void;
+  /** Only offered while there is more than one track. */
+  onRemoveTrack: (track: number) => void;
   onNewPatch: () => void;
   /** The patch whose name is being edited in place, by id. */
   renaming: number | null;
@@ -75,17 +83,21 @@ export function SceneView({
   // means "on the selection".
   const [cursor, setCursor] = useState<number | null>(null);
 
-  const rowCount = 1 + patches.length;
-  const selectedRow = trackSelected
-    ? 0
-    : Math.max(0, patches.findIndex((p) => p.id === selectedPatch) + 1);
+  // Rows: the tracks, then the patches.
+  const t = tracks.length;
+  const rowCount = t + patches.length;
+  const selectedRow =
+    selectedTrack !== null
+      ? Math.min(selectedTrack, t - 1)
+      : Math.max(t, t + patches.findIndex((p) => p.id === selectedPatch));
   const here = Math.min(cursor ?? selectedRow, rowCount - 1);
+  const removable = tracks.length > 1;
 
   const selectRow = (row: number) => {
     setCursor(null);
-    if (row === 0) onSelectTrack();
+    if (row < t) onSelectTrack(row);
     else {
-      const patch = patches[row - 1];
+      const patch = patches[row - t];
       if (patch) onSelectPatch(patch.id);
     }
   };
@@ -124,7 +136,7 @@ export function SceneView({
           setCursor(Math.max(0, Math.min(rowCount - 1, here + (e.key === 'ArrowDown' ? 1 : -1))));
         } else if (e.key === 'Enter') {
           e.preventDefault();
-          const patch = here > 0 ? patches[here - 1] : undefined;
+          const patch = here >= t ? patches[here - t] : undefined;
           // On the selection, Return renames; elsewhere it selects.
           if (patch && patch.id === selectedPatch && (cursor === null || cursor === selectedRow)) {
             setCursor(null);
@@ -133,13 +145,19 @@ export function SceneView({
             selectRow(here);
           }
         } else if (e.key === 'Backspace' || e.key === 'Delete') {
-          const patch = here > 0 ? patches[here - 1] : undefined;
-          if (!patch) return;
           // Ours, not the selected effect's: the window's handler would
           // take it out of its chain.
           e.preventDefault();
           e.stopPropagation();
-          if (patch.deletable) {
+          if (here < t) {
+            if (removable) {
+              setCursor(null);
+              onRemoveTrack(here);
+            }
+            return;
+          }
+          const patch = patches[here - t];
+          if (patch?.deletable) {
             setCursor(null);
             onDelete(patch.id);
           }
@@ -152,21 +170,53 @@ export function SceneView({
           <span className="flex-1 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Tracks
           </span>
-        </div>
-        {/* The row is not one button: the name selects the track, and the
-            picker beside it chooses the patch it plays. */}
-        <div className={rowClass(0, trackSelected)}>
           <button
             type="button"
-            title="Play this track's steps, through the arrangement"
-            onMouseDown={focusPanel}
-            onClick={() => selectRow(0)}
-            className="min-w-0 flex-1 truncate text-left"
+            title={
+              tracks.length >= MAX_TRACKS
+                ? `A session plays at most ${MAX_TRACKS} tracks`
+                : 'Add Track (⌥⌘N)'
+            }
+            disabled={tracks.length >= MAX_TRACKS}
+            // Keep focus off the button, so Space still starts playback.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onAddTrack}
+            className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground disabled:opacity-40 disabled:hover:bg-transparent"
           >
-            Track 1
+            <Icons.PlusIcon size={13} />
           </button>
-          <PlaysPicker patches={patches} onPick={onPlays} className="w-[5.5rem]" />
         </div>
+        {/* A row is not one button: the name selects the track, and the
+            picker beside it chooses the patch it plays. */}
+        {tracks.map((track, i) => (
+          <ContextMenu
+            // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
+            key={i}
+          >
+            <ContextMenuTrigger render={<div className={rowClass(i, selectedTrack === i)} />}>
+              <button
+                type="button"
+                title="Show this track's steps"
+                onMouseDown={focusPanel}
+                onClick={() => selectRow(i)}
+                className="min-w-0 flex-1 truncate text-left"
+              >
+                Track {i + 1}
+              </button>
+              <PlaysPicker
+                patches={patches}
+                value={track.patch}
+                onPick={(id) => onPlays(i, id)}
+                className="w-[5.5rem]"
+              />
+            </ContextMenuTrigger>
+            <ContextMenuContent className="w-48" finalFocus={false}>
+              <ContextMenuItem disabled={!removable} onClick={() => onRemoveTrack(i)}>
+                Remove Track {i + 1}
+              </ContextMenuItem>
+            </ContextMenuContent>
+          </ContextMenu>
+        ))}
       </div>
 
       <div className="py-2">
@@ -190,7 +240,7 @@ export function SceneView({
             {renaming === p.id ? (
               <RenameField
                 name={p.name}
-                className={rowClass(i + 1, p.id === selectedPatch, p.current)}
+                className={rowClass(t + i, p.id === selectedPatch, p.current)}
                 onDone={(name) => {
                   onRenaming(null);
                   navRef.current?.focus();
@@ -204,18 +254,26 @@ export function SceneView({
                     <button
                       type="button"
                       title={
-                        p.current
-                          ? 'Shape this patch and loop it. Double-click to rename.'
-                          : 'Switch to this patch and loop it. Double-click to rename.'
+                        p.played
+                          ? 'Shape this patch; the tracks keep playing. Double-click to rename.'
+                          : 'Shape this patch; no track plays it, so it loops on its own while selected. Double-click to rename.'
                       }
                       onMouseDown={focusPanel}
-                      onClick={() => selectRow(i + 1)}
+                      onClick={() => selectRow(t + i)}
                       onDoubleClick={() => onRenaming(p.id)}
-                      className={rowClass(i + 1, p.id === selectedPatch, p.current)}
+                      className={rowClass(t + i, p.id === selectedPatch, p.current)}
                     />
                   }
                 >
                   <span className="flex-1 truncate">{p.name}</span>
+                  {p.auditioned && (
+                    <span
+                      title="Looping on its own over the mix: no track plays it"
+                      className="text-[10px] text-muted-foreground"
+                    >
+                      loop
+                    </span>
+                  )}
                 </ContextMenuTrigger>
                 {/* Closing leaves focus where it is, so Rename's field keeps it. */}
                 <ContextMenuContent className="w-48" finalFocus={false}>

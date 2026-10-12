@@ -16,6 +16,10 @@ use shard_dsp::fx::Kind;
 /// `fx-add:chorus` adds a chorus; the part after the colon is `Kind::name`.
 pub const FX_ADD_PREFIX: &str = "fx-add:";
 
+/// The Track menu's Add ▸ kinds, by the menu standard's `<collection>.add:<kind>`
+/// scheme (epic 28). Melody today; Drums joins it in story d.
+pub const TRACK_ADD_MELODY: &str = "track.add:melody";
+
 /// The app's name, as the App menu and About show it.
 pub const APP_NAME: &str = "Shard";
 
@@ -35,6 +39,9 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
     ("view-inspector", "CmdOrCtrl+I"),
+    // Logic's New Tracks chord. Remove Track has none: every Cmd+Backspace
+    // is taken (Remove Effect, Clear Bar) or would be stolen from text fields.
+    (TRACK_ADD_MELODY, "CmdOrCtrl+Alt+N"),
     ("fx-remove", "CmdOrCtrl+Shift+Backspace"),
     ("fx-earlier", "CmdOrCtrl+Alt+Up"),
     ("fx-later", "CmdOrCtrl+Alt+Down"),
@@ -65,6 +72,7 @@ pub fn commands() -> Vec<Command> {
     let edit = |id, label| item(id, label).menu(MenuName::Edit).section(1);
     let view = |id, label, section| item(id, label).menu(MenuName::View).section(section);
     let effect = |id, label| item(id, label).domain("Effect").section(1);
+    let track = |id, label, section| item(id, label).domain("Track").section(section);
     let pattern = |id, label, section| item(id, label).domain("Pattern").section(section);
     let mut all = vec![
         // First of Shard's File items, under app-kit's New, Open… and Open
@@ -97,6 +105,11 @@ pub fn commands() -> Vec<Command> {
         effect("fx-remove", "Remove Effect"),
         effect("fx-earlier", "Move Earlier"),
         effect("fx-later", "Move Later"),
+        // The tracks (epic 28): one domain menu for the collection, Add ▸
+        // first with its kinds, then Remove on the selected track, greyed for
+        // the last one. Before Pattern, which edits the selected track.
+        track(TRACK_ADD_MELODY, "Melody", 0).submenu("Add Track"),
+        track("track.remove", "Remove Track", 1),
         // The tracker's bar commands, on the step last focused.
         pattern("pattern-copy", "Copy Bar", 0),
         pattern("pattern-paste", "Paste Bar", 0),

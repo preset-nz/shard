@@ -72,26 +72,31 @@ changed after every edit, undo, redo and open. **Every write goes through the
 session.** Nothing writes `bank` or `arrangement` directly except the played
 rows (`arrangement.tape.brake`, `arrangement.tape.reverse`, which slow every
 track): a direct write is reverted, silently, by
-the next edit. The mode (tracker or sound scaping) is the session's, not the
-document's, and so is the **current patch** (epic 10): a session holds
-several patches, the engine plays the current one, and every patch-scoped
-command acts on it (`patch_node(tree, current)`, `locate`). Undo is
-rhizome's, one step per gesture.
+the next edit. **Several tracks, one voice each** (epic 28): track *i* of
+the arrangement's order plays its own patch on engine voice *i*, through its
+own feed (`session::VoiceFeed`: bank, steps, readings, fader, switch and
+swap slots). The **current patch** (epic 10) is the session's, not the
+document's: every patch-scoped command acts on it (`patch_node(tree,
+current)`, `locate`) and the patch view shows it, but it never decides what
+plays. A selected patch no track plays loops on the last voice
+(`session::AUDITION`). Undo is rhizome's, one step per gesture.
 
 **The table is the patch, and the tracker is the level above it.** Tempo,
 swing and tracks of steps belong to the arrangement, not to a sound, so they are not
 parameters: they live in the arrangement node of the session (the `Tracker`
 type in `src-tauri/src/tracker.rs` is how they cross to the webview and the
-engine), and reach the engine through `steps::StepBank` and
-`Engine::set_steps`, once a block. A value that should survive loading a
+engine), and reach the engine through a `steps::StepBank` per voice and one
+for the transport (`Engine::set_voice_steps`, `Engine::set_transport`), once
+a block. A track's fader is `track.gain` on its node, not a row
+(`Engine::set_voice_gain`). A value that should survive loading a
 different patch does not belong in `params.rs`.
 
-**The arrangement has its own table.** Its chain over the patch (its own
-palette, the filter and the output), the patch's fader and the limiter live in
+**The arrangement has its own table.** Its chain over the tracks (its own
+palette, the filter and the output), the drum kit and the limiter live in
 `shard_dsp::arrangement`, ids under `arrangement.`. Its effect rows are
 borrowed from `params.rs` so the two cannot drift. It reaches the engine
-through `Engine::set_arrangement`, once a block, and sound scaping hears the
-patch without it.
+through `Engine::set_arrangement`, once a block, and the patch preview hears
+the patch without it.
 
 **Every switchable node follows one pattern, by role.**
 - Its switch is `<node>.on`, drawn in the section header.

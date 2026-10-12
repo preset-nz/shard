@@ -9,17 +9,27 @@
 //! different file.
 //!
 //! What is played rather than edited never enters the tree: brake and
-//! reverse write the bank directly, and the mode (tracker or sound scaping)
-//! is the session's, not the document's (Georg, 2026-10-06).
+//! reverse write the arrangement's bank directly.
 //!
-//! **So is the current patch** (epic 10). A session holds several patches and
-//! the engine plays one: the current patch, which every patch-scoped command
-//! (a value, the chain, presets, links, materials' wiring, the controller
-//! map) acts on. It lives in `sent`, as the `Plan::current` the engine was
-//! handed, and `sync` selects it onto every new compile. Selecting another
-//! patch is not an edit; it hands the engine the whole patch, on this thread.
-//! When the current patch goes (undoing the New Patch that made it), `sync`
-//! falls back to the patch the track plays.
+//! **Several tracks, one voice each** (epic 28). Track *i* of the
+//! arrangement's order plays on the engine's voice *i*, and every voice plays
+//! its own track's patch: its values, modulation and materials, handed to its
+//! own feed (`VoiceFeed`). Two tracks on one patch both follow an edit to it.
+//! Removing a track moves the later ones down a voice each; the voices' fades
+//! and smoothers carry the change.
+//!
+//! **The current patch is what is edited, never what plays** (epic 10, epic
+//! 28). Every patch-scoped command (a value, the chain, presets, links,
+//! materials' wiring, the controller map) acts on it, and the patch view
+//! shows it. It lives in `sent`, as `Plan::current`, and `sync` selects it
+//! onto every new compile. Selecting is not an edit. With a track selected,
+//! the current patch is the one that track plays, and follows it through
+//! *Plays* picks, undo and redo. When the current patch goes (undoing the New
+//! Patch that made it), `sync` falls back to the first track's.
+//!
+//! **Audition.** A selected patch no track plays loops on its own over the
+//! mix, as sound scaping did, on the last voice (`AUDITION`). There is no
+//! audition while all `VOICES` voices play tracks.
 //!
 //! **Lock order:** `doc`, then `gesture`, then `sent`, then `decoded`, then `feeding`, then the
 //! engine's hand-off slots. Nothing here takes a controller lock; MIDI calls
@@ -29,26 +39,26 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use rhizome_core::{Edit, GestureId, NodeId, On, Ref, Value};
 use rhizome_pom::{Document, FileStore, PresetRef};
 use serde::Serialize;
-use shard_dsp::arrangement;
+use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::StepBank;
-use shard_dsp::{Generator, ModSet, ParamBank, ReadingBank};
+use shard_dsp::{Generator, ModSet, ParamBank, ReadingBank, StepParams, VOICES};
 
 use crate::mapping::MapRef;
-use crate::materials::{self, Pool, DRONE_NAME};
+use crate::materials::{self, Pool, Wires, DRONE_NAME};
 use crate::modulation::{self, Modulation, Refused};
 use crate::object_model::{
     self as om, arrangement_node, instance_of, locate, patch_node, to_value, Plan, Shard, ShardEdit,
 };
 use crate::source::{self, Loaded};
-use crate::tracker::{self, Tracker};
+use crate::tracker::{self, Track, Tracker};
 
 /// One source buffer per generator, by `Generator::index`: a new material
 /// waiting for the audio thread, or an old one it handed back.
@@ -58,15 +68,126 @@ pub type SourceSlots = [Option<Vec<f32>>; 2];
 /// built-in drone. Kept when a material is removed, so undo is instant.
 type Decoded = HashMap<Option<String>, Arc<Loaded>>;
 
-/// Where the session hands things to the engine. The audio thread reads each
-/// of these once a block.
+/// The voice a selected patch no track plays loops on: the last one, free
+/// while fewer than `VOICES` tracks play.
+pub const AUDITION: usize = VOICES - 1;
+
+/// `Voices::shown` when no voice plays the current patch.
+pub const NO_VOICE: usize = usize::MAX;
+
+/// One voice's inputs. The audio thread reads the atomics once a block, and
+/// only ever tries the locks.
+pub struct VoiceFeed {
+    /// Its patch's values, indexed as `PARAMS`.
+    pub bank: ParamBank,
+    /// Its track's steps.
+    pub steps: StepBank,
+    /// How its generators read their materials.
+    pub readings: ReadingBank,
+    /// Its track's fader, as `f32` bits.
+    pub gain: AtomicU32,
+    /// Whether it plays. Stored after everything above, so a voice wakes on
+    /// its own patch.
+    pub active: AtomicBool,
+    /// A modulation set waiting for the audio thread, and one it gave back.
+    pub mod_swap: Mutex<Option<ModSet>>,
+    pub mod_retired: Mutex<Option<ModSet>>,
+    /// New materials waiting, by `Generator::index`, and old ones given back.
+    pub swap: Mutex<SourceSlots>,
+    pub retired: Mutex<SourceSlots>,
+}
+
+impl VoiceFeed {
+    fn new() -> Self {
+        Self {
+            bank: ParamBank::new(),
+            steps: StepBank::new(StepParams::default()),
+            readings: ReadingBank::new(),
+            gain: AtomicU32::new(TRACK_GAIN_DEFAULT.to_bits()),
+            active: AtomicBool::new(false),
+            mod_swap: Mutex::new(None),
+            mod_retired: Mutex::new(None),
+            swap: Mutex::new([None, None]),
+            retired: Mutex::new([None, None]),
+        }
+    }
+
+    pub fn gain(&self) -> f32 {
+        f32::from_bits(self.gain.load(Ordering::Relaxed))
+    }
+}
+
+/// Every voice's feed, the transport, and which voice the UI follows.
+pub struct Voices {
+    pub voice: [VoiceFeed; VOICES],
+    /// The transport: tempo, swing and the kit's grid. Always running.
+    pub transport: StepBank,
+    /// The voice playing the current patch, whose heard values, playhead and
+    /// grains the patch view shows, or `NO_VOICE`.
+    pub shown: AtomicUsize,
+}
+
+impl Voices {
+    pub fn new() -> Self {
+        Self {
+            voice: std::array::from_fn(|_| VoiceFeed::new()),
+            transport: StepBank::new(Tracker::default().transport()),
+            shown: AtomicUsize::new(NO_VOICE),
+        }
+    }
+
+    /// Locks every hand-off slot once. On macOS a mutex's first lock
+    /// allocates, so this runs before the stream starts and the audio thread
+    /// only ever meets primed locks.
+    pub fn prime(&self) {
+        for v in &self.voice {
+            drop(lock(&v.mod_swap));
+            drop(lock(&v.mod_retired));
+            drop(lock(&v.swap));
+            drop(lock(&v.retired));
+        }
+    }
+
+    /// The voice the patch view follows, if one plays the current patch.
+    pub fn shown(&self) -> Option<usize> {
+        Some(self.shown.load(Ordering::Acquire)).filter(|i| *i < VOICES)
+    }
+}
+
+impl Default for Voices {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Where the session hands things to the engine and the UI.
 pub struct Feeds {
+    /// The current patch's values, for the patch view, the controllers and
+    /// the preview. The audio thread never reads it: each voice has its own.
     pub bank: Arc<ParamBank>,
     pub arrangement: Arc<ParamBank>,
-    pub steps: Arc<StepBank>,
-    pub mod_swap: Arc<Mutex<Option<ModSet>>>,
-    pub swap: Arc<Mutex<SourceSlots>>,
-    pub readings: Arc<ReadingBank>,
+    pub voices: Arc<Voices>,
+}
+
+/// What a voice was last handed.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct Voiced {
+    /// The patch it plays, or none while it is switched out.
+    patch: Option<NodeId>,
+    values: Vec<f32>,
+    modulation: Modulation,
+    wires: Wires,
+    steps: Option<StepParams>,
+    gain: f32,
+}
+
+/// The plan the engine was handed, what each voice was, and what the scene
+/// view has selected.
+struct Sent {
+    plan: Plan,
+    voices: [Voiced; VOICES],
+    /// The track selected in the scene view, or none with a patch selected.
+    selected_track: Option<usize>,
 }
 
 /// What a load could not take as written. Surfaced rather than logged, because
@@ -93,10 +214,12 @@ pub struct PatchInfo {
     pub name: String,
     /// The patch the engine plays and every patch command acts on.
     pub current: bool,
-    /// The patch the track plays.
+    /// Whether any track plays it.
     pub played: bool,
-    /// Whether Delete may take it: not the last patch, and not the one the
-    /// track plays.
+    /// Looping on its own over the mix: selected, and played by no track.
+    pub auditioned: bool,
+    /// Whether Delete may take it: not the last patch, and played by no
+    /// track.
     pub deletable: bool,
 }
 
@@ -118,15 +241,13 @@ struct Open {
 
 pub struct Session {
     doc: Mutex<Document<Shard>>,
-    /// The plan the engine has, as last handed over, selected onto the
-    /// current patch.
-    sent: Mutex<Plan>,
-    /// Tracker mode: the first track plays. Not the document's.
-    tracking: AtomicBool,
+    /// The plan as last handed over, selected onto the current patch, and
+    /// what each voice was handed.
+    sent: Mutex<Sent>,
     decoded: Mutex<Decoded>,
-    /// What each generator was last sent, by `Generator::index`: a source key,
-    /// or `None` for silence.
-    feeding: Mutex<[Option<Option<String>>; 2]>,
+    /// What each voice's generators were last sent, by `Generator::index`: a
+    /// source key, or `None` for silence.
+    feeding: Mutex<[[Option<Option<String>>; 2]; VOICES]>,
     feeds: Feeds,
     sample_rate: f32,
     /// The envelope gesture in progress, if any. Its id cannot cross IPC, so
@@ -164,10 +285,13 @@ impl Session {
         let doc = Document::<Shard>::new(FileStore).map_err(err)?;
         let session = Self {
             doc: Mutex::new(doc),
-            sent: Mutex::new(Plan::default()),
-            tracking: AtomicBool::new(false),
+            sent: Mutex::new(Sent {
+                plan: Plan::default(),
+                voices: std::array::from_fn(|_| Voiced::default()),
+                selected_track: None,
+            }),
             decoded: Mutex::new([(None, drone)].into()),
-            feeding: Mutex::new([None, None]),
+            feeding: Mutex::new(std::array::from_fn(|_| [None, None])),
             feeds,
             sample_rate,
             gesture: Mutex::new(None),
@@ -191,72 +315,113 @@ impl Session {
     }
 
     /// Hands the engine what changed since the last hand-over, or everything.
-    /// The current patch stays current while it exists; `all` (a new or
-    /// opened document) starts on the patch the track plays.
+    /// The current patch stays current while it exists, and follows the
+    /// selected track; `all` (a new or opened document) starts on the patch
+    /// the first track plays.
     fn sync(&self, doc: &Document<Shard>, all: bool) {
         let mut sent = lock(&self.sent);
         let mut plan = doc.projection().clone();
-        if let Some(current) = sent.current.filter(|_| !all) {
-            // A patch that has gone leaves the plan on the track's.
+        if let Some(current) = sent.plan.current.filter(|_| !all) {
+            // A patch that has gone leaves the plan on the first track's.
             plan.select(current);
         }
-        let plan = &plan;
-        if all || plan.patch != sent.patch {
+        // A selected track stays selected by its place, as the webview keeps
+        // it, brought within the tracks there are.
+        let tracks = plan.tracker.tracks.len();
+        sent.selected_track = sent.selected_track.map(|t| t.min(tracks.saturating_sub(1)));
+        if let Some(Some(p)) = sent.selected_track.and_then(|t| plan.track_patches.get(t)) {
+            plan.select(*p);
+        }
+        if all || plan.patch != sent.plan.patch {
             plan.write_patch(&self.feeds.bank);
         }
-        if all || plan.arrangement != sent.arrangement {
+        if all || plan.arrangement != sent.plan.arrangement {
             plan.write_arrangement(&self.feeds.arrangement);
         }
-        if all || plan.tracker != sent.tracker {
-            self.store_steps(plan);
+        let voices = &self.feeds.voices;
+        if all || plan.tracker != sent.plan.tracker {
+            voices.transport.store(&plan.tracker.transport());
         }
-        if all || plan.modulation != sent.modulation {
-            *lock(&self.feeds.mod_swap) = Some(plan.mod_set().0);
+        let materials = all || plan.pool.materials != sent.plan.pool.materials;
+        let next = voicing(&plan, sent.selected_track);
+        for (i, want) in next.into_iter().enumerate() {
+            self.hand(i, &want, &sent.voices[i], all, materials, &plan.pool);
+            sent.voices[i] = want;
         }
-        if all || plan.pool != sent.pool {
-            self.send_pool(&plan.pool);
+        let shown = sent
+            .voices
+            .iter()
+            .position(|v| v.patch.is_some() && v.patch == plan.current)
+            .unwrap_or(NO_VOICE);
+        voices.shown.store(shown, Ordering::Release);
+        sent.plan = plan;
+    }
+
+    /// Hands voice `i` what differs from what it was last handed (`was`), or
+    /// everything. Switched in last, so it wakes on its own patch.
+    fn hand(&self, i: usize, want: &Voiced, was: &Voiced, all: bool, materials: bool, pool: &Pool) {
+        let feed = &self.feeds.voices.voice[i];
+        if want.patch.is_none() {
+            if all || was.patch.is_some() {
+                feed.active.store(false, Ordering::Release);
+            }
+            return;
         }
-        *sent = plan.clone();
+        if all || want.values != was.values {
+            om::write_values(&want.values, &feed.bank);
+        }
+        if all || want.modulation != was.modulation || was.patch.is_none() {
+            *lock(&feed.mod_swap) = Some(want.modulation.build().0);
+        }
+        if all || materials || want.wires != was.wires || was.patch.is_none() {
+            self.send_pool(i, pool, want.wires);
+        }
+        if all || want.steps != was.steps {
+            if let Some(steps) = &want.steps {
+                feed.steps.store(steps);
+            }
+        }
+        if all || want.gain != was.gain {
+            feed.gain.store(want.gain.to_bits(), Ordering::Relaxed);
+        }
+        if all || was.patch.is_none() {
+            feed.active.store(true, Ordering::Release);
+        }
     }
 
     /// The patch every patch-scoped command acts on. Takes `sent`, so call it
     /// holding `doc` or nothing, never `sent`.
     fn current(&self) -> Option<NodeId> {
-        lock(&self.sent).current
+        lock(&self.sent).plan.current
     }
 
-    fn store_steps(&self, plan: &Plan) {
-        let mut p = plan.steps();
-        p.on = self.tracking.load(Ordering::Relaxed);
-        self.feeds.steps.store(&p);
-    }
-
-    /// Every generator's reading, and a new source only for a generator whose
-    /// file changed. Never decodes: a material not yet decoded is silent.
-    fn send_pool(&self, pool: &Pool) {
+    /// Voice `i`'s readings, and a new source only for a generator whose file
+    /// changed. Never decodes: a material not yet decoded is silent.
+    fn send_pool(&self, i: usize, pool: &Pool, wires: Wires) {
         let decoded = lock(&self.decoded);
         let mut feeding = lock(&self.feeding);
+        let feed = &self.feeds.voices.voice[i];
         let mut readings = [shard_dsp::Reading::default(); 2];
         for g in Generator::ALL {
-            let m = pool.wires.get(g).and_then(|id| pool.get(id));
+            let m = wires.get(g).and_then(|id| pool.get(id));
             let key = m
                 .map(|m| m.path.clone())
                 .filter(|k| decoded.contains_key(k));
             if let (Some(m), Some(_)) = (m, &key) {
                 readings[g.index()] = m.reading();
             }
-            if feeding[g.index()] != key {
+            if feeding[i][g.index()] != key {
                 // Silence is an empty buffer, which allocates nothing.
                 let samples = key
                     .as_ref()
                     .and_then(|k| decoded.get(k))
                     .map(|l| l.samples.clone())
                     .unwrap_or_default();
-                lock(&self.feeds.swap)[g.index()] = Some(samples);
-                feeding[g.index()] = key;
+                lock(&feed.swap)[g.index()] = Some(samples);
+                feeding[i][g.index()] = key;
             }
         }
-        self.feeds.readings.store(readings[0], readings[1]);
+        feed.readings.store(readings[0], readings[1]);
     }
 
     /// Runs `f` as one edit, coalesced with the last one under the same key,
@@ -288,9 +453,9 @@ impl Session {
         f(&lock(&self.doc))
     }
 
-    /// What the engine was last handed: the current patch's plan.
+    /// What the engine was last handed, selected onto the current patch.
     pub fn plan(&self) -> Plan {
-        lock(&self.sent).clone()
+        lock(&self.sent).plan.clone()
     }
 
     // Values.
@@ -437,7 +602,6 @@ impl Session {
         let mut doc = lock(&self.doc);
         let commit = doc.undo().map_err(err)?;
         if commit.is_some() {
-            self.follow_track(&doc);
             self.sync(&doc, false);
         }
         drop(doc);
@@ -451,7 +615,6 @@ impl Session {
         let mut doc = lock(&self.doc);
         let commit = doc.redo().map_err(err)?;
         if commit.is_some() {
-            self.follow_track(&doc);
             self.sync(&doc, false);
         }
         drop(doc);
@@ -485,53 +648,53 @@ impl Session {
 
     // The tracker.
 
-    /// The tracker, its first track on in tracker mode.
+    /// The tempo, swing, kit grid and every track, with the patch each plays.
     pub fn tracker(&self) -> Tracker {
-        let mut t = lock(&self.sent).tracker.clone();
-        if let Some(first) = t.tracks.first_mut() {
-            first.on = self.tracking.load(Ordering::Relaxed);
-        }
-        t
+        lock(&self.sent).plan.tracker.clone()
     }
 
-    /// Tracker mode or sound scaping. Not an edit.
-    ///
-    /// Entering tracker mode plays the patch the track plays, whatever was
-    /// being shaped: the webview's mode switch and a *Plays* pick can arrive
-    /// in either order, and the engine must end on the track's patch.
-    pub fn set_mode(&self, tracking: bool) {
-        if self.tracking.swap(tracking, Ordering::Relaxed) == tracking {
-            return;
-        }
-        if tracking {
-            let mut doc = lock(&self.doc);
-            let played = om::track_patch(doc.tree()).map(|p| p.id());
-            if played.is_some() && played != self.current() {
-                // A gesture on the patch being left ends with it.
-                let ended = self.end_gesture(&mut doc);
-                lock(&self.sent).current = played;
-                self.sync(&doc, false);
-                drop(doc);
-                if ended {
-                    self.changed();
+    /// How many tracks there are, and so how many voices play them.
+    pub fn track_count(&self) -> usize {
+        lock(&self.sent).plan.tracker.tracks.len()
+    }
+
+    /// Takes the tempo, swing, kit grid and each track's steps, length and
+    /// fader from `next`, matching tracks by place, as one step. Never adds
+    /// or removes a track, and never changes what one plays. A drag on one
+    /// track's fader is "Set Gain"; anything else "Edit the steps", coalesced
+    /// per track, so edits to two tracks are two steps.
+    pub fn set_tracker(&self, next: Tracker) -> Result<Tracker, String> {
+        let next = next.sanitised();
+        let now = self.tracker();
+        let differs =
+            |a: &Track, b: &Track| (a.length, &a.steps, a.gain) != (b.length, &b.steps, b.gain);
+        let changed: Vec<usize> = now
+            .tracks
+            .iter()
+            .zip(&next.tracks)
+            .enumerate()
+            .filter(|(_, (a, b))| differs(a, b))
+            .map(|(i, _)| i)
+            .collect();
+        let shared = (now.tempo, now.swing, &now.kit) != (next.tempo, next.swing, &next.kit);
+        let (label, key) = match changed.as_slice() {
+            [i] if !shared => {
+                let (a, b) = (&now.tracks[*i], &next.tracks[*i]);
+                if (a.length, &a.steps) == (b.length, &b.steps) {
+                    ("Set Gain", format!("gain:{i}"))
+                } else {
+                    ("Edit the steps", format!("tracker:{i}"))
                 }
             }
-        }
-        self.store_steps(&lock(&self.sent));
+            _ => ("Edit the steps", "tracker".to_string()),
+        };
+        self.write_tracker(label, Some(&key), next)
     }
 
-    /// Replaces the tracker. The first track's switch sets the mode and is not
-    /// an edit; anything else that changed is one step, "Edit the steps".
-    pub fn set_tracker(&self, next: Tracker) -> Result<Tracker, String> {
-        if let Some(first) = next.tracks.first() {
-            self.set_mode(first.on);
-        }
-        self.write_tracker("Edit the steps", Some("tracker"), next)
-    }
-
-    /// A whole-pattern edit, one step; none when it changes nothing.
-    pub fn edit_tracker(&self, op: &tracker::Edit) -> Result<Tracker, String> {
-        let next = self.tracker().apply(op);
+    /// A whole-pattern edit on track `track`, one step; none when it changes
+    /// nothing.
+    pub fn edit_tracker(&self, track: usize, op: &tracker::Edit) -> Result<Tracker, String> {
+        let next = self.tracker().apply(track, op);
         self.write_tracker(Tracker::label_of(op), None, next)
     }
 
@@ -547,12 +710,83 @@ impl Session {
         Ok(self.tracker())
     }
 
+    /// Add Track: a melody track at the end, sixteen empty steps at unity,
+    /// playing the current patch. One undo step, "Add Track". Refused once
+    /// every voice has a track. Answers its place.
+    pub fn add_track(&self) -> Result<usize, String> {
+        let tracks = self.track_count();
+        if tracks >= VOICES {
+            return Err(format!("a session plays at most {VOICES} tracks"));
+        }
+        let arr = self.owner("arrangement")?;
+        let patch = self.read(|d| patch_node(d.tree(), self.current()).map(|p| p.id()));
+        self.edit("Add Track", None, |tx| {
+            let track = tx.add_track(arr, &Track::blank())?;
+            match patch {
+                Some(p) => tx.set_ref(track, om::TRACK_PATCH, Ref::here(p)),
+                None => Ok(()),
+            }
+        })?;
+        Ok(tracks)
+    }
+
+    /// Remove Track: track `track` with its steps, one undo step named for
+    /// it, "Remove Track 2". Undo brings it back in its place. The tracks
+    /// after it move down a place, and so a voice. Refused for the last one.
+    pub fn remove_track(&self, track: usize) -> Result<(), String> {
+        let node = self
+            .read(|d| om::tracks(d.tree()).get(track).map(|t| t.id()))
+            .ok_or_else(|| format!("there is no track {}", track + 1))?;
+        if self.track_count() <= 1 {
+            return Err("a session keeps at least one track".into());
+        }
+        {
+            let mut sent = lock(&self.sent);
+            // The selection stays on the track it was on.
+            sent.selected_track = sent
+                .selected_track
+                .map(|s| if s > track { s - 1 } else { s });
+        }
+        self.edit(&format!("Remove Track {}", track + 1), None, |tx| {
+            tx.remove(node)
+        })?;
+        Ok(())
+    }
+
+    /// Selects track `track` in the scene view: the current patch becomes the
+    /// one it plays, and no patch is auditioned. Not an edit. Answers whether
+    /// the current patch changed, which the webview reads everything again
+    /// for.
+    pub fn select_track(&self, track: usize) -> Result<bool, String> {
+        let mut doc = lock(&self.doc);
+        let tracks = om::tracks(doc.tree());
+        let played = tracks
+            .get(track)
+            .and_then(|t| om::played_by(doc.tree(), *t))
+            .map(|p| p.id())
+            .ok_or_else(|| format!("there is no track {}", track + 1))?;
+        let moved = self.current() != Some(played);
+        // A gesture on the patch being left ends with it.
+        let ended = moved && self.end_gesture(&mut doc);
+        {
+            let mut sent = lock(&self.sent);
+            sent.selected_track = Some(track);
+            sent.plan.current = Some(played);
+        }
+        self.sync(&doc, false);
+        drop(doc);
+        if ended {
+            self.changed();
+        }
+        Ok(moved)
+    }
+
     // Modulation.
 
     /// The patch's LFOs, envelopes and links, and what the engine refuses.
     pub fn modulation(&self) -> (Modulation, Vec<Refused>) {
-        let plan = lock(&self.sent);
-        (plan.modulation.clone(), plan.mod_set().1)
+        let sent = lock(&self.sent);
+        (sent.plan.modulation.clone(), sent.plan.mod_set().1)
     }
 
     fn modulator(&self, id: u64, kind: &str) -> Result<NodeId, String> {
@@ -818,6 +1052,7 @@ impl Session {
         }
         let prefix = format!("{node}.");
         let refused = lock(&self.sent)
+            .plan
             .mod_set()
             .1
             .into_iter()
@@ -837,7 +1072,7 @@ impl Session {
     // Materials.
 
     pub fn pool(&self) -> Pool {
-        lock(&self.sent).pool.clone()
+        lock(&self.sent).plan.pool.clone()
     }
 
     /// Whether a material's audio is in hand: decoded, or the drone.
@@ -1025,18 +1260,21 @@ impl Session {
         self.read(|d| {
             let tree = d.tree();
             let current = patch_node(tree, self.current()).map(|n| n.id());
-            let played = om::track_patch(tree).map(|n| n.id());
+            let played = played_patches(tree);
+            let auditioned = lock(&self.sent).voices[AUDITION].patch;
             let all = om::patches(tree);
             let several = all.len() > 1;
             all.iter()
                 .enumerate()
                 .filter_map(|(i, p)| {
+                    let is_played = played.contains(&p.id());
                     Some(PatchInfo {
                         id: d.projection().id_of(p.id())?,
                         name: om::patch_name(p, i),
                         current: Some(p.id()) == current,
-                        played: Some(p.id()) == played,
-                        deletable: several && Some(p.id()) != played,
+                        played: is_played,
+                        auditioned: !is_played && auditioned == Some(p.id()),
+                        deletable: several && !is_played,
                     })
                 })
                 .collect()
@@ -1046,18 +1284,19 @@ impl Session {
     /// The current patch's runtime id, as `patches` lists it.
     pub fn current_patch(&self) -> Option<u64> {
         let sent = lock(&self.sent);
-        sent.current.and_then(|n| sent.id_of(n))
+        sent.plan.current.and_then(|n| sent.plan.id_of(n))
     }
 
     /// New Patch: a patch at its defaults, "Patch N", the drone in both
     /// generators that read a material and an empty chain, at the end of the
-    /// order. One undo step, and it becomes the current patch.
+    /// order. One undo step, and it becomes the current patch, selected, so
+    /// it is auditioned.
     pub fn new_patch(&self) -> Result<u64, String> {
         let mut doc = lock(&self.doc);
         // A gesture on the patch being left ends first, as its own step.
         self.end_gesture(&mut doc);
         let (patch, commit) = doc.edit("New Patch", |tx| tx.new_patch()).map_err(err)?;
-        lock(&self.sent).current = Some(patch);
+        self.make_current(patch);
         if commit.is_some() {
             self.sync(&doc, false);
         }
@@ -1088,8 +1327,8 @@ impl Session {
 
     /// Deletes a patch and everything in it: its chain, modulators and links.
     /// One undo step, "Delete Patch 2", and undo brings it back as it was, in
-    /// its place. Refused for the last patch and for the one the track plays.
-    /// When it was current, the track's patch becomes current. Answers
+    /// its place. Refused for the last patch and for one a track plays.
+    /// When it was current, the first track's patch becomes current. Answers
     /// whether the current patch changed.
     pub fn delete_patch(&self, id: u64) -> Result<bool, String> {
         let mut doc = lock(&self.doc);
@@ -1098,9 +1337,9 @@ impl Session {
         if om::patches(doc.tree()).len() <= 1 {
             return Err(format!("{name} is the only patch, so it can't be deleted"));
         }
-        if om::track_patch(doc.tree()).map(|p| p.id()) == Some(node) {
+        if played_patches(doc.tree()).contains(&node) {
             return Err(format!(
-                "the track plays {name}; pick another patch for it to play first"
+                "a track plays {name}; pick another patch for it to play first"
             ));
         }
         let was_current = patch_node(doc.tree(), self.current()).map(|n| n.id()) == Some(node);
@@ -1110,7 +1349,8 @@ impl Session {
             .edit(&format!("Delete {name}"), |tx| tx.remove(node))
             .map_err(err)?;
         if commit.is_some() {
-            // The current patch has gone, so `sync` falls back to the track's.
+            // The current patch has gone, so `sync` falls back to the first
+            // track's.
             self.sync(&doc, false);
         }
         drop(doc);
@@ -1123,7 +1363,7 @@ impl Session {
     /// Duplicates a patch: a deep copy straight after it in the order, named
     /// "Patch 2 copy", with its chain, modulators, links (onto the copy's own
     /// modulators), materials' wiring and controller map. One undo step,
-    /// "Duplicate Patch 2", and the copy becomes current. Presets are kept
+    /// "Duplicate Patch 2", and the copy becomes current and selected. Presets are kept
     /// per kind, not per patch, so the copy offers the same ones.
     pub fn duplicate_patch(&self, id: u64) -> Result<u64, String> {
         let mut doc = lock(&self.doc);
@@ -1156,7 +1396,7 @@ impl Session {
                 Ok(copy)
             })
             .map_err(err)?;
-        lock(&self.sent).current = Some(copy);
+        self.make_current(copy);
         if commit.is_some() {
             self.sync(&doc, false);
         }
@@ -1166,17 +1406,25 @@ impl Session {
         id.ok_or_else(|| "the copy did not compile".to_string())
     }
 
-    /// Makes another patch current. Not an edit: no undo step, no unsaved
-    /// mark. The engine is handed the whole patch, here on the command thread.
+    /// Selects a patch in the scene view: it becomes current, and loops on
+    /// its own while no track plays it. Not an edit: no undo step, no unsaved
+    /// mark. What the tracks play never changes.
     pub fn select_patch(&self, id: u64) -> Result<(), String> {
         let mut doc = lock(&self.doc);
         let node = patch_of(&doc, id)?;
-        if self.current() == Some(node) {
+        let (same, selected) = {
+            let sent = lock(&self.sent);
+            (
+                sent.plan.current == Some(node),
+                sent.selected_track.is_none(),
+            )
+        };
+        if same && selected {
             return Ok(());
         }
         // A gesture on an envelope of the patch being left ends with it.
-        let ended = self.end_gesture(&mut doc);
-        lock(&self.sent).current = Some(node);
+        let ended = !same && self.end_gesture(&mut doc);
+        self.make_current(node);
         self.sync(&doc, false);
         drop(doc);
         if ended {
@@ -1186,35 +1434,42 @@ impl Session {
         Ok(())
     }
 
-    /// Sets what the track plays (the *Plays* picker, epic 10 story c) to the
-    /// patch `id` names. One undo step, "Set Plays", and none when the track
-    /// already plays it. In tracker mode what is heard is what the track
-    /// plays, so the engine moves to the new patch with it. Answers whether
-    /// the current patch changed, which the webview reads everything again
-    /// for.
-    pub fn set_track_patch(&self, id: u64) -> Result<bool, String> {
+    /// `patch` current and selected, with no track selected. Hold `doc`, and
+    /// `sync` after.
+    fn make_current(&self, patch: NodeId) {
+        let mut sent = lock(&self.sent);
+        sent.plan.current = Some(patch);
+        sent.selected_track = None;
+    }
+
+    /// Sets what track `track` plays (its *Plays* picker, epic 10 story c) to
+    /// the patch `id` names. One undo step, "Set Plays", and none when it
+    /// already plays it. With that track selected the current patch follows,
+    /// and the answer is true: the webview reads everything again.
+    pub fn set_track_patch(&self, track: usize, id: u64) -> Result<bool, String> {
         let mut doc = lock(&self.doc);
         let node = patch_of(&doc, id)?;
-        let track = om::arrangement_node(doc.tree())
-            .and_then(|a| a.order(om::TRACKS).into_iter().next())
-            .map(|t| t.id())
-            .ok_or_else(|| "there is no track".to_string())?;
-        if om::track_patch(doc.tree()).map(|p| p.id()) == Some(node) {
+        let tracks = om::tracks(doc.tree());
+        let t = tracks
+            .get(track)
+            .copied()
+            .ok_or_else(|| format!("there is no track {}", track + 1))?;
+        if om::played_by(doc.tree(), t).map(|p| p.id()) == Some(node) {
             return Ok(false);
         }
-        let tracking = self.tracking.load(Ordering::Relaxed);
-        let moved = tracking && self.current() != Some(node);
+        let t = t.id();
+        let moved = {
+            let sent = lock(&self.sent);
+            sent.selected_track == Some(track) && sent.plan.current != Some(node)
+        };
         // A gesture on the patch being left ends first, as its own step.
         let ended = moved && self.end_gesture(&mut doc);
         let (_, commit) = doc
             .edit("Set Plays", |tx| {
-                tx.set_ref(track, om::TRACK_PATCH, Ref::here(node))
+                tx.set_ref(t, om::TRACK_PATCH, Ref::here(node))
             })
             .map_err(err)?;
-        if moved {
-            lock(&self.sent).current = Some(node);
-        }
-        if commit.is_some() || moved {
+        if commit.is_some() {
             self.sync(&doc, false);
         }
         drop(doc);
@@ -1222,18 +1477,6 @@ impl Session {
             self.changed();
         }
         Ok(moved)
-    }
-
-    /// In tracker mode the engine plays the patch the track plays, so after
-    /// a step of history moves the track's patch, the current patch follows.
-    /// Call it holding `doc`, before `sync`.
-    fn follow_track(&self, doc: &Document<Shard>) {
-        if !self.tracking.load(Ordering::Relaxed) {
-            return;
-        }
-        if let Some(played) = om::track_patch(doc.tree()) {
-            lock(&self.sent).current = Some(played.id());
-        }
     }
 
     /// Ends an open envelope gesture, keeping what it did as its own step.
@@ -1303,10 +1546,18 @@ impl Session {
             ..LoadReport::default()
         };
         {
+            // Every track's patch sounds, so a material missing from any of
+            // them is a silent track.
             let decoded = lock(&self.decoded);
-            let missing = Generator::ALL
+            let plan = doc.projection();
+            let missing = plan
+                .track_patches
                 .iter()
-                .filter_map(|g| pool.wires.get(*g).and_then(|id| pool.get(id)))
+                .flatten()
+                .filter_map(|p| plan.patch_plan(*p))
+                .flat_map(|p| Generator::ALL.map(|g| p.wires.get(g)))
+                .chain(Generator::ALL.map(|g| pool.wires.get(g)))
+                .filter_map(|id| id.and_then(|id| pool.get(id)))
                 .find(|m| !decoded.contains_key(&m.path));
             if let Some(m) = missing {
                 report.sample_path = m.path.clone();
@@ -1322,6 +1573,52 @@ impl Session {
         self.changed();
         Ok(report)
     }
+}
+
+/// What every voice should play: track *i* on voice *i*, its patch, steps
+/// and fader; and a selected patch no track plays on `AUDITION`, looping
+/// free, while that voice is spare and no track is selected.
+fn voicing(plan: &Plan, selected_track: Option<usize>) -> [Voiced; VOICES] {
+    let mut out: [Voiced; VOICES] = std::array::from_fn(|_| Voiced::default());
+    let of = |patch: NodeId, steps: StepParams, gain: f32| {
+        plan.patch_plan(patch).map(|p| Voiced {
+            patch: Some(patch),
+            values: p.values.clone(),
+            modulation: p.modulation.clone(),
+            wires: p.wires,
+            steps: Some(steps),
+            gain,
+        })
+    };
+    let tracks = plan.tracker.tracks.len().min(VOICES);
+    for (i, track) in plan.tracker.tracks.iter().take(tracks).enumerate() {
+        if let Some(Some(patch)) = plan.track_patches.get(i) {
+            if let Some(v) = of(*patch, plan.tracker.params(i), track.gain) {
+                out[i] = v;
+            }
+        }
+    }
+    let audition = plan
+        .current
+        .filter(|c| selected_track.is_none() && !plan.track_patches.contains(&Some(*c)));
+    if let Some(patch) = audition.filter(|_| tracks <= AUDITION) {
+        let free = StepParams {
+            on: false,
+            ..plan.tracker.transport()
+        };
+        if let Some(v) = of(patch, free, TRACK_GAIN_DEFAULT) {
+            out[AUDITION] = v;
+        }
+    }
+    out
+}
+
+/// Every patch some track plays.
+fn played_patches(tree: &rhizome_core::Tree) -> Vec<NodeId> {
+    om::tracks(tree)
+        .into_iter()
+        .filter_map(|t| om::played_by(tree, t).map(|p| p.id()))
+        .collect()
 }
 
 /// The patch a runtime id names.
