@@ -449,6 +449,11 @@
       }
     },
     {
+      "path": "/patches/patch/ladder",
+      "id": "01M4ZQ36F1TER0000000000002",
+      "type": "ladder"
+    },
+    {
       "path": "/patches/patch/material",
       "id": "01M48E19QD03F1X2SVZXWTQ7SE",
       "type": "material",

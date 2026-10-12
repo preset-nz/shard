@@ -504,6 +504,11 @@
       }
     },
     {
+      "path": "/patches/patch/ladder",
+      "id": "01M4ZQ36F1TER0000000000001",
+      "type": "ladder"
+    },
+    {
       "path": "/patches/patch/material",
       "id": "01M48DSQ1TJC66V1MR2TFDENQ8",
       "type": "material",

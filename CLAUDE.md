@@ -138,7 +138,9 @@ the arrangement, under `arrangement.`.
   copy k, so the same tree always compiles to the same ids.
 - An empty chain is a bit-exact passthrough. An effect not in the chain costs
   nothing.
-- Filter, envelope and output are fixed nodes, not palette items.
+- Filter, ladder, envelope and output are fixed nodes, not palette items. A
+  new fixed node is missing from every saved file, so add it to the fixture
+  and `evals/agent/references/` when it lands.
 - To add a kind: `guidance/projects/shard/docs/adding-an-effect.md`.
 
 The tests `every_switchable_node_leads_with_its_level` and

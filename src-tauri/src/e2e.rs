@@ -319,3 +319,39 @@ fn check_a_shard_file() {
     w.finalize().unwrap();
     println!("wrote {}", dest.display());
 }
+
+/// Epic 36's rows on an opened file, not a fresh session: every row can be
+/// set and comes back after a save and a reopen. A fixed node added to
+/// `PATCH_NODES` is missing from every file saved before it, and its rows
+/// are refused there, so the fixture and the eval references gain the node
+/// when it lands (the ladder, 2026-10-12).
+#[test]
+fn the_filter_rows_set_and_save_on_an_opened_file() {
+    let l = load();
+    let s = &l.rig.session;
+    let rows = [
+        ("filter.slope", 1.0),
+        ("filter.tracking", 2.0),
+        ("ladder.on", 1.0),
+        ("ladder.cutoff", 640.0),
+        ("ladder.tracking", 1.0),
+    ];
+    for (id, v) in rows {
+        s.set_param(id, v).unwrap_or_else(|e| panic!("{id}: {e}"));
+    }
+    s.set_param("arrangement.filter.slope", 1.0)
+        .expect("the arrangement's slope");
+    let dir = std::env::temp_dir().join(format!("shard-opened-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("opened.shard");
+    s.save(&path).expect("it saves");
+    let (again, report) = open(path.to_str().unwrap());
+    assert!(report.unknown.is_empty(), "unknown: {:?}", report.unknown);
+    for (id, v) in rows {
+        assert_eq!(again.rig.bank.get_by_id(id), Some(v), "{id}");
+    }
+    assert_eq!(
+        again.rig.arrangement.get_by_id("arrangement.filter.slope"),
+        Some(1.0)
+    );
+}
