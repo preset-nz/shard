@@ -567,6 +567,48 @@ fn the_24_db_slope_never_touches_the_allocator() {
 }
 
 #[test]
+fn the_ladder_never_touches_the_allocator() {
+    // The ladder switches in and out with the resonance up, the drive moving
+    // and the cutoff sweeping, following each step's pitch at every tracking.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    let bank = ParamBank::new();
+    bank.set_by_id("grain.on", 1.0);
+    bank.set_by_id("filter.on", 1.0);
+    bank.set_by_id("ladder.mix", 1.0);
+    bank.set_by_id("ladder.resonance", 1.0);
+    e.set_playing(true);
+    let mut out = vec![0.0f32; 512];
+
+    let ((), caught) = no_alloc(|| {
+        for block in 0..1_200 {
+            bank.set_by_id("ladder.on", (block / 7 % 4 != 0) as u8 as f32);
+            bank.set_by_id("ladder.tracking", (block / 50 % 3) as f32);
+            bank.set_by_id("ladder.drive", (block % 20) as f32 / 19.0);
+            bank.set_by_id("ladder.cutoff", 80.0 + (block % 40) as f32 * 200.0);
+            bank.set_by_id("ladder.resonance", if block % 90 < 60 { 1.0 } else { 0.3 });
+            let mut pitches = [0i8; shard_dsp::steps::STEPS];
+            for (i, p) in pitches.iter_mut().enumerate() {
+                *p = ((block / 10 + i * 5) % 49) as i8 - 24;
+            }
+            e.set_steps(StepParams {
+                on: true,
+                tempo_bpm: 240.0,
+                pattern: 0xFFFF,
+                pitches,
+                ..Default::default()
+            });
+            e.process_block(&mut out, &bank);
+        }
+    });
+    assert_eq!(
+        caught, 0,
+        "the ladder touched the allocator {caught} time(s)"
+    );
+    assert!(out.iter().all(|v| v.is_finite()));
+}
+
+#[test]
 fn held_steps_never_touch_the_allocator() {
     // Under Hold each step gates its own note: a trigger latches a different
     // gate, release and end every time. The patch's Length is Hold, the

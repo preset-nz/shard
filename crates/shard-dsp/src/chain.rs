@@ -692,13 +692,32 @@ impl Chain {
     /// patch's key tracking sets per frame. One is exact: `x * 1.0 == x`.
     #[inline]
     pub fn back_tracked(&mut self, l: f32, r: f32, p: &ChainParams, cutoff_mul: f32) -> (f32, f32) {
+        let (l, r) = self.filter_tracked(l, r, p, cutoff_mul);
+        self.output(l, r, p)
+    }
+
+    /// Half of `back_tracked`: the filter alone, for the patch to put the
+    /// ladder between it and the output gain.
+    #[inline]
+    pub fn filter_tracked(
+        &mut self,
+        l: f32,
+        r: f32,
+        p: &ChainParams,
+        cutoff_mul: f32,
+    ) -> (f32, f32) {
         let filter_on = self.filter_fade.process(p.filter_on);
         let filter = FilterParams {
             mix: p.filter.mix * filter_on,
             cutoff_hz: p.filter.cutoff_hz * cutoff_mul,
             ..p.filter
         };
-        let (l, r) = self.filter.process(l, r, &filter);
+        self.filter.process(l, r, &filter)
+    }
+
+    /// The other half: the output gain.
+    #[inline]
+    pub fn output(&mut self, l: f32, r: f32, p: &ChainParams) -> (f32, f32) {
         let g = self.gain.process(p.gain);
         (l * g, r * g)
     }

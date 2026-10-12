@@ -24,6 +24,7 @@ use crate::envelope::EnvParams;
 use crate::fm::{Fm, FmParams, FmType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
+use crate::ladder::{self, Ladder, LadderParams, LadderSlots};
 use crate::modulation::ModSet;
 use crate::note::Length;
 use crate::params::{index_of, ParamBank};
@@ -74,6 +75,8 @@ struct Slots {
     /// The patch filter's key tracking. Not in `ChainSlots`: the arrangement
     /// shares that struct and has no note to follow.
     filter_tracking: usize,
+    /// The ladder after the filter: patch only, like the tracking row.
+    ladder: LadderSlots,
 }
 
 impl Slots {
@@ -117,6 +120,7 @@ impl Slots {
             fm_type: at("fm.type"),
             fx: ChainSlots::resolve(at),
             filter_tracking: at("filter.tracking"),
+            ladder: LadderSlots::resolve(at),
         }
     }
 }
@@ -223,6 +227,9 @@ struct Block {
     /// How many octaves the filter's cutoff moves per octave of the step's
     /// pitch: 0 (off), 0.5 (half) or 1 (full).
     filter_tracking: f32,
+    /// The ladder's values, and its own tracking in the same units.
+    ladder: LadderParams,
+    ladder_tracking: f32,
     material_gain_target: f32,
     fm_gain_target: f32,
     fm_params: FmParams,
@@ -306,6 +313,8 @@ pub(crate) struct Voice {
     vel_target: f32,
     /// The patch's own effects and output.
     fx: Chain,
+    /// The driven 4-pole between the patch's filter and its output gain.
+    ladder: Ladder,
     slots: Slots,
     smooth: Smoothers,
     fades: Fades,
@@ -398,6 +407,10 @@ impl Voice {
                 |slot| defs[slot].default,
             ),
             filter_tracking: 0.0,
+            ladder: slots
+                .ladder
+                .read(|slot| defs[slot].default, |slot| defs[slot].default),
+            ladder_tracking: 0.0,
             material_gain_target: 0.0,
             fm_gain_target: 0.0,
             fm_params: FmParams {
@@ -468,6 +481,7 @@ impl Voice {
             },
             vel_target: 1.0,
             fx: Chain::new(sample_rate, defs, &slots.fx, salt),
+            ladder: Ladder::new(sample_rate),
             slots,
             smooth,
             fades,
@@ -709,7 +723,12 @@ impl Voice {
         );
 
         // Stepped, so raw: no LFO moves it. Off, half, full.
-        let filter_tracking = bank.get(self.slots.filter_tracking).round().clamp(0.0, 2.0) * 0.5;
+        let filter_tracking = ladder::tracking_from(bank.get(self.slots.filter_tracking));
+        let ladder_tracking = ladder::tracking_from(bank.get(self.slots.ladder.tracking));
+        let ladder = self
+            .slots
+            .ladder
+            .read(|slot| read(&self.mods, bank, slot), |slot| bank.get(slot));
 
         let material_gain_target = read(&self.mods, bank, self.slots.material_gain);
         let fm_gain_target = read(&self.mods, bank, self.slots.fm_gain);
@@ -751,6 +770,7 @@ impl Voice {
             self.fades.env.set(env_on_target);
             self.fades.fm_gate.set(if stepped { 0.0 } else { 1.0 });
             self.fx.forget(&fx);
+            self.ladder.reset(&ladder);
             self.fm.settle(&fm_params);
             self.granular.clear();
             self.tail_left = 0.0;
@@ -871,6 +891,8 @@ impl Voice {
             p: target,
             fx,
             filter_tracking,
+            ladder,
+            ladder_tracking,
             material_gain_target,
             fm_gain_target,
             fm_params,
@@ -1100,12 +1122,22 @@ impl Voice {
         // the envelope, then the master gain.
         // The cutoff follows the step's pitch from the frame it lands on; the
         // filter's own cutoff smoother glides it. Off multiplies by exactly 1.
-        let cutoff_mul = if b.filter_tracking == 0.0 || self.pass_semis == 0.0 {
-            1.0
-        } else {
-            (b.filter_tracking * self.pass_semis * (1.0 / 12.0)).exp2()
+        let follow = |tracking: f32| {
+            if tracking == 0.0 || self.pass_semis == 0.0 {
+                1.0
+            } else {
+                (tracking * self.pass_semis * (1.0 / 12.0)).exp2()
+            }
         };
-        let (l, r) = self.fx.back_tracked(l, r, fx, cutoff_mul);
+        let (l, r) = self.fx.filter_tracked(l, r, fx, follow(b.filter_tracking));
+        // The ladder, after the filter and before the output gain; its own
+        // tracking, so the clean filter can stay put while it follows.
+        let ladder = LadderParams {
+            cutoff_hz: b.ladder.cutoff_hz * follow(b.ladder_tracking),
+            ..b.ladder
+        };
+        let (l, r) = self.ladder.process(l, r, &ladder);
+        let (l, r) = self.fx.output(l, r, fx);
 
         // The note clock runs on tape time, as the grain scheduler does:
         // a brake slows it, and the material's octave does not.

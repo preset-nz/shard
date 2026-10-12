@@ -3657,6 +3657,66 @@ mod tests {
         assert_eq!(idle, tracked(500.0, 2.0, 7, false), "steps off");
     }
 
+    /// `tracked`, through the ladder instead: a clean filter left off, the
+    /// ladder at `cutoff` and `tracking`.
+    fn ladder_tracked(cutoff: f32, tracking: f32, semis: i8) -> Vec<f32> {
+        let mut seed = 12_345u32;
+        let noise: Vec<f32> = (0..48_000)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f32 / 8_388_608.0 - 1.0
+            })
+            .collect();
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_source(noise);
+        let bank = ParamBank::new();
+        set(&bank, "patch.length", 0.0);
+        set(&bank, "ladder.on", 1.0);
+        set(&bank, "ladder.cutoff", cutoff);
+        set(&bank, "ladder.tracking", tracking);
+        let mut pitches = [0i8; crate::steps::STEPS];
+        pitches[0] = semis;
+        e.set_steps(StepParams {
+            on: true,
+            tempo_bpm: 120.0,
+            length: 1,
+            pattern: 1,
+            pitches,
+            ..Default::default()
+        });
+        e.set_playing(true);
+        let mut out = vec![0.0; 512];
+        let mut all = Vec::new();
+        while all.len() < 24_000 {
+            e.process_block(&mut out, &bank);
+            all.extend(out.iter().step_by(2));
+        }
+        all.split_off(12_000)
+    }
+
+    #[test]
+    fn the_ladder_follows_the_step_an_octave_per_octave_at_full_tracking() {
+        let moved = ladder_tracked(500.0, 2.0, 12);
+        let by_hand = ladder_tracked(1_000.0, 0.0, 12);
+        let unmoved = ladder_tracked(500.0, 0.0, 12);
+        assert!(worst_gap(&moved, &by_hand) < 1e-3, "tracked != doubled");
+        assert!(
+            worst_gap(&moved, &unmoved) > 0.05,
+            "tracking changed nothing"
+        );
+        // Half goes half an octave; down goes down; pitch zero changes nothing.
+        let half = ladder_tracked(500.0, 1.0, 12);
+        let by_hand = ladder_tracked(500.0 * 0.5f32.exp2(), 0.0, 12);
+        assert!(worst_gap(&half, &by_hand) < 1e-3);
+        let down = ladder_tracked(1_000.0, 2.0, -12);
+        assert!(worst_gap(&down, &ladder_tracked(500.0, 0.0, -12)) < 1e-3);
+        assert_eq!(
+            ladder_tracked(500.0, 0.0, 0),
+            ladder_tracked(500.0, 2.0, 0),
+            "full at pitch 0"
+        );
+    }
+
     #[test]
     fn two_voices_on_one_patch_are_not_the_same_sound() {
         let bank = restless();

@@ -169,6 +169,16 @@ export const NODES: NodeInfo[] = [
     table: 'filter',
     owns: under('filter'),
   },
+  // After the filter (epic 36, story 3): a driven 4-pole low-pass that
+  // self-oscillates. The patch only; the arrangement keeps its one filter.
+  {
+    layer: 'patch',
+    id: 'ladder',
+    label: 'Ladder',
+    lane: 'master',
+    table: 'ladder',
+    owns: under('ladder'),
+  },
   { layer: 'patch', id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
   // The tape's feel, in Settings (Georg, 2026-09-14). Brake and reverse are
   // played from the header and slow every track, so they are the
@@ -338,6 +348,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'filter.type': FILTER_TYPES,
   'filter.slope': FILTER_SLOPES,
   'filter.tracking': FILTER_TRACKING,
+  'ladder.tracking': FILTER_TRACKING,
   'drive.type': DRIVE_TYPES,
   'chorus.type': CHORUS_TYPES,
   'reverb.type': REVERB_TYPES,

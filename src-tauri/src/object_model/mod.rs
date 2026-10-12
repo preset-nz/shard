@@ -134,7 +134,9 @@ pub fn mix_keys(track: &Node<'_>) -> (&'static str, &'static str) {
 pub const PLAYED: &[&str] = &["arrangement.tape.brake", "arrangement.tape.reverse"];
 
 /// A patch's fixed nodes, each a child named for its kind.
-pub const PATCH_NODES: &[&str] = &["material", "grain", "fm", "env", "tape", "filter", "amp"];
+pub const PATCH_NODES: &[&str] = &[
+    "material", "grain", "fm", "env", "tape", "filter", "ladder", "amp",
+];
 
 /// The generators that read a material, through `<kind>.source`.
 pub const READS_MATERIAL: &[&str] = &["material", "grain"];
