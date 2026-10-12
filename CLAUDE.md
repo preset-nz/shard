@@ -101,6 +101,15 @@ silenced by another's solo, does not. The engine finds every channel's step
 onsets for a frame before mixing any channel, so a dip starts on its key's
 sample; at rest the dip is exactly 1.0, keep it so.
 
+**Global LFOs** (roadmap row 43) are `lfo` nodes in their own category,
+`/globals`, listed in its order `modulators`: beside the patches, not in one.
+Any patch's row may link one (`links_hold`); the arrangement's rows follow
+nothing yet, and there is no global envelope. The engine holds one `Globals`
+set, advanced once a block and handed over through `Voices::globals_swap`;
+each voice's `ModSet` reads it by id (`Source::Global`, `ModSet::follow`),
+unsalted, so every patch on a global moves with it. A file saved before
+globals opens unchanged: rhizome makes a category a file lacks.
+
 **The table is the patch, and the tracker is the level above it.** Tempo,
 swing and tracks of steps belong to the arrangement, not to a sound, so they are not
 parameters: they live in the arrangement node of the session (the `Tracker`

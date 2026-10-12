@@ -61,13 +61,15 @@ export function Inspector({
   if (!selection) return null;
 
   if (selection.kind === 'lfo') {
-    const lfo = ctx.mod.lfos.find((l) => l.id === selection.id);
+    // A patch's LFO or a global one: ids share one space.
+    const lfo = [...ctx.mod.lfos, ...ctx.mod.globals].find((l) => l.id === selection.id);
     if (!lfo || !limits) return null;
     return (
       <LfoEditor
         key={lfo.id}
         lfo={lfo}
         limits={limits}
+        global={ctx.mod.globals.some((g) => g.id === lfo.id)}
         linked={linkedCounts.get(lfo.id) ?? 0}
         onChange={onLfoChange}
       />
@@ -111,7 +113,7 @@ export function Inspector({
       .map((p) => ctx.mod.links[p.id]?.source)
       .filter((id) => id !== undefined),
   );
-  const linked = ctx.mod.lfos.filter((l) => followed.has(l.id));
+  const linked = [...ctx.mod.lfos, ...ctx.mod.globals].filter((l) => followed.has(l.id));
   const linkedEnvelopes = ctx.mod.envelopes.filter((e) => followed.has(e.id));
 
   return (

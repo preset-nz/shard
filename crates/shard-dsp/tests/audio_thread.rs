@@ -14,8 +14,8 @@ use preset_math::Basis;
 use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
-    adsr_curve, Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, Mix, ModSet, ParamBank, Reading,
-    Shape, StepParams, Taper, PARAMS, VOICES,
+    adsr_curve, Engine, EnvSpec, Generator, Globals, GrainSpawn, LfoSpec, Mix, ModSet, ParamBank,
+    Reading, Shape, StepParams, Taper, PARAMS, VOICES,
 };
 
 #[global_allocator]
@@ -719,6 +719,123 @@ fn every_drums_track_never_touches_the_allocator() {
         }
     });
     assert_eq!(caught, 0, "the kits touched the allocator {caught} time(s)");
+}
+
+#[test]
+fn global_lfos_and_their_hand_off_never_touch_the_allocator() {
+    // Every voice plays its own patch, and every continuous row of each
+    // follows a global LFO (roadmap row 43), some through ids the engine
+    // lacks. The globals are rebuilt (bigger, smaller, a rate edited) and
+    // handed across through a primed pair of slots, as the app's callback
+    // does, while the voices' own sets are swapped too.
+    let globals = |n: u64, rate: f32| -> Globals {
+        Globals::new(
+            &(0..n)
+                .map(|i| LfoSpec {
+                    id: 500 + i,
+                    rate_hz: rate + i as f32,
+                    shape: Shape::ALL[i as usize % Shape::ALL.len()],
+                    phase: 0.0,
+                })
+                .collect::<Vec<_>>(),
+        )
+    };
+    let patch = |v: usize| {
+        let mut set = ModSet::new(&[LfoSpec {
+            id: 1,
+            rate_hz: 2.0 + v as f32,
+            shape: Shape::Sine,
+            phase: 0.0,
+        }]);
+        for (i, p) in PARAMS
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| !matches!(p.taper, Taper::Stepped(_)))
+        {
+            if i % 4 == 0 {
+                set.link(p.id, 1, 0.1, 0.9).unwrap();
+            } else {
+                // 500 to 509: the last few only in the bigger sets.
+                set.link_global(p.id, 500 + ((i + v) % 10) as u64, 0.9, 0.1)
+                    .unwrap();
+            }
+        }
+        set
+    };
+
+    let mut e = Engine::new(SR, 256);
+    let banks: Vec<ParamBank> = (0..VOICES).map(|_| ParamBank::new()).collect();
+    for (i, bank) in banks.iter().enumerate() {
+        e.set_voice_source(i, tone(24_000 + i * 1_000));
+        e.set_voice_active(i, true);
+        bank.set_by_id("grain.on", 1.0);
+        bank.set_by_id("fm.on", 1.0);
+        drop(e.set_voice_modulation(i, patch(i)));
+    }
+    drop(e.set_globals(globals(6, 0.5)));
+    e.set_transport(&StepParams {
+        on: true,
+        tempo_bpm: 180.0,
+        ..Default::default()
+    });
+    e.set_playing(true);
+    let refs: [&ParamBank; VOICES] = std::array::from_fn(|i| &banks[i]);
+
+    // Built out here, off the audio thread.
+    let mut pending_globals = vec![globals(10, 3.0), globals(2, 1.0), globals(10, 0.7)];
+    let mut pending_sets: Vec<ModSet> = (0..VOICES).map(|v| patch(v + 1)).collect();
+    let swap: Mutex<Option<Globals>> = Mutex::new(None);
+    let retired: Mutex<Option<Globals>> = Mutex::new(None);
+    // On macOS a mutex's first lock allocates: prime both before the stream.
+    drop(swap.lock());
+    drop(retired.lock());
+    let mut held: Option<Globals> = None;
+    let mut retired_sets = Vec::with_capacity(VOICES);
+    let mut out = vec![0.0f32; 512];
+    let heard = ParamBank::new();
+
+    for block in 0..900 {
+        // The command thread: a rebuilt set waits, the last one is freed.
+        if block % 200 == 50 {
+            if let Some(next) = pending_globals.pop() {
+                *swap.lock().unwrap() = Some(next);
+            }
+            drop(retired.lock().unwrap().take());
+        }
+        let ((), caught) = no_alloc(|| {
+            if let Some(old) = held.take() {
+                match retired.try_lock() {
+                    Ok(mut slot) if slot.is_none() => *slot = Some(old),
+                    _ => held = Some(old),
+                }
+            }
+            if held.is_none() {
+                if let Ok(mut pending) = swap.try_lock() {
+                    if let Some(next) = pending.take() {
+                        held = Some(e.set_globals(next));
+                    }
+                }
+            }
+            if block % 100 == 75 {
+                if let Some(set) = pending_sets.pop() {
+                    retired_sets.push(e.set_voice_modulation(block / 100 % VOICES, set));
+                }
+            }
+            for (i, bank) in banks.iter().enumerate() {
+                sweep(bank, block + i);
+            }
+            e.process_voices(&mut out, &refs);
+            e.publish_voice_heard(block % VOICES, &banks[block % VOICES], &heard);
+        });
+        assert_eq!(
+            caught, 0,
+            "block {block}: global modulation touched the allocator {caught} time(s)"
+        );
+    }
+    assert!(
+        pending_globals.is_empty(),
+        "every global set was handed over"
+    );
 }
 
 #[test]

@@ -499,6 +499,23 @@ fn the_callbacks_hand_offs_stay_off_the_allocator_with_every_track() {
                 t.tracks[1].duck.depth = (block % 10) as f32 * 0.1;
                 r.session.set_tracker(t).unwrap();
             }
+            // A global LFO (roadmap row 43): linked from a new one, its rate
+            // edited, removed and put back, every set crossing through the
+            // callback's own globals slots.
+            22 => r
+                .session
+                .link_new("fm.index", "global-lfo", 0.0, 0.3)
+                .unwrap(),
+            24 => {
+                let mut g = r.session.globals()[0].clone();
+                g.rate = 1.0 + (block % 7) as f32;
+                r.session.set_lfo(g).unwrap();
+            }
+            26 => {
+                let g = r.session.globals()[0].id;
+                r.session.remove_lfo(g).unwrap();
+            }
+            28 => drop(r.session.undo().unwrap()),
             5 => r.session.wire_material("material", None).unwrap(),
             7 => r.session.wire_material("material", Some(drone)).unwrap(),
             10 => r.session.remove_track(2).unwrap(),
@@ -534,9 +551,6 @@ fn the_callbacks_hand_offs_stay_off_the_allocator_with_every_track() {
             "block {block} touched the allocator {caught} time(s)"
         );
         // What `meters` frees, off the audio thread.
-        for v in &r.voices.voice {
-            drop(std::mem::take(&mut *v.retired.lock().unwrap()));
-            drop(v.mod_retired.lock().unwrap().take());
-        }
+        r.voices.collect_retired();
     }
 }

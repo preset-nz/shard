@@ -457,6 +457,12 @@ export interface LinkRecord {
 export interface ModulationView {
   lfos: LfoRecord[];
   envelopes: EnvelopeRecord[];
+  /**
+   * The global LFOs, beside the patches: any patch's link may follow one,
+   * and every patch that does moves with it. Their ids share the patch's
+   * modulators' space.
+   */
+  globals: LfoRecord[];
   /** By parameter id. */
   links: Record<string, LinkRecord>;
   refused: Refused[];
@@ -468,23 +474,44 @@ export interface LfoLimits {
   max_rate: number;
 }
 
-/** Anything a parameter can follow, LFOs first, as the link menu lists them. */
+/**
+ * Anything a parameter can follow, as the link menu lists them: the patch's
+ * LFOs, its envelopes, then the global LFOs, marked `global`.
+ */
 export interface Modulator {
   id: number;
   name: string;
   kind: 'lfo' | 'envelope';
+  /** A global LFO, not the patch's own. */
+  global: boolean;
 }
 
 export const modulatorsOf = (mod: ModulationView): Modulator[] => [
-  ...mod.lfos.map((l) => ({ id: l.id, name: l.name, kind: 'lfo' as const })),
-  ...mod.envelopes.map((e) => ({ id: e.id, name: e.name, kind: 'envelope' as const })),
+  ...mod.lfos.map((l) => ({ id: l.id, name: l.name, kind: 'lfo' as const, global: false })),
+  ...mod.envelopes.map((e) => ({
+    id: e.id,
+    name: e.name,
+    kind: 'envelope' as const,
+    global: false,
+  })),
+  ...globalsOf(mod),
 ];
+
+/** The global LFOs as modulators. */
+export const globalsOf = (mod: ModulationView): Modulator[] =>
+  mod.globals.map((l) => ({ id: l.id, name: l.name, kind: 'lfo' as const, global: true }));
+
+/** What the link menu's New items add: a patch LFO, an envelope or a global LFO. */
+export type NewModulator = Modulator['kind'] | 'global-lfo';
 
 // Every modulation edit answers with the whole document, so the UI draws
 // exactly what the engine now has.
 export const modulation = () => invoke<ModulationView>('modulation');
 export const lfoLimits = () => invoke<LfoLimits>('lfo_limits');
 export const addLfo = () => invoke<ModulationView>('add_lfo');
+/** A global LFO, beside the patches. It is last in the answer's `globals`. */
+export const addGlobalLfo = () => invoke<ModulationView>('add_global_lfo');
+/** Removes a patch's LFO or a global one, and every link that followed it. */
 export const removeLfo = (id: number) => invoke<ModulationView>('remove_lfo', { id });
 export const setLfo = (lfo: LfoRecord) => invoke<ModulationView>('set_lfo', { lfo });
 export const addEnvelope = () => invoke<ModulationView>('add_envelope');
@@ -503,8 +530,8 @@ export const envelopeGestureEnd = () => invoke<void>('envelope_gesture_end');
 export const envelopeGestureCancel = () => invoke<ModulationView>('envelope_gesture_cancel');
 export const linkParam = (id: string, source: number, lo: number, hi: number) =>
   invoke<ModulationView>('link_param', { id, source, lo, hi });
-/** Link a parameter to a new LFO or envelope, added for it: one undo step. */
-export const linkNew = (id: string, kind: Modulator['kind'], lo: number, hi: number) =>
+/** Link a parameter to a new LFO, envelope or global LFO, added for it: one undo step. */
+export const linkNew = (id: string, kind: NewModulator, lo: number, hi: number) =>
   invoke<ModulationView>('link_new', { id, kind, lo, hi });
 export const unlinkParam = (id: string) => invoke<ModulationView>('unlink_param', { id });
 

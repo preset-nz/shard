@@ -16,6 +16,7 @@ import {
   ARRANGEMENT_PREFIX,
   addDrone,
   addEnvelope,
+  addGlobalLfo,
   addLfo,
   addMaterial,
   addTrack,
@@ -42,6 +43,7 @@ import {
   getHeard,
   getParams,
   getTracker,
+  globalsOf,
   grainLog,
   type LfoLimits,
   type LoadReport,
@@ -192,6 +194,7 @@ export default function App() {
   const [mod, setMod] = useState<ModulationView>({
     lfos: [],
     envelopes: [],
+    globals: [],
     links: {},
     refused: [],
   });
@@ -1257,10 +1260,10 @@ export default function App() {
                         m.kind === 'lfo' ? await removeLfo(m.id) : await removeEnvelope(m.id);
                       const now = useSelection.getState().selection;
                       if (now?.kind === m.kind && now.id === m.id) clear();
-                      const orphaned = linkedCounts.get(m.id) ?? 0;
-                      if (orphaned > 0) {
+                      const unlinked = linkedCounts.get(m.id) ?? 0;
+                      if (unlinked > 0) {
                         setNote(
-                          `Removed ${m.name}. ${orphaned} parameter${orphaned === 1 ? '' : 's'} still link to it and stay at their own values until unlinked.`,
+                          `Removed ${m.name} and the ${unlinked} link${unlinked === 1 ? '' : 's'} that followed it. Undo brings them back.`,
                         );
                       }
                       return view;
@@ -1268,6 +1271,41 @@ export default function App() {
                   }
                 />
               </>
+            }
+            globals={
+              <ModulatorTree
+                title="Global"
+                kinds={[{ kind: 'lfo', label: 'global LFO' }]}
+                empty="No global LFOs yet. Add one with +, and any patch can follow it."
+                modulators={globalsOf(mod)}
+                selected={selectedModulator}
+                linked={linkedCounts}
+                onSelect={(next) => {
+                  if (next === null) return clear();
+                  select(next);
+                  setMode('soundscape');
+                }}
+                onAdd={() =>
+                  void editMod(async () => {
+                    setMode('soundscape');
+                    const view = await addGlobalLfo();
+                    const added = view.globals[view.globals.length - 1];
+                    if (added) select({ kind: 'lfo', id: added.id });
+                    return view;
+                  })
+                }
+                onRemove={(m) =>
+                  void editMod(async () => {
+                    const view = await removeLfo(m.id);
+                    const now = useSelection.getState().selection;
+                    if (now?.kind === 'lfo' && now.id === m.id) clear();
+                    setNote(
+                      `Removed ${m.name} and every link that followed it, in every patch. Undo brings them back.`,
+                    );
+                    return view;
+                  })
+                }
+              />
             }
             materials={
               <MaterialTree

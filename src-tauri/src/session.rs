@@ -50,6 +50,13 @@
 //! clears the references to it in the same step, so undo brings both back.
 //! Depth, Release and Key only are edits through `set_tracker`.
 //!
+//! **Global LFOs** (roadmap row 43) live in the tree beside the patches.
+//! The engine has one set of them, handed over through `Voices::globals_swap`
+//! whenever they change, and every voice's set follows them by id, so two
+//! patches on one global move together. A patch's link to one is a binding
+//! like any other: duplicating the patch keeps it on the same global, and
+//! removing the global drops every patch's links to it in the same step.
+//!
 //! **Lock order:** `doc`, then `gesture`, then `sent`, then `decoded`, then `feeding`, then the
 //! engine's hand-off slots. `pending` is a leaf, taken only under `doc`. Nothing here takes a controller lock; MIDI calls
 //! in with its own locks already released. Decoding a WAV never happens under
@@ -70,8 +77,8 @@ use shard_dsp::kit::{KitParams, KitPattern};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::StepBank;
 use shard_dsp::{
-    Duck, DuckBank, Generator, KitBank, Mix, ModSet, ParamBank, ReadingBank, StepParams, KITS,
-    VOICES,
+    Duck, DuckBank, Generator, Globals, KitBank, Mix, ModSet, ParamBank, ReadingBank, StepParams,
+    KITS, VOICES,
 };
 
 use crate::mapping::MapRef;
@@ -205,6 +212,10 @@ pub struct Voices {
     /// The voice playing the current patch, whose heard values, playhead and
     /// grains the patch view shows, or `NO_VOICE`.
     pub shown: AtomicUsize,
+    /// The global LFOs waiting for the audio thread, and the set it gave
+    /// back. One pair for the engine, not one per voice.
+    pub globals_swap: Mutex<Option<Globals>>,
+    pub globals_retired: Mutex<Option<Globals>>,
 }
 
 impl Voices {
@@ -214,6 +225,8 @@ impl Voices {
             kits: std::array::from_fn(|_| KitFeed::new()),
             transport: StepBank::new(Tracker::default().transport()),
             shown: AtomicUsize::new(NO_VOICE),
+            globals_swap: Mutex::new(None),
+            globals_retired: Mutex::new(None),
         }
     }
 
@@ -227,6 +240,19 @@ impl Voices {
             drop(lock(&v.swap));
             drop(lock(&v.retired));
         }
+        drop(lock(&self.globals_swap));
+        drop(lock(&self.globals_retired));
+    }
+
+    /// Frees what the audio thread gave back: every voice's source buffers
+    /// and modulation set, and the global LFOs. Off the audio thread, which
+    /// takes no new set while a retired one waits.
+    pub fn collect_retired(&self) {
+        for v in &self.voice {
+            drop(std::mem::take(&mut *lock(&v.retired)));
+            drop(lock(&v.mod_retired).take());
+        }
+        drop(lock(&self.globals_retired).take());
     }
 
     /// The voice the patch view follows, if one plays the current patch.
@@ -493,10 +519,15 @@ impl Session {
         if all || plan.tracker != sent.plan.tracker {
             voices.transport.store(&plan.tracker.transport());
         }
+        // The global LFOs before the voices, so a voice's new link to a new
+        // global finds it in the same block.
+        if all || plan.globals != sent.plan.globals {
+            *lock(&voices.globals_swap) = Some(plan.global_set().0);
+        }
         let materials = all || plan.pool.materials != sent.plan.pool.materials;
         let next = voicing(&plan, sent.selected_track);
         for (i, want) in next.into_iter().enumerate() {
-            self.hand(i, &want, &sent.voices[i], all, materials, &plan.pool);
+            self.hand(i, &want, &sent.voices[i], all, materials, &plan);
             sent.voices[i] = want;
         }
         for k in 0..KITS {
@@ -519,7 +550,8 @@ impl Session {
 
     /// Hands voice `i` what differs from what it was last handed (`was`), or
     /// everything. Switched in last, so it wakes on its own patch.
-    fn hand(&self, i: usize, want: &Voiced, was: &Voiced, all: bool, materials: bool, pool: &Pool) {
+    fn hand(&self, i: usize, want: &Voiced, was: &Voiced, all: bool, materials: bool, plan: &Plan) {
+        let pool = &plan.pool;
         let feed = &self.feeds.voices.voice[i];
         if want.patch.is_none() {
             if all || was.patch.is_some() {
@@ -531,7 +563,7 @@ impl Session {
             om::write_values(&want.values, &feed.bank);
         }
         if all || want.modulation != was.modulation || was.patch.is_none() {
-            *lock(&feed.mod_swap) = Some(want.modulation.build().0);
+            *lock(&feed.mod_swap) = Some(want.modulation.build(&plan.globals).0);
         }
         if all || materials || want.wires != was.wires || was.patch.is_none() {
             self.send_pool(i, pool, want.wires);
@@ -1182,10 +1214,21 @@ impl Session {
 
     // Modulation.
 
-    /// The patch's LFOs, envelopes and links, and what the engine refuses.
+    /// The patch's LFOs, envelopes and links, and what the engine refuses of
+    /// them and of the global LFOs.
     pub fn modulation(&self) -> (Modulation, Vec<Refused>) {
         let sent = lock(&self.sent);
-        (sent.plan.modulation.clone(), sent.plan.mod_set().1)
+        (sent.plan.modulation.clone(), sent.plan.refused())
+    }
+
+    /// The global LFOs, in their order.
+    pub fn globals(&self) -> Vec<modulation::LfoRecord> {
+        lock(&self.sent).plan.globals.clone()
+    }
+
+    /// Whether modulator `node` is a global LFO.
+    fn is_global(&self, node: NodeId) -> bool {
+        self.read(|d| d.tree().get(node).is_some_and(|n| om::is_global(&n)))
     }
 
     fn modulator(&self, id: u64, kind: &str) -> Result<NodeId, String> {
@@ -1213,10 +1256,22 @@ impl Session {
         Ok(())
     }
 
-    /// Removes an LFO, and the links that followed it.
+    /// A global LFO, named "Global LFO n", at the end of the globals.
+    pub fn add_global_lfo(&self) -> Result<(), String> {
+        self.edit("Add global LFO", None, |tx| new_global_lfo(tx).map(|_| ()))?;
+        Ok(())
+    }
+
+    /// Removes an LFO, a patch's or a global one, and the links that followed
+    /// it: a global's in every patch. Undo brings them all back.
     pub fn remove_lfo(&self, id: u64) -> Result<(), String> {
         let node = self.modulator(id, om::LFO)?;
-        self.edit("Remove LFO", None, |tx| tx.remove(node))?;
+        let label = if self.is_global(node) {
+            "Remove global LFO"
+        } else {
+            "Remove LFO"
+        };
+        self.edit(label, None, |tx| tx.remove(node))?;
         Ok(())
     }
 
@@ -1237,7 +1292,12 @@ impl Session {
         );
         let name = modulation::valid_name(&lfo.name, "an LFO")?;
         let key = format!("lfo:{}", lfo.id);
-        self.edit("Change LFO", Some(&key), |tx| {
+        let label = if self.is_global(node) {
+            "Change global LFO"
+        } else {
+            "Change LFO"
+        };
+        self.edit(label, Some(&key), |tx| {
             tx.put(node, "lfo.label", Value::Text(name))?;
             tx.put(node, "lfo.rate", Value::Float(om::float(rate)))?;
             tx.put(node, "lfo.shape", Value::Choice(lfo.shape.clone()))?;
@@ -1376,8 +1436,8 @@ impl Session {
     }
 
     /// The patch parameter `id` follows a new LFO (`kind` "lfo") or
-    /// envelope ("envelope"), added to the current patch for it: one undo
-    /// step, from the link menu.
+    /// envelope ("envelope"), added to the current patch for it, or a new
+    /// global LFO ("global-lfo"): one undo step, from the link menu.
     pub fn link_new(&self, id: &str, kind: &str, lo: f32, hi: f32) -> Result<(), String> {
         if id.starts_with(arrangement::PREFIX) {
             return Err(format!(
@@ -1391,6 +1451,7 @@ impl Session {
             match kind {
                 "lfo" => ("Link to a new LFO", new_lfo),
                 "envelope" => ("Link to a new envelope", new_envelope),
+                "global-lfo" => ("Link to a new global LFO", |tx, _| new_global_lfo(tx)),
                 _ => return Err(format!("there is no kind of modulator called {kind}")),
             };
         let patch = self.owner("patch")?;
@@ -1976,7 +2037,7 @@ impl Session {
         let mut report = LoadReport {
             applied: doc.tree().len(),
             unknown: load.issues.iter().map(ToString::to_string).collect(),
-            refused: doc.projection().mod_set().1,
+            refused: doc.projection().refused(),
             ..LoadReport::default()
         };
         {
@@ -2252,6 +2313,17 @@ fn new_lfo(tx: &mut Edit<'_>, patch: NodeId) -> rhizome_core::Result<NodeId> {
     let lfo = tx.add_lfo(patch)?;
     let n = count(tx, patch, om::LFO);
     tx.set_value(lfo, "lfo.label", Value::Text(format!("LFO {n}")))?;
+    Ok(lfo)
+}
+
+/// A new global LFO, named "Global LFO n" by how many there are. A patch's
+/// "LFO n" counts only its own.
+fn new_global_lfo(tx: &mut Edit<'_>) -> rhizome_core::Result<NodeId> {
+    let lfo = tx.add_global_lfo()?;
+    let n = tx.at(format!("/{}", om::GLOBALS).as_str()).map_or(0, |c| {
+        c.children().filter(|n| n.type_name() == om::LFO).count()
+    });
+    tx.set_value(lfo, "lfo.label", Value::Text(format!("Global LFO {n}")))?;
     Ok(lfo)
 }
 

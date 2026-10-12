@@ -29,8 +29,9 @@ import {
  * session state, never an edit.
  *
  * The current patch carries its own generators and modulators, nested under
- * its row; materials are the session's, so they sit apart. Those trees are
- * the caller's, passed in as `patchChildren` and `materials`.
+ * its row; the global LFOs (roadmap row 43), which any patch may follow, and
+ * the materials are the session's, so they sit apart. Those trees are the
+ * caller's, passed in as `patchChildren`, `globals` and `materials`.
  *
  * Keyboard: focus the panel (Tab, or click a row), then Up and Down move a
  * cursor through the tracks and the patches and Return selects the row under
@@ -69,6 +70,7 @@ export function SceneView({
   onDuplicate,
   onDelete,
   patchChildren,
+  globals,
   materials,
 }: {
   tracks: Track[];
@@ -102,6 +104,8 @@ export function SceneView({
   onDelete: (id: number) => void;
   /** The current patch's generators and modulators. */
   patchChildren: ReactNode;
+  /** The Global section: the global LFOs. */
+  globals: ReactNode;
   /** The materials section. */
   materials: ReactNode;
 }) {
@@ -380,6 +384,7 @@ export function SceneView({
         ))}
       </div>
 
+      {globals}
       {materials}
     </nav>
   );

@@ -10,6 +10,7 @@ import {
   type ModulationView,
   type Modulator,
   modulatorsOf,
+  type NewModulator,
   normalise,
   type ParamInfo,
 } from '@/audio';
@@ -57,7 +58,8 @@ function groupKnobs(knobs: KnobInfo[]): [string, KnobInfo[]][] {
  * arrive on the panel's context, which changes every poll without rebuilding
  * the schema.
  *
- * Right-click links or unlinks. A linked row shows the modulator it follows, the two
+ * Right-click links or unlinks: to the patch's own modulators, a global LFO
+ * (roadmap row 43), or a new one of either. A linked row shows the modulator it follows, the two
  * ends of its sweep on a second slider, and a mark on the main slider where
  * the engine has moved the value to. The main slider stays the hand's, and is
  * what the value returns to when unlinked.
@@ -85,11 +87,18 @@ export interface ParamRowContext {
   onWire: (node: string, material: number | null) => void;
   onLink: (id: string, source: number, lo: number, hi: number) => void;
   onUnlink: (id: string) => void;
-  onLinkNew: (id: string, kind: Modulator['kind'], lo: number, hi: number) => void;
+  onLinkNew: (id: string, kind: NewModulator, lo: number, hi: number) => void;
   onLearn: (id: string) => void;
   onMapMidi: (id: string, control: number) => void;
   onForgetMidi: (id: string) => void;
 }
+
+/** The link menu's New items, in order. */
+const NEW_ITEMS: { kind: NewModulator; label: string }[] = [
+  { kind: 'lfo', label: 'New LFO' },
+  { kind: 'envelope', label: 'New envelope' },
+  { kind: 'global-lfo', label: 'New global LFO' },
+];
 
 /** A new link sweeps this far either side of where the hand is. */
 const NEW_HALF_WIDTH = 0.125;
@@ -118,6 +127,19 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
   // The arrangement's rows follow no modulator yet (Georg, 2026-09-26: later),
   // though a knob maps to them like any other row.
   const arrangement = isArrangement(def.id);
+  const own = modulators.filter((m) => !m.global);
+  const globals = modulators.filter((m) => m.global);
+  const linkItem = (m: Modulator) => (
+    <ContextMenuItem
+      key={m.id}
+      onClick={() =>
+        source ? c.onLink(def.id, m.id, link.lo, link.hi) : c.onLink(def.id, m.id, ...around(t))
+      }
+    >
+      {m.kind === 'lfo' ? '∿' : '⌒'} {m.name}
+      {link?.source === m.id ? ' ✓' : ''}
+    </ContextMenuItem>
+  );
 
   return (
     <ContextMenu>
@@ -212,21 +234,20 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
         <ContextMenuSub>
           <ContextMenuSubTrigger disabled={arrangement}>Link to</ContextMenuSubTrigger>
           <ContextMenuSubContent>
-            {modulators.map((m) => (
-              <ContextMenuItem
-                key={m.id}
-                onClick={() =>
-                  source
-                    ? c.onLink(def.id, m.id, link.lo, link.hi)
-                    : c.onLink(def.id, m.id, ...around(t))
-                }
-              >
-                {m.kind === 'lfo' ? '∿' : '⌒'} {m.name}
-                {link?.source === m.id ? ' ✓' : ''}
-              </ContextMenuItem>
-            ))}
+            {own.map(linkItem)}
+            {globals.length > 0 && (
+              <>
+                {own.length > 0 && <ContextMenuSeparator />}
+                <ContextMenuGroup>
+                  <ContextMenuLabel className="text-[11px] font-normal text-muted-foreground">
+                    Global
+                  </ContextMenuLabel>
+                </ContextMenuGroup>
+                {globals.map(linkItem)}
+              </>
+            )}
             {modulators.length > 0 && <ContextMenuSeparator />}
-            {(['lfo', 'envelope'] as const).map((kind) => (
+            {NEW_ITEMS.map(({ kind, label }) => (
               <ContextMenuItem
                 key={kind}
                 onClick={() =>
@@ -235,7 +256,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
                     : c.onLinkNew(def.id, kind, ...around(t))
                 }
               >
-                {kind === 'lfo' ? 'New LFO' : 'New envelope'}
+                {label}
               </ContextMenuItem>
             ))}
           </ContextMenuSubContent>

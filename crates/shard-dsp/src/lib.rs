@@ -71,7 +71,9 @@ pub use kit::{Kit, KitBank, KitClock, KitParams, KitPattern};
 pub use ladder::{Ladder, LadderParams};
 pub use limiter::{Limiter, LimiterParams};
 pub use mix::Mix;
-pub use modulation::{adsr_curve, Curve, Ease, EnvSpec, LfoSpec, LinkError, ModSet, Shape};
+pub use modulation::{
+    adsr_curve, Curve, Ease, EnvSpec, Globals, LfoSpec, LinkError, ModSet, Shape,
+};
 pub use overtone::{Overtone, OvertoneParams};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;

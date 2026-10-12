@@ -1,5 +1,6 @@
+import { Icons } from '@preset.nz/ux-kit';
 import type { Modulator } from '@/audio';
-import { AddMenu } from '@/components/AddMenu';
+import { type AddChoice, AddMenu } from '@/components/AddMenu';
 import {
   ContextMenu,
   ContextMenuContent,
@@ -9,10 +10,18 @@ import {
 
 type Kind = Modulator['kind'];
 
+const PATCH_KINDS: AddChoice<Kind>[] = [
+  { kind: 'lfo', label: 'LFO' },
+  { kind: 'envelope', label: 'Mod envelope' },
+];
+
 /**
  * Modulators, the left-hand tree's second category under Materials: the
  * patch's LFOs and modulation envelopes. Click one to edit it in the panel;
  * right-click to remove it.
+ *
+ * The scene view's Global section is the same tree over the global LFOs
+ * (roadmap row 43): its `title`, one kind to add, so + adds it at once.
  *
  * A rough sketch ahead of the panel redesign and the node API's real tree.
  */
@@ -24,6 +33,9 @@ export function ModulatorTree({
   onAdd,
   onRemove,
   nested = false,
+  title = 'Modulators',
+  kinds = PATCH_KINDS,
+  empty = 'No modulators yet. Add an LFO or a mod envelope with +.',
 }: {
   /** LFOs first, then envelopes. */
   modulators: Modulator[];
@@ -38,7 +50,14 @@ export function ModulatorTree({
    * with a quieter heading.
    */
   nested?: boolean;
+  /** The heading: "Modulators", or "Global". */
+  title?: string;
+  /** What + adds. With one, + adds it without a menu. */
+  kinds?: AddChoice<Kind>[];
+  /** What shows while there are none. */
+  empty?: string;
 }) {
+  const only = kinds.length === 1 ? kinds[0] : undefined;
   return (
     <div className={nested ? 'ml-4 border-l border-border py-1' : 'py-2'}>
       <div className="flex items-center gap-1 pr-2 pl-3 pb-1">
@@ -47,23 +66,25 @@ export function ModulatorTree({
             nested ? 'font-medium' : 'font-semibold uppercase tracking-wider'
           }`}
         >
-          Modulators
+          {title}
         </span>
-        <AddMenu<Kind>
-          title="Add a modulator"
-          choices={[
-            { kind: 'lfo', label: 'LFO' },
-            { kind: 'envelope', label: 'Mod envelope' },
-          ]}
-          onAdd={onAdd}
-        />
+        {only ? (
+          <button
+            type="button"
+            title={`Add a ${only.label}`}
+            // Keep focus off the button, so Space still starts playback.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => onAdd(only.kind)}
+            className="rounded p-0.5 text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
+            <Icons.PlusIcon size={13} />
+          </button>
+        ) : (
+          <AddMenu<Kind> title="Add a modulator" choices={kinds} onAdd={onAdd} />
+        )}
       </div>
 
-      {modulators.length === 0 && (
-        <p className="px-3 text-xs text-muted-foreground">
-          No modulators yet. Add an LFO or a mod envelope with +.
-        </p>
-      )}
+      {modulators.length === 0 && <p className="px-3 text-xs text-muted-foreground">{empty}</p>}
 
       {modulators.map((m) => {
         const count = linked.get(m.id) ?? 0;

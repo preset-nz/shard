@@ -22,6 +22,11 @@
 //!   filter and output (a `master`, named `amp`).
 //! - `/materials/<sample>`: WAVs and the built-in drone. A generator reads
 //!   one through its reference `<kind>.source`.
+//! - `/globals/<lfo>`: the global LFOs (roadmap row 43), listed in the
+//!   category's order `modulators`. Any patch's parameter may link one, and
+//!   every patch that does follows the same LFO. A category of its own, so a
+//!   file saved before it opens unchanged: rhizome makes a category a file
+//!   lacks. Only LFOs live here; a mod envelope fires on its patch's notes.
 //!
 //! **A value's key is its parameter id,** less any `arrangement.` prefix, so
 //! `params.rs` stays the one place ids are written. An effect's keys are its
@@ -66,8 +71,9 @@ pub fn float(v: f32) -> f64 {
 }
 
 pub use compile::{
-    arrangement_node, as_f32, compile, instance_of, locate, patch_node, patches, patches_in,
-    played_by, read_tracker, to_value, track_patch, tracks, write_values, PatchPlan, Plan,
+    arrangement_node, as_f32, compile, global_lfos, instance_of, locate, patch_node, patches,
+    patches_in, played_by, read_tracker, to_value, track_patch, tracks, write_values, PatchPlan,
+    Plan,
 };
 
 pub const EXTENSION: &str = "shard";
@@ -75,6 +81,8 @@ pub const EXTENSION: &str = "shard";
 pub const PATCHES: &str = "patches";
 pub const ARRANGEMENTS: &str = "arrangements";
 pub const MATERIALS: &str = "materials";
+/// The global LFOs' category.
+pub const GLOBALS: &str = "globals";
 
 pub const PATCH: &str = "patch";
 pub const ARRANGEMENT: &str = "arrangement";
@@ -90,7 +98,7 @@ pub const SAMPLE: &str = "sample";
 
 /// The order of a patch's or the arrangement's effects.
 pub const CHAIN: &str = "chain";
-/// The order of a patch's LFOs and mod envelopes.
+/// The order of a patch's LFOs and mod envelopes, and of the global LFOs.
 pub const MODULATORS: &str = "modulators";
 /// The order of the arrangement's tracks.
 pub const TRACKS: &str = "tracks";
@@ -265,6 +273,8 @@ enum Under {
     Either,
     Track,
     Drums,
+    /// A patch, or the globals category: LFOs.
+    PatchOrGlobals,
 }
 
 /// One kind as Shard declares it.
@@ -357,6 +367,9 @@ fn lives_under(node: &Node<'_>, under: Under) -> std::result::Result<(), String>
         Under::Either => matches!(parent.type_name(), PATCH | ARRANGEMENT),
         Under::Track => parent.type_name() == TRACK,
         Under::Drums => parent.type_name() == DRUMS,
+        Under::PatchOrGlobals => {
+            parent.type_name() == PATCH || (parent.is_category() && parent.name() == GLOBALS)
+        }
     };
     if ok {
         Ok(())
@@ -369,10 +382,19 @@ fn lives_under(node: &Node<'_>, under: Under) -> std::result::Result<(), String>
     }
 }
 
+/// Whether a node is a global LFO: an LFO in the globals category.
+pub fn is_global(node: &Node<'_>) -> bool {
+    node.type_name() == LFO
+        && node
+            .parent()
+            .is_some_and(|p| p.is_category() && p.name() == GLOBALS)
+}
+
 /// Links onto a node: each onto a continuous parameter (a set of choices
 /// can't follow a modulator, as `LinkError::Stepped` says, and a modulator's
 /// own settings are not parameters), at most one per value, and only from a
-/// modulator of the node's own patch.
+/// modulator of the node's own patch or a global LFO. The arrangement's
+/// nodes follow nothing yet, globals included.
 fn links_hold(node: &Node<'_>) -> std::result::Result<(), String> {
     let bindings = node.bindings();
     if bindings.is_empty() {
@@ -409,9 +431,11 @@ fn links_hold(node: &Node<'_>) -> std::result::Result<(), String> {
             return Err(format!("{key} already follows a modulator"));
         }
         seen.push(key);
-        if b.source.parent().map(|p| p.id()) != patch {
+        let own = patch.is_some() && b.source.parent().map(|p| p.id()) == patch;
+        let global = patch.is_some() && is_global(&b.source);
+        if !own && !global {
             return Err(format!(
-                "{key} can follow only a modulator of its own patch"
+                "{key} can follow only a modulator of its own patch or a global LFO"
             ));
         }
     }
@@ -673,9 +697,10 @@ pub fn kinds() -> Vec<KindDecl> {
         );
     }
 
-    // Modulators, the sources a link follows.
+    // Modulators, the sources a link follows. An LFO lives in a patch, or in
+    // the globals category, listed in its order there.
     let lfo = NodeType::new(LFO)
-        .in_categories(&[PATCHES])
+        .in_categories(&[PATCHES, GLOBALS])
         .text("lfo.label", "")
         .float(
             "lfo.rate",
@@ -686,7 +711,13 @@ pub fn kinds() -> Vec<KindDecl> {
         .float("lfo.phase", 0.0..=1.0, 0.0)
         .bindable(link_values());
     push(
-        checked(lfo, Under::Patch, none),
+        checked(lfo, Under::PatchOrGlobals, |n| {
+            if is_global(n) {
+                listed_in(n, MODULATORS)
+            } else {
+                Ok(())
+            }
+        }),
         Role::Modulator,
         false,
         None,
@@ -896,7 +927,8 @@ impl ObjectModel for Shard {
     fn kinds(k: &mut Kinds, _: &()) {
         k.category(PATCHES, Origin::Loaded)
             .category(ARRANGEMENTS, Origin::Loaded)
-            .category(MATERIALS, Origin::Loaded);
+            .category(MATERIALS, Origin::Loaded)
+            .category(GLOBALS, Origin::Loaded);
         for decl in kinds() {
             // Every node the parameter table backs keeps presets: the
             // generators and effects, and the patch, tape and output too.
@@ -980,6 +1012,8 @@ pub trait ShardEdit {
     /// An effect at the end of `owner`'s chain, a patch's or the arrangement's.
     fn add_effect(&mut self, owner: NodeId, kind: Fx) -> Result<NodeId>;
     fn add_lfo(&mut self, patch: NodeId) -> Result<NodeId>;
+    /// A global LFO, at the end of the globals' order.
+    fn add_global_lfo(&mut self) -> Result<NodeId>;
     fn add_mod_env(&mut self, patch: NodeId) -> Result<NodeId>;
     /// `key` on `target` follows `source`, from `lo` to `hi` of its range.
     fn link(&mut self, target: NodeId, key: &str, source: NodeId, lo: f32, hi: f32) -> Result<()>;
@@ -1131,6 +1165,13 @@ impl ShardEdit for Edit<'_> {
     fn add_lfo(&mut self, patch: NodeId) -> Result<NodeId> {
         let node = self.add_unique(patch, LFO, LFO)?;
         self.append_to_order(patch, MODULATORS, node)?;
+        Ok(node)
+    }
+
+    fn add_global_lfo(&mut self) -> Result<NodeId> {
+        let globals = format!("/{GLOBALS}");
+        let node = self.add_unique(globals.as_str(), LFO, LFO)?;
+        self.append_to_order(globals.as_str(), MODULATORS, node)?;
         Ok(node)
     }
 

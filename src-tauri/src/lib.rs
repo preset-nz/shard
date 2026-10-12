@@ -22,7 +22,9 @@ use serde::Serialize;
 use shard_dsp::arrangement;
 use shard_dsp::params::{ParamDef, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
-use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, KITS, VOICES};
+use shard_dsp::{
+    Engine, Generator, Globals, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, KITS, VOICES,
+};
 
 mod controllers;
 mod document;
@@ -32,6 +34,8 @@ mod drums_tests;
 mod duck_tests;
 #[cfg(test)]
 mod e2e;
+#[cfg(test)]
+mod globals_tests;
 mod mapping;
 mod materials;
 mod menu;
@@ -195,22 +199,31 @@ pub struct SourceInfo {
     pub peaks: Vec<f32>,
 }
 
-/// The open patch's LFOs and links as the UI draws them, and what in them the
-/// engine could not use. Every modulation command answers with one, so the UI
-/// never draws a document older than its own last edit.
+/// The open patch's LFOs and links as the UI draws them, the global LFOs
+/// beside them, and what in them the engine could not use. Every modulation
+/// command answers with one, so the UI never draws a document older than its
+/// own last edit.
 #[derive(Serialize)]
 pub struct ModulationView {
     pub lfos: Vec<modulation::LfoRecord>,
     pub envelopes: Vec<modulation::EnvelopeRecord>,
+    /// The global LFOs, which any patch's link may follow. Their ids share
+    /// the patch's modulators' space, so a link's `source` is one or the other.
+    pub globals: Vec<modulation::LfoRecord>,
     pub links: modulation::Links,
     pub refused: Vec<modulation::Refused>,
 }
 
 impl ModulationView {
-    fn of(doc: &modulation::Modulation, refused: Vec<modulation::Refused>) -> Self {
+    fn of(
+        doc: &modulation::Modulation,
+        globals: Vec<modulation::LfoRecord>,
+        refused: Vec<modulation::Refused>,
+    ) -> Self {
         Self {
             lfos: doc.lfos.clone(),
             envelopes: doc.envelopes.clone(),
+            globals,
             links: doc.links.clone(),
             refused,
         }
@@ -330,14 +343,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
     // Free whatever source buffers and modulation sets the audio thread
     // retired since the last poll. Blocking here is fine; the audio thread
     // only ever tries the locks.
-    for v in &state.voices.voice {
-        if let Ok(mut slot) = v.retired.lock() {
-            drop(std::mem::take(&mut *slot));
-        }
-        if let Ok(mut slot) = v.mod_retired.lock() {
-            drop(slot.take());
-        }
-    }
+    state.voices.collect_retired();
 
     let audio_allocs = rt::violations();
     let logged = state.reported_allocs.swap(audio_allocs, Ordering::Relaxed);
@@ -494,7 +500,9 @@ async fn patch_preview(state: tauri::State<'_, Audio>) -> Result<PatchPreview, S
     let materials =
         Generator::ALL.map(|g| pool.wires.get(g).and_then(|id| state.session.loaded(id)));
     let readings = Generator::ALL.map(|g| Audio::reading_of(&state.session, &pool, g));
-    let mods = state.session.plan().mod_set().0;
+    let plan = state.session.plan();
+    let mods = plan.mod_set().0;
+    let globals = plan.global_set().0;
 
     tauri::async_runtime::spawn_blocking(move || {
         let empty: &[f32] = &[];
@@ -509,6 +517,7 @@ async fn patch_preview(state: tauri::State<'_, Audio>) -> Result<PatchPreview, S
             grain: samples(Generator::Grain.index()),
             grain_reading: readings[Generator::Grain.index()],
             mods,
+            globals,
             max_seconds: PREVIEW_MAX_S,
         });
         fold_preview(&preview.samples, sr, preview.capped)
@@ -641,7 +650,7 @@ fn modulation(state: tauri::State<'_, Audio>) -> ModulationView {
 
 fn modulation_view(state: &Audio) -> ModulationView {
     let (doc, refused) = state.session.modulation();
-    ModulationView::of(&doc, refused)
+    ModulationView::of(&doc, state.session.globals(), refused)
 }
 
 /// Add an LFO. It is last in the answer's `lfos`.
@@ -651,7 +660,15 @@ fn add_lfo(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
     Ok(modulation_view(&state))
 }
 
-/// Remove an LFO, and the links that followed it.
+/// Add a global LFO, beside the patches. It is last in the answer's
+/// `globals`.
+#[tauri::command]
+fn add_global_lfo(state: tauri::State<'_, Audio>) -> Result<ModulationView, String> {
+    state.session.add_global_lfo()?;
+    Ok(modulation_view(&state))
+}
+
+/// Remove an LFO, a patch's or a global one, and the links that followed it.
 #[tauri::command]
 fn remove_lfo(state: tauri::State<'_, Audio>, id: u64) -> Result<ModulationView, String> {
     state.session.remove_lfo(id)?;
@@ -739,7 +756,8 @@ fn link_param(
 }
 
 /// Make a parameter follow a new LFO or envelope (`kind` "lfo" or
-/// "envelope"), added to the current patch for it, in one undo step.
+/// "envelope"), added to the current patch for it, or a new global LFO
+/// ("global-lfo"), in one undo step.
 #[tauri::command]
 fn link_new(
     state: tauri::State<'_, Audio>,
@@ -1601,6 +1619,8 @@ impl Audio {
 pub(crate) struct Held {
     retiring: [SourceSlots; VOICES],
     mods: [Option<ModSet>; VOICES],
+    /// The global LFOs the engine gave back.
+    globals: Option<Globals>,
     /// Each voice's `VoiceFeed::placed` as last seen, and each kit's.
     placed: [u32; VOICES],
     kit_placed: [u32; KITS],
@@ -1611,6 +1631,7 @@ impl Held {
         Self {
             retiring: std::array::from_fn(|_| [None, None]),
             mods: std::array::from_fn(|_| None),
+            globals: None,
             placed: [0; VOICES],
             kit_placed: [0; KITS],
         }
@@ -1628,6 +1649,22 @@ pub(crate) fn hand_over(
     arrangement: &ParamBank,
     held: &mut Held,
 ) {
+    // The global LFOs first, so a voice's new link to a new global finds it
+    // in the same block. One set for the engine, handed across as a voice's
+    // modulation is.
+    if let Some(old) = held.globals.take() {
+        match voices.globals_retired.try_lock() {
+            Ok(mut slot) if slot.is_none() => *slot = Some(old),
+            _ => held.globals = Some(old),
+        }
+    }
+    if held.globals.is_none() {
+        if let Ok(mut pending) = voices.globals_swap.try_lock() {
+            if let Some(set) = pending.take() {
+                held.globals = Some(engine.set_globals(set));
+            }
+        }
+    }
     for (i, feed) in voices.voice.iter().enumerate() {
         // A retired source waits here until `meters` collects it, and no new
         // swap is taken while one is waiting, so a buffer is never freed on
@@ -2125,6 +2162,7 @@ pub fn run() {
             apply_preset,
             modulation,
             add_lfo,
+            add_global_lfo,
             remove_lfo,
             set_lfo,
             add_envelope,
@@ -2333,9 +2371,9 @@ mod tests {
             )]
             .into(),
         };
-        let view = serde_json::to_value(ModulationView::of(&doc, Vec::new()))
+        let view = serde_json::to_value(ModulationView::of(&doc, Vec::new(), Vec::new()))
             .expect("ModulationView is serialisable");
-        for key in ["lfos", "envelopes", "links", "refused"] {
+        for key in ["lfos", "envelopes", "globals", "links", "refused"] {
             assert!(view.get(key).is_some(), "ModulationView lost `{key}`");
         }
 

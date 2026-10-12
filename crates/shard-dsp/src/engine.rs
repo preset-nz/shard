@@ -62,7 +62,7 @@ use crate::inspect::{GrainLog, GrainSpawn};
 use crate::kit::{Kit, KitClock, KitParams, KitPattern, KICK, VOICES as KIT_VOICES};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::mix::{gate_frames, Gate, Mix};
-use crate::modulation::ModSet;
+use crate::modulation::{Globals, ModSet};
 use crate::params::ParamBank;
 use crate::rng::salt;
 use crate::smooth::OnePole;
@@ -294,6 +294,9 @@ pub struct Engine {
     duckers: [Ducker; CHANNELS],
     key_only: [bool; CHANNELS],
     key_gates: [Gate; CHANNELS],
+    /// The global LFOs (roadmap row 43): one set, advanced once a block, which
+    /// every voice's modulation reads.
+    globals: Globals,
     /// After everything, the arrangement included.
     limiter: Limiter,
     sample_rate: f32,
@@ -342,6 +345,7 @@ impl Engine {
             duckers: [Ducker::new(sample_rate); CHANNELS],
             key_only: [false; CHANNELS],
             key_gates: [Gate::new(sample_rate); CHANNELS],
+            globals: Globals::empty(),
             limiter: Limiter::new(sample_rate),
             sample_rate,
             peak: 0.0,
@@ -648,6 +652,20 @@ impl Engine {
         self.set_voice_modulation(0, next)
     }
 
+    /// Swap in a new set of global LFOs and hand back the old one, as
+    /// `set_voice_modulation` does: globals in both keep running, matched by
+    /// id, so a rate change never restarts one. Every voice reads the new
+    /// set from the next block.
+    pub fn set_globals(&mut self, mut next: Globals) -> Globals {
+        next.inherit(&self.globals);
+        std::mem::replace(&mut self.globals, next)
+    }
+
+    /// The current output of the global LFO with `id`, -1 to 1. For tests.
+    pub fn global_value(&self, id: u64) -> Option<f32> {
+        self.globals.value(id)
+    }
+
     /// The tracker as one track: the transport from `p`, and `p` as voice
     /// 0's steps.
     pub fn set_steps(&mut self, p: StepParams) {
@@ -860,13 +878,15 @@ impl Engine {
             }
         }
         let frames = out.len() / 2;
+        // The global LFOs move once, before any voice reads them.
+        self.globals.advance(frames, self.sample_rate);
         // The voices that play this block. One that goes idle does so at
         // the end of a block, so this holds for every frame of it.
         let mut live = [0usize; VOICES];
         let mut n = 0;
         for (i, v) in self.voices.iter_mut().enumerate() {
             if !v.idle() {
-                v.begin_block(banks[i], frames, &self.transport);
+                v.begin_block(banks[i], frames, &self.transport, &self.globals);
                 live[n] = i;
                 n += 1;
             }
@@ -2638,6 +2658,94 @@ mod tests {
             all
         };
         assert!(render(false) == render(true));
+    }
+
+    #[test]
+    fn unfollowed_globals_are_bit_exact_with_none() {
+        // Global LFOs that no link follows must not change a single sample,
+        // nor a patch set that links a global the engine does not have.
+        use crate::modulation::{Globals, Shape};
+        let render = |with_globals: bool| {
+            let mut e = Engine::new(48_000.0, 128);
+            e.set_source(tone(48_000));
+            e.set_playing(true);
+            let bank = ParamBank::new();
+            for (id, v) in [("grain.on", 1.0), ("grain.gain", 0.5), ("grain.size", 80.0)] {
+                set(&bank, id, v);
+            }
+            if with_globals {
+                drop(e.set_globals(Globals::new(&[
+                    lfo(50, 4.0, Shape::Sine),
+                    lfo(51, 0.5, Shape::SmoothRandom),
+                ])));
+                let mut mods = ModSet::empty();
+                mods.link_global("grain.size", 99, 0.0, 1.0).unwrap();
+                drop(e.set_modulation(mods));
+            }
+            let mut out = vec![0.0; 512];
+            let mut all = Vec::new();
+            for _ in 0..200 {
+                e.process_block(&mut out, &bank);
+                all.extend_from_slice(&out);
+            }
+            all
+        };
+        assert!(render(false) == render(true));
+    }
+
+    #[test]
+    fn two_patches_on_one_global_lfo_move_together() {
+        // Two voices, each with its own patch and its own LFOs, both linking
+        // grain size to global LFO 70. What each voice reads is the same in
+        // every block, through voice 0's set being rebuilt mid-run and the
+        // global's rate being edited.
+        use crate::modulation::{Globals, Shape};
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_playing(true);
+        drop(e.set_globals(Globals::new(&[lfo(70, 1.7, Shape::SmoothRandom)])));
+        let patch = |own: u64, rate: f32| {
+            let mut set = ModSet::new(&[lfo(own, rate, Shape::Saw)]);
+            set.link("grain.density", own, 0.0, 1.0).unwrap();
+            set.link_global("grain.size", 70, 0.1, 0.9).unwrap();
+            set
+        };
+        drop(e.set_voice_modulation(0, patch(1, 3.0)));
+        drop(e.set_voice_modulation(1, patch(2, 0.4)));
+        e.set_voice_active(1, true);
+        let banks: Vec<ParamBank> = (0..VOICES).map(|_| ParamBank::new()).collect();
+        // Different hands' values, so only the link can make them agree.
+        set(&banks[0], "grain.size", 40.0);
+        set(&banks[1], "grain.size", 400.0);
+        let refs: [&ParamBank; VOICES] = std::array::from_fn(|i| &banks[i]);
+        let heard = [ParamBank::new(), ParamBank::new()];
+        let size = crate::params::index_of("grain.size").unwrap();
+        let mut out = vec![0.0; 512];
+        let mut seen = Vec::new();
+        let mut before = None;
+        for block in 0..600 {
+            if block == 200 {
+                // Voice 0's patch edited: a whole new set, swapped in.
+                drop(e.set_voice_modulation(0, patch(3, 7.0)));
+            }
+            if block == 400 {
+                // The global's rate edited: it carries on from where it was.
+                before = e.global_value(70);
+                drop(e.set_globals(Globals::new(&[lfo(70, 5.0, Shape::SmoothRandom)])));
+                assert_eq!(e.global_value(70), before, "the edit restarted it");
+            }
+            e.process_voices(&mut out, &refs);
+            for (i, h) in heard.iter().enumerate() {
+                e.publish_voice_heard(i, &banks[i], h);
+            }
+            let (a, b) = (heard[0].get(size), heard[1].get(size));
+            assert_eq!(a, b, "block {block}: the voices read {a} and {b}");
+            seen.push(a);
+        }
+        assert!(before.is_some());
+        let (lo, hi) = seen
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
+        assert!(hi > lo * 1.5, "the global barely moved: {lo}..{hi}");
     }
 
     /// A pluck: fast up, down to half by the middle of the pass, and away to

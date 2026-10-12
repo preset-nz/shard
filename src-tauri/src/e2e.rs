@@ -69,10 +69,13 @@ fn load() -> Loaded {
 
 /// Interleaved stereo, `bars` bars, as the audio callback renders it.
 fn render(l: &Loaded, steps: StepParams, drums: Drums, bars: usize) -> Vec<f32> {
-    let (set, refused) = l.rig.session.plan().mod_set();
+    let plan = l.rig.session.plan();
+    let (set, refused) = plan.mod_set();
     assert!(refused.is_empty(), "modulation refused: {refused:?}");
     let mut e = Engine::new(SR, 256);
     e.set_modulation(set);
+    // The global LFOs too, or a link to one would sit at the hand's value.
+    e.set_globals(plan.global_set().0);
     e.set_playing(true);
     let frames = (bars as f32 * step_len(&steps) * 16.0) as usize;
     let mut out = vec![0.0; BLOCK * 2];

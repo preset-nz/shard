@@ -36,10 +36,7 @@ impl Rig {
     pub(crate) fn block(&self, e: &mut Engine, out: &mut [f32], held: &mut crate::Held) {
         crate::hand_over(e, &self.voices, &self.arrangement, held);
         crate::render(e, &self.voices, &self.heard, out);
-        for v in &self.voices.voice {
-            drop(std::mem::take(&mut *v.retired.lock().unwrap()));
-            drop(v.mod_retired.lock().unwrap().take());
-        }
+        self.voices.collect_retired();
     }
 }
 

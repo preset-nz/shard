@@ -18,7 +18,8 @@
 //!   place in the chain: the k-th of a kind is copy k, so the same tree
 //!   always compiles to the same ids, which controller maps store;
 //! - the modulators and links as `Modulation` records, built into a `ModSet`
-//!   by the code that builds one today;
+//!   by the code that builds one today, and the global LFOs as `LfoRecord`s,
+//!   built into the engine's one `Globals` set;
 //! - the arrangement as a `Tracker`, and the materials as a `Pool`.
 //!
 //! Records carry runtime ids for modulators and materials, as the engine and
@@ -36,11 +37,13 @@ use shard_dsp::arrangement;
 use shard_dsp::fx::{self, Kind as Fx, Order, INSTANCES};
 use shard_dsp::params::{ParamDef, PARAMS};
 use shard_dsp::steps::STEPS;
-use shard_dsp::{ModSet, ParamBank};
+use shard_dsp::{Globals, ModSet, ParamBank};
 
 use super::*;
 use crate::materials::{MaterialRecord, Pool, Wires};
-use crate::modulation::{EnvelopeRecord, LfoRecord, LinkRecord, Modulation, Refused};
+use crate::modulation::{
+    build_globals, EnvelopeRecord, LfoRecord, LinkRecord, Modulation, Refused,
+};
 use crate::tracker::{Duck, Kit, Step, Track, Tracker};
 
 /// What the engine reads, compiled from a session.
@@ -57,6 +60,8 @@ pub struct Plan {
     pub arrangement: Vec<f32>,
     /// The current patch's LFOs, envelopes and links.
     pub modulation: Modulation,
+    /// The global LFOs, in their order.
+    pub globals: Vec<LfoRecord>,
     pub tracker: Tracker,
     /// Every material, wired as the current patch wires them.
     pub pool: Pool,
@@ -83,6 +88,7 @@ impl Default for Plan {
             patch: PARAMS.iter().map(|p| p.default).collect(),
             arrangement: arrangement::params().iter().map(|p| p.default).collect(),
             modulation: Modulation::default(),
+            globals: Vec::new(),
             tracker: Tracker::default(),
             pool: Pool::default(),
             patches: Vec::new(),
@@ -125,7 +131,20 @@ impl Plan {
 
     /// The `ModSet` for `Engine::set_modulation`, and what it refused.
     pub fn mod_set(&self) -> (ModSet, Vec<Refused>) {
-        self.modulation.build()
+        self.modulation.build(&self.globals)
+    }
+
+    /// The global LFOs for `Engine::set_globals`, and what they refused.
+    pub fn global_set(&self) -> (Globals, Vec<Refused>) {
+        build_globals(&self.globals)
+    }
+
+    /// Everything in the current patch's modulation and the globals that the
+    /// engine refuses, as a load or the UI reports it.
+    pub fn refused(&self) -> Vec<Refused> {
+        let mut refused = self.mod_set().1;
+        refused.extend(self.global_set().1);
+        refused
     }
 
     /// The runtime id of a modulator or material node.
@@ -301,6 +320,13 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
         }
     }
 
+    // The global LFOs before the patches, so their ids are the same ones a
+    // patch's links name.
+    plan.globals = global_lfos(tree)
+        .into_iter()
+        .map(|n| lfo_record(n, &mut ids))
+        .collect();
+
     plan.patches = patches(tree)
         .into_iter()
         .map(|p| {
@@ -374,17 +400,10 @@ fn compile_patch(p: Node<'_>, ids: &mut Ids<'_>) -> PatchPlan {
 fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulation {
     let mut m = Modulation::default();
     for node in patch.order(MODULATORS) {
-        let id = ids.of(node.id());
         match node.type_name() {
-            LFO => m.lfos.push(LfoRecord {
-                id,
-                name: text(&node, "lfo.label"),
-                rate: float(&node, "lfo.rate"),
-                shape: text(&node, "lfo.shape"),
-                phase: float(&node, "lfo.phase"),
-            }),
+            LFO => m.lfos.push(lfo_record(node, ids)),
             MOD_ENV => m.envelopes.push(EnvelopeRecord {
-                id,
+                id: ids.of(node.id()),
                 name: text(&node, "mod-env.label"),
                 mode: text(&node, "mod-env.mode"),
                 curve: match node.value("mod-env.curve") {
@@ -416,6 +435,29 @@ fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulati
         }
     }
     m
+}
+
+fn lfo_record(node: Node<'_>, ids: &mut Ids<'_>) -> LfoRecord {
+    LfoRecord {
+        id: ids.of(node.id()),
+        name: text(&node, "lfo.label"),
+        rate: float(&node, "lfo.rate"),
+        shape: text(&node, "lfo.shape"),
+        phase: float(&node, "lfo.phase"),
+    }
+}
+
+/// The global LFOs, in their order (roadmap row 43). None in a file saved
+/// before there were any: rhizome makes the category empty.
+pub fn global_lfos(tree: &Tree) -> Vec<Node<'_>> {
+    tree.at(format!("/{GLOBALS}").as_str())
+        .map(|c| {
+            c.order(MODULATORS)
+                .into_iter()
+                .filter(|n| n.type_name() == LFO)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// A track's sidechain, of either kind: its values, and its key resolved to

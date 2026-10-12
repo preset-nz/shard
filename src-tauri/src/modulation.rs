@@ -11,6 +11,12 @@
 //! value, and is reported every time the set is built, the way a patch load
 //! reports an unknown id.
 //!
+//! **Global LFOs** (roadmap row 43) are LFO records too, kept beside the
+//! patches rather than in one. They share the id space, so a link's `source`
+//! names a patch's own modulator or a global without saying which;
+//! `build` takes the globals to tell them apart, and `build_globals` makes
+//! the engine's one set of them.
+//!
 //! **Edits are checked before anything changes.** The commands that add,
 //! change and link LFOs refuse a bad edit with a reason and leave the document
 //! as it was, because the UI only ever offers valid choices and a bad one is a
@@ -19,7 +25,7 @@
 use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
-use shard_dsp::{adsr_curve, EnvSpec, LfoSpec, ModSet, Shape};
+use shard_dsp::{adsr_curve, EnvSpec, Globals, LfoSpec, LinkError, ModSet, Shape};
 
 /// Long enough for anything typed into the tree, short enough to stay a label.
 const MAX_NAME: usize = 60;
@@ -116,38 +122,54 @@ pub struct Refused {
     pub reason: String,
 }
 
-impl Modulation {
-    /// The engine's view of this document, and what it had to leave out.
-    /// Allocates, so it belongs on the command thread.
-    pub fn build(&self) -> (ModSet, Vec<Refused>) {
-        let mut refused = Vec::new();
-        let mut specs: Vec<LfoSpec> = Vec::with_capacity(self.lfos.len());
-        for lfo in &self.lfos {
-            let id = format!("lfo:{}", lfo.id);
-            if specs.iter().any(|s| s.id == lfo.id) {
-                refused.push(Refused {
-                    id,
-                    reason: format!("LFO {} appears twice, and only the first is used", lfo.id),
-                });
-                continue;
-            }
-            let Some(shape) = Shape::from_name(&lfo.shape) else {
-                refused.push(Refused {
-                    id,
-                    reason: format!(
-                        "LFO {} has a shape this build does not know, “{}”",
-                        lfo.id, lfo.shape
-                    ),
-                });
-                continue;
-            };
-            specs.push(LfoSpec {
-                id: lfo.id,
-                rate_hz: lfo.rate,
-                shape,
-                phase: lfo.phase,
+/// LFO records as the engine's specs, leaving out (and reporting) a repeated
+/// id and a shape this build does not know.
+fn lfo_specs(lfos: &[LfoRecord], refused: &mut Vec<Refused>) -> Vec<LfoSpec> {
+    let mut specs: Vec<LfoSpec> = Vec::with_capacity(lfos.len());
+    for lfo in lfos {
+        let id = format!("lfo:{}", lfo.id);
+        if specs.iter().any(|s| s.id == lfo.id) {
+            refused.push(Refused {
+                id,
+                reason: format!("LFO {} appears twice, and only the first is used", lfo.id),
             });
+            continue;
         }
+        let Some(shape) = Shape::from_name(&lfo.shape) else {
+            refused.push(Refused {
+                id,
+                reason: format!(
+                    "LFO {} has a shape this build does not know, “{}”",
+                    lfo.id, lfo.shape
+                ),
+            });
+            continue;
+        };
+        specs.push(LfoSpec {
+            id: lfo.id,
+            rate_hz: lfo.rate,
+            shape,
+            phase: lfo.phase,
+        });
+    }
+    specs
+}
+
+/// The engine's one set of global LFOs, and what it had to leave out. On the
+/// command thread, like `Modulation::build`.
+pub fn build_globals(globals: &[LfoRecord]) -> (Globals, Vec<Refused>) {
+    let mut refused = Vec::new();
+    let specs = lfo_specs(globals, &mut refused);
+    (Globals::new(&specs), refused)
+}
+
+impl Modulation {
+    /// The engine's view of this patch, and what it had to leave out. A link
+    /// may follow one of the patch's own modulators or one of `globals`, the
+    /// session's global LFOs. Allocates, so it belongs on the command thread.
+    pub fn build(&self, globals: &[LfoRecord]) -> (ModSet, Vec<Refused>) {
+        let mut refused = Vec::new();
+        let specs = lfo_specs(&self.lfos, &mut refused);
 
         // Envelopes after the LFOs, and refused if their id is taken by
         // either: a link could not tell which it meant.
@@ -171,7 +193,13 @@ impl Modulation {
 
         let mut set = ModSet::with_envelopes(&specs, &envs);
         for (param, link) in &self.links {
-            if let Err(e) = set.link(param, link.source, link.lo, link.hi) {
+            let linked = match set.link(param, link.source, link.lo, link.hi) {
+                Err(LinkError::UnknownSource(id)) if globals.iter().any(|g| g.id == id) => {
+                    set.link_global(param, id, link.lo, link.hi)
+                }
+                other => other,
+            };
+            if let Err(e) = linked {
                 refused.push(Refused {
                     id: param.clone(),
                     reason: e.to_string(),
@@ -228,7 +256,7 @@ mod tests {
             links: Links::from([("grain.size".into(), link(1, 0.5))]),
             ..Default::default()
         };
-        let (mut set, refused) = doc.build();
+        let (mut set, refused) = doc.build(&[]);
         assert!(refused.is_empty(), "{refused:?}");
 
         let slot = index_of("grain.size").unwrap();
@@ -253,7 +281,7 @@ mod tests {
             ]),
             ..Default::default()
         };
-        let (mut set, refused) = doc.build();
+        let (mut set, refused) = doc.build(&[]);
 
         let ids: Vec<&str> = refused.iter().map(|r| r.id.as_str()).collect();
         for expected in [
@@ -282,6 +310,35 @@ mod tests {
     }
 
     #[test]
+    fn a_link_to_a_global_lfo_builds_only_while_the_global_exists() {
+        let doc = Modulation {
+            links: Links::from([("grain.size".into(), link(30, 1.0))]),
+            ..Default::default()
+        };
+        let globals = vec![lfo(30, "square")];
+        let (mut set, refused) = doc.build(&globals);
+        assert!(refused.is_empty(), "{refused:?}");
+        let (mut engine, refused) = build_globals(&globals);
+        assert!(refused.is_empty(), "{refused:?}");
+        let slot = index_of("grain.size").unwrap();
+        let mut seen = Vec::new();
+        for _ in 0..200 {
+            engine.advance(BLOCK, SR);
+            set.advance(BLOCK, SR);
+            set.follow(&engine);
+            seen.push(set.apply(slot, 100.0));
+        }
+        assert!(seen.iter().any(|v| *v > 100.0), "never rose: {seen:?}");
+
+        // Without it, the link is reported and the row stays at the base.
+        let (mut set, refused) = doc.build(&[]);
+        let ids: Vec<_> = refused.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(ids, vec!["grain.size"]);
+        set.follow(&engine);
+        assert_eq!(set.apply(slot, 100.0), 100.0);
+    }
+
+    #[test]
     fn shapes_are_spelled_by_name_in_the_file() {
         let doc = Modulation {
             lfos: vec![lfo(3, "smooth-random"), lfo(4, "elastic-in-out")],
@@ -306,13 +363,13 @@ mod tests {
             envelopes: vec![new_envelope(1), new_envelope(2), new_envelope(2)],
             ..Default::default()
         };
-        let (_, refused) = doc.build();
+        let (_, refused) = doc.build(&[]);
         let ids: Vec<_> = refused.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(ids, vec!["envelope:1", "envelope:2"]);
         assert_eq!(doc.envelopes.len(), 3, "the document keeps them");
         // A link to the shared id follows the LFO, which is the one that built.
         doc.links.insert("grain.size".into(), link(1, 1.0));
-        assert!(doc.build().1.iter().all(|r| r.id != "grain.size"));
+        assert!(doc.build(&[]).1.iter().all(|r| r.id != "grain.size"));
     }
 
     #[test]
@@ -325,7 +382,7 @@ mod tests {
             }],
             ..Default::default()
         };
-        let (mut old, _) = doc.build();
+        let (mut old, _) = doc.build(&[]);
         for _ in 0..40 {
             old.advance(BLOCK, SR);
         }
@@ -333,9 +390,9 @@ mod tests {
         // A rate and a shape change both rebuild the set.
         doc.lfos[0].rate = 2.0;
         doc.lfos[0].shape = "triangle".into();
-        let (mut carried, _) = doc.build();
+        let (mut carried, _) = doc.build(&[]);
         carried.inherit(&old);
-        let (mut restarted, _) = doc.build();
+        let (mut restarted, _) = doc.build(&[]);
         carried.advance(BLOCK, SR);
         restarted.advance(BLOCK, SR);
 

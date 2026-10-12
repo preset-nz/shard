@@ -37,12 +37,16 @@ export function shapeLabel(name: string): string {
  *
  * `compact` folds it to its name, rate and shape, for the Linked block under a
  * node; the name opens the full editor.
+ *
+ * A global LFO (`global`) is edited the same way. Every patch that links it
+ * follows the edit; `linked` counts only the current patch's links.
  */
 export function LfoEditor({
   lfo,
   limits,
   linked = 0,
   compact = false,
+  global = false,
   onOpen,
   onChange,
 }: {
@@ -51,6 +55,8 @@ export function LfoEditor({
   /** How many parameters follow this LFO. */
   linked?: number;
   compact?: boolean;
+  /** One of the global LFOs, beside the patches. */
+  global?: boolean;
   /** Compact only: open this LFO in the inspector. */
   onOpen?: () => void;
   onChange: (next: LfoRecord) => void;
@@ -150,7 +156,7 @@ export function LfoEditor({
   return (
     <section className="space-y-3 px-3 pt-3 pb-3">
       <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-        LFO
+        {global ? 'Global LFO' : 'LFO'}
       </div>
       <Input
         aria-label="LFO name"
@@ -171,8 +177,9 @@ export function LfoEditor({
       {row(phase, lfo.phase, (v) => onChange({ ...lfo, phase: v }))}
       <p className="text-[11px] text-muted-foreground">
         {linked === 0
-          ? 'Nothing follows it yet. Right-click a parameter to link it.'
-          : `${linked} parameter${linked === 1 ? '' : 's'} follow${linked === 1 ? 's' : ''} it.`}
+          ? `Nothing ${global ? 'in this patch ' : ''}follows it yet. Right-click a parameter to link it.`
+          : `${linked} parameter${linked === 1 ? '' : 's'} ${global ? 'in this patch ' : ''}follow${linked === 1 ? 's' : ''} it.`}
+        {global && ' Every patch that links it moves with it.'}
       </p>
     </section>
   );

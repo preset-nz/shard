@@ -17,7 +17,7 @@
 //! Allocates freely. It is never called on the audio thread.
 
 use crate::chain::BYPASS_MS;
-use crate::modulation::ModSet;
+use crate::modulation::{Globals, ModSet};
 use crate::note::Length;
 use crate::params::{index_of, ParamBank};
 use crate::sources::{Generator, Reading};
@@ -55,6 +55,9 @@ pub struct PreviewInput<'a> {
     pub grain: &'a [f32],
     pub grain_reading: Reading,
     pub mods: ModSet,
+    /// The global LFOs the patch's links may follow. They start from their
+    /// own phase here, as the patch's LFOs do.
+    pub globals: Globals,
     /// The longest capture. A pass past it is cut, and says so.
     pub max_seconds: f32,
 }
@@ -123,6 +126,7 @@ pub fn render_pass(input: PreviewInput) -> Preview {
     drop(e.swap_source(Generator::Grain, grain));
     e.set_readings(player_reading, grain_reading);
     drop(e.set_modulation(input.mods));
+    drop(e.set_globals(input.globals));
     e.set_steps(StepParams::default());
     let arrangement = ParamBank::for_table(crate::arrangement::params());
     for i in 0..arrangement.defs().len() {
@@ -205,6 +209,7 @@ mod tests {
             grain: material,
             grain_reading: reading,
             mods: ModSet::empty(),
+            globals: Globals::empty(),
             max_seconds: 8.0,
         })
     }

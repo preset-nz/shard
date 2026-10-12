@@ -19,6 +19,16 @@
 //! there is no ceiling on how many LFOs a patch has. Adding one builds a new
 //! set, and `inherit` keeps the ones already running where they were.
 //!
+//! **Global LFOs** (roadmap row 43) live beside the patches, not in one, and
+//! every patch that links one follows the same LFO. They are a `Globals` set
+//! the engine owns and advances once a block, never a copy per voice: each
+//! voice's set is swapped in when its own patch changes, so copies would
+//! drift apart. A voice's set names a global by id (`link_global`) and reads
+//! its value through `follow`, once a block, before anything reads a
+//! parameter. A global is not salted, so a smooth random one wanders the same
+//! way for every patch. Envelopes are never global: one fires on its patch's
+//! notes, and a global one would have none.
+//!
 //! Two rules from `guidance/projects/shard/design/modulation.md`:
 //!
 //! - **Modulation never writes a stored value.** The bank holds the hand's
@@ -415,6 +425,17 @@ enum Source {
     Lfo(usize),
     /// Index into this set's envelopes.
     Env(usize),
+    /// Index into this set's `followed`: a global LFO, read through `follow`.
+    Global(usize),
+}
+
+/// A global LFO a set's links follow: its id, and its value as the engine's
+/// `Globals` last had it. None while the engine has no global with that id,
+/// which leaves the parameter at the hand's value.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Followed {
+    id: u64,
+    value: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -455,6 +476,9 @@ impl std::fmt::Display for LinkError {
 pub struct ModSet {
     lfos: Vec<Lfo>,
     envs: Vec<Env>,
+    /// The global LFOs the links follow, each once. Sized when linking, on
+    /// the command thread.
+    followed: Vec<Followed>,
     /// Indexed as `PARAMS`. Empty when nothing has been linked.
     links: Vec<Option<Link>>,
 }
@@ -466,6 +490,7 @@ impl ModSet {
         Self {
             lfos: Vec::new(),
             envs: Vec::new(),
+            followed: Vec::new(),
             links: Vec::new(),
         }
     }
@@ -489,17 +514,35 @@ impl ModSet {
                     note: 0,
                 })
                 .collect(),
+            followed: Vec::new(),
             links: Vec::new(),
         }
+    }
+
+    /// The slot a link on `param` goes in, or why it can't have one.
+    fn linkable(param: &str) -> Result<usize, LinkError> {
+        let slot = index_of(param).ok_or_else(|| LinkError::UnknownParameter(param.to_string()))?;
+        if matches!(PARAMS[slot].taper, Taper::Stepped(_)) {
+            return Err(LinkError::Stepped(PARAMS[slot].id));
+        }
+        Ok(slot)
+    }
+
+    fn put_link(&mut self, slot: usize, source: Source, lo: f32, hi: f32) {
+        if self.links.len() < PARAMS.len() {
+            self.links.resize(PARAMS.len(), None);
+        }
+        self.links[slot] = Some(Link {
+            source,
+            lo: lo.clamp(0.0, 1.0),
+            hi: hi.clamp(0.0, 1.0),
+        });
     }
 
     /// Link `param` to the LFO or envelope with `source_id`, replacing any
     /// link it had. The ends are clamped to 0 to 1, the parameter's own range.
     pub fn link(&mut self, param: &str, source_id: u64, lo: f32, hi: f32) -> Result<(), LinkError> {
-        let slot = index_of(param).ok_or_else(|| LinkError::UnknownParameter(param.to_string()))?;
-        if matches!(PARAMS[slot].taper, Taper::Stepped(_)) {
-            return Err(LinkError::Stepped(PARAMS[slot].id));
-        }
+        let slot = Self::linkable(param)?;
         let source = self
             .lfos
             .iter()
@@ -512,15 +555,44 @@ impl ModSet {
                     .map(Source::Env)
             })
             .ok_or(LinkError::UnknownSource(source_id))?;
-        if self.links.len() < PARAMS.len() {
-            self.links.resize(PARAMS.len(), None);
-        }
-        self.links[slot] = Some(Link {
-            source,
-            lo: lo.clamp(0.0, 1.0),
-            hi: hi.clamp(0.0, 1.0),
-        });
+        self.put_link(slot, source, lo, hi);
         Ok(())
+    }
+
+    /// Link `param` to the global LFO with `global_id`, replacing any link it
+    /// had. The set does not know which globals exist: the caller checks, and
+    /// until `follow` finds the id the parameter stays at the hand's value.
+    /// The id must not be one of this set's own modulators'.
+    pub fn link_global(
+        &mut self,
+        param: &str,
+        global_id: u64,
+        lo: f32,
+        hi: f32,
+    ) -> Result<(), LinkError> {
+        let slot = Self::linkable(param)?;
+        let i = match self.followed.iter().position(|f| f.id == global_id) {
+            Some(i) => i,
+            None => {
+                self.followed.push(Followed {
+                    id: global_id,
+                    value: None,
+                });
+                self.followed.len() - 1
+            }
+        };
+        self.put_link(slot, Source::Global(i), lo, hi);
+        Ok(())
+    }
+
+    /// Once per block, after the engine has advanced its globals and before
+    /// anything reads a parameter: each followed global's value, by id.
+    /// Copies only; allocates nothing.
+    #[inline]
+    pub fn follow(&mut self, globals: &Globals) {
+        for f in &mut self.followed {
+            f.value = globals.value(f.id);
+        }
     }
 
     /// Carry running state across from the set this one replaces, matched by
@@ -554,6 +626,11 @@ impl ModSet {
                 env.value = prev.value;
                 env.from = prev.from;
                 env.note = prev.note;
+            }
+        }
+        for f in &mut self.followed {
+            if let Some(prev) = old.followed.iter().find(|p| p.id == f.id) {
+                f.value = prev.value;
             }
         }
     }
@@ -605,6 +682,7 @@ impl ModSet {
         let value = match link.source {
             Source::Lfo(i) => self.lfos.get(i).map(|l| l.value),
             Source::Env(i) => self.envs.get(i).map(|e| e.value),
+            Source::Global(i) => self.followed.get(i).and_then(|f| f.value),
         };
         let Some(value) = value else {
             return base;
@@ -623,6 +701,61 @@ impl ModSet {
     /// peak. For drawing and tests.
     pub fn env_value(&self, id: u64) -> Option<f32> {
         self.envs.iter().find(|e| e.spec.id == id).map(|e| e.value)
+    }
+}
+
+/// The global LFOs: one set for the whole engine, advanced once a block, which
+/// every voice's `ModSet` reads through `follow`. Built on the command thread
+/// and swapped in whole (`Engine::set_globals`), as a voice's set is.
+#[derive(Debug, Clone, Default)]
+pub struct Globals {
+    lfos: Vec<Lfo>,
+}
+
+impl Globals {
+    /// No global LFOs. Allocates nothing.
+    pub const fn empty() -> Self {
+        Self { lfos: Vec::new() }
+    }
+
+    /// These LFOs, unsalted: a smooth random global wanders the same way
+    /// whichever patch follows it.
+    pub fn new(lfos: &[LfoSpec]) -> Self {
+        Self {
+            lfos: lfos.iter().map(|s| Lfo::new(*s)).collect(),
+        }
+    }
+
+    /// Carry running LFOs across from the set this one replaces, matched by
+    /// id, so changing a rate never restarts one. Copies only.
+    pub fn inherit(&mut self, old: &Globals) {
+        for lfo in &mut self.lfos {
+            if let Some(prev) = old.lfos.iter().find(|p| p.spec.id == lfo.spec.id) {
+                lfo.cycle = prev.cycle;
+                lfo.value = prev.value;
+                lfo.rng = prev.rng;
+                lfo.from = prev.from;
+                lfo.to = prev.to;
+            }
+        }
+    }
+
+    /// Once per block, before any voice follows them.
+    #[inline]
+    pub fn advance(&mut self, frames: usize, sample_rate: f32) {
+        for lfo in &mut self.lfos {
+            lfo.advance(frames as f32, sample_rate);
+        }
+    }
+
+    /// The current output of the global LFO with `id`, -1 to 1.
+    #[inline]
+    pub fn value(&self, id: u64) -> Option<f32> {
+        self.lfos.iter().find(|l| l.spec.id == id).map(|l| l.value)
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.lfos.is_empty()
     }
 }
 
@@ -901,6 +1034,59 @@ mod tests {
                     prev = Some(v);
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_global_link_reads_what_the_engines_globals_hold() {
+        let mut globals = Globals::new(&[spec(40, 2.0, Shape::Triangle)]);
+        let mut set = ModSet::new(&[spec(1, 5.0, Shape::Square)]);
+        set.link_global("grain.size", 40, 0.2, 0.8).unwrap();
+        set.link("grain.density", 1, 0.0, 1.0).unwrap();
+        let slot = index_of("grain.size").unwrap();
+        let d = &PARAMS[slot];
+        // Not followed yet: the hand's value, exactly.
+        assert_eq!(set.apply(slot, 123.4), 123.4);
+        for _ in 0..200 {
+            globals.advance(BLOCK, SR);
+            set.advance(BLOCK, SR);
+            set.follow(&globals);
+            let g = globals.value(40).unwrap();
+            let want = d.denormalise(0.2 + 0.6 * (0.5 + 0.5 * g));
+            assert_eq!(set.apply(slot, 123.4), want);
+        }
+        // A global the engine no longer has leaves the parameter at the base.
+        set.follow(&Globals::empty());
+        assert_eq!(set.apply(slot, 123.4), 123.4);
+        assert_eq!(
+            set.link_global("grain.window", 40, 0.0, 1.0),
+            Err(LinkError::Stepped("grain.window"))
+        );
+    }
+
+    #[test]
+    fn rebuilding_the_globals_keeps_them_running() {
+        let mut old = Globals::new(&[spec(9, 1.3, Shape::SmoothRandom)]);
+        for _ in 0..77 {
+            old.advance(BLOCK, SR);
+        }
+        // A rate edit rebuilds the set; the LFO carries on from where it was.
+        let mut next = Globals::new(&[spec(9, 2.6, Shape::SmoothRandom)]);
+        next.inherit(&old);
+        let mut restarted = Globals::new(&[spec(9, 2.6, Shape::SmoothRandom)]);
+        assert_eq!(next.value(9), old.value(9), "it carries on");
+        next.advance(BLOCK, SR);
+        restarted.advance(BLOCK, SR);
+        assert_ne!(next.value(9), restarted.value(9), "not restarted");
+        // Unsalted: two copies built alike wander alike.
+        let (mut a, mut b) = (
+            Globals::new(&[spec(9, 3.0, Shape::SmoothRandom)]),
+            Globals::new(&[spec(9, 3.0, Shape::SmoothRandom)]),
+        );
+        for _ in 0..500 {
+            a.advance(BLOCK, SR);
+            b.advance(BLOCK, SR);
+            assert_eq!(a.value(9), b.value(9));
         }
     }
 

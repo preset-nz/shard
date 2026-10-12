@@ -25,7 +25,7 @@ use crate::fm::{Fm, FmParams, FmType};
 use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::ladder::{self, Ladder, LadderParams, LadderSlots};
-use crate::modulation::ModSet;
+use crate::modulation::{Globals, ModSet};
 use crate::note::Length;
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
@@ -681,12 +681,21 @@ impl Voice {
     /// Everything a block works out once, before its frames. Only while the
     /// transport runs; a stopped engine renders silence or an audition.
     /// `transport` has begun this block. The voice follows its steps when
-    /// its own steps are on and the transport's are running.
-    pub(crate) fn begin_block(&mut self, bank: &ParamBank, frames: usize, transport: &Transport) {
+    /// its own steps are on and the transport's are running. `globals` have
+    /// been advanced this block, once for every voice.
+    pub(crate) fn begin_block(
+        &mut self,
+        bank: &ParamBank,
+        frames: usize,
+        transport: &Transport,
+        globals: &Globals,
+    ) {
         let length = Length::from_value(bank.get(self.slots.patch_length));
         // LFOs move with the transport, and once per block, before anything
-        // below reads a parameter through them.
+        // below reads a parameter through them. A global LFO is the engine's,
+        // so every voice following it reads the same value.
         self.mods.advance(frames, self.sample_rate);
+        self.mods.follow(globals);
         // Envelopes on the pass's clock, or the note's, before any row
         // reads through them. The window's length is last block's, since
         // this block's is worked out below; it changes only when the trim
