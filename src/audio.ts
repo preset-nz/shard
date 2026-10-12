@@ -220,6 +220,13 @@ export const toggleTrackSolo = (track: number) =>
  */
 export const setTrackPatch = (track: number, id: number) =>
   invoke<void>('set_track_patch', { track, id });
+/**
+ * Which track ducks track `track`, by its place, or none (roadmap row 41):
+ * one step of Undo, "Set Ducked by". A track can't be ducked by itself.
+ * Answers with the tracker as it now is.
+ */
+export const setTrackDuck = (track: number, key: number | null) =>
+  invoke<Tracker>('set_track_duck', { track, key });
 
 /**
  * Rename a patch. One step of Undo, "Rename Patch 2"; an empty or unchanged
@@ -561,6 +568,29 @@ export interface Track {
   steps: Step[];
   /** A drums track's kit; null on a melody track. */
   drums: Kit | null;
+  /** Its sidechain: which track ducks it, and Key only. */
+  duck: Duck;
+}
+
+/** Release's range in ms. `shard_dsp::duck` in Rust. */
+export const DUCK_RELEASE_MIN = 10;
+export const DUCK_RELEASE_MAX = 1000;
+
+/**
+ * A track's sidechain (roadmap row 41). Each step of the key track dips this
+ * track's volume, the step's velocity scaling the depth; a drums track keys
+ * by its kick. A muted key does not pump, nor one silenced by a solo, unless
+ * it is Key only.
+ */
+export interface Duck {
+  /** The place of the track that ducks it. Read only: a pick goes through `setTrackDuck`. */
+  by: number | null;
+  /** How far a full-velocity step dips the volume, 0 to 1 (silence). */
+  depth: number;
+  /** How long the dip takes to come back, in ms. */
+  release: number;
+  /** Silent, its steps still keying whatever it ducks. */
+  key_only: boolean;
 }
 
 /**

@@ -487,6 +487,18 @@ fn the_callbacks_hand_offs_stay_off_the_allocator_with_every_track() {
         // patches switched, a material unwired under a sounding voice (whose
         // swap waits for it to fade), edits and fader drags.
         match block % 50 {
+            // The sidechain (roadmap row 41): a melody track ducked by the
+            // first drums track, that one Key only by turns, and track 1
+            // keying track 0.
+            3 => {
+                r.session.set_track_duck(1, Some(VOICES)).unwrap();
+                r.session.set_track_duck(0, Some(1)).unwrap();
+                let mut t = r.session.tracker();
+                let d = &mut t.tracks[VOICES].duck;
+                d.key_only = !d.key_only;
+                t.tracks[1].duck.depth = (block % 10) as f32 * 0.1;
+                r.session.set_tracker(t).unwrap();
+            }
             5 => r.session.wire_material("material", None).unwrap(),
             7 => r.session.wire_material("material", Some(drone)).unwrap(),
             10 => r.session.remove_track(2).unwrap(),

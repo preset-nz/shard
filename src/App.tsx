@@ -84,6 +84,7 @@ import {
   setEnvelope as setModEnvelope,
   setParam,
   setPlaying,
+  setTrackDuck,
   setTracker,
   setTrackPatch,
   type Tracker,
@@ -835,6 +836,14 @@ export default function App() {
       setError(String(e));
     }
   };
+  // A track's *Ducked by* picker: one undo step, "Set Ducked by".
+  const pickDuckedBy = async (track: number, key: number | null) => {
+    try {
+      showTracker(await setTrackDuck(track, key));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   const selectPatchRow = async (id: number) => {
     try {
       await selectPatch(id);
@@ -1451,6 +1460,17 @@ export default function App() {
                             })
                           }
                           gain={t.gain}
+                          duck={t.duck}
+                          keys={tracker.tracks
+                            .map((_, j) => ({ place: j, name: trackName(tracker.tracks, j) }))
+                            .filter((k) => k.place !== i)}
+                          onDuckedBy={(key) => void pickDuckedBy(i, key)}
+                          onDuck={(duck) =>
+                            void changeTracker({
+                              ...tracker,
+                              tracks: tracker.tracks.map((x, j) => (j === i ? { ...x, duck } : x)),
+                            })
+                          }
                           selected={selectedTrack === i && selection === null}
                           mix={meter.mix[i]}
                           onMute={() => void toggleMute(i)}

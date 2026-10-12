@@ -43,6 +43,13 @@
 //! Each voice is handed its track's switches (`VoiceFeed::mix`), and the
 //! engine lands a change on the next bar.
 //!
+//! **Sidechain** (roadmap row 41): who ducks a track is a reference on its
+//! node to the key track's node (`set_track_duck`), resolved on every
+//! compile to a place and handed to each voice and kit through its slot
+//! (`hand_ducks`), so it follows the key through a reorder. Removing the key
+//! clears the references to it in the same step, so undo brings both back.
+//! Depth, Release and Key only are edits through `set_tracker`.
+//!
 //! **Lock order:** `doc`, then `gesture`, then `sent`, then `decoded`, then `feeding`, then the
 //! engine's hand-off slots. `pending` is a leaf, taken only under `doc`. Nothing here takes a controller lock; MIDI calls
 //! in with its own locks already released. Decoding a WAV never happens under
@@ -63,7 +70,8 @@ use shard_dsp::kit::{KitParams, KitPattern};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::StepBank;
 use shard_dsp::{
-    Generator, KitBank, Mix, ModSet, ParamBank, ReadingBank, StepParams, KITS, VOICES,
+    Duck, DuckBank, Generator, KitBank, Mix, ModSet, ParamBank, ReadingBank, StepParams, KITS,
+    VOICES,
 };
 
 use crate::mapping::MapRef;
@@ -115,6 +123,8 @@ pub struct VoiceFeed {
     /// thread: what is heard, so the scene view can show a press still
     /// waiting for its bar.
     pub heard_mix: AtomicU8,
+    /// Its track's sidechain: the voice or kit that ducks it, and Key only.
+    pub duck: DuckBank,
     /// A modulation set waiting for the audio thread, and one it gave back.
     pub mod_swap: Mutex<Option<ModSet>>,
     pub mod_retired: Mutex<Option<ModSet>>,
@@ -134,6 +144,7 @@ impl VoiceFeed {
             mix: AtomicU8::new(0),
             placed: AtomicU32::new(0),
             heard_mix: AtomicU8::new(0),
+            duck: DuckBank::default(),
             mod_swap: Mutex::new(None),
             mod_retired: Mutex::new(None),
             swap: Mutex::new([None, None]),
@@ -161,6 +172,8 @@ pub struct KitFeed {
     pub placed: AtomicU32,
     /// The mix the engine has applied, as `VoiceFeed::heard_mix`.
     pub heard_mix: AtomicU8,
+    /// Its track's sidechain, as `VoiceFeed::duck`.
+    pub duck: DuckBank,
 }
 
 impl KitFeed {
@@ -172,6 +185,7 @@ impl KitFeed {
             mix: AtomicU8::new(0),
             placed: AtomicU32::new(0),
             heard_mix: AtomicU8::new(0),
+            duck: DuckBank::default(),
         }
     }
 
@@ -493,6 +507,7 @@ impl Session {
         sent.tracks = om::tracks(doc.tree()).iter().map(|t| t.id()).collect();
         sent.slots = plan.tracker.slots();
         self.hand_mix(&mut sent, all);
+        self.hand_ducks(&plan.tracker);
         let shown = sent
             .voices
             .iter()
@@ -599,6 +614,29 @@ impl Session {
                 feed.placed.fetch_add(1, Ordering::Release);
                 sent.kit_tracks[k] = track;
             }
+        }
+    }
+
+    /// Every voice's and kit's sidechain: each track's on the voice or kit
+    /// its slot names, its key mapped the same way; none on the ones no
+    /// track plays (the audition among them). Atomics only, so all of it
+    /// every time.
+    fn hand_ducks(&self, tracker: &Tracker) {
+        let mut voice = [Duck::default(); VOICES];
+        let mut kit = [Duck::default(); KITS];
+        for (slot, duck) in tracker.ducks() {
+            match slot {
+                Slot::Melody(k) if k < VOICES => voice[k] = duck,
+                Slot::Drums(k) if k < KITS => kit[k] = duck,
+                _ => {}
+            }
+        }
+        let voices = &self.feeds.voices;
+        for (feed, d) in voices.voice.iter().zip(&voice) {
+            feed.duck.store(d);
+        }
+        for (feed, d) in voices.kits.iter().zip(&kit) {
+            feed.duck.store(d);
         }
     }
 
@@ -876,19 +914,23 @@ impl Session {
         lock(&self.sent).plan.tracker.slots()
     }
 
-    /// Takes the tempo, swing and each track's steps or grid, length, fader
-    /// and kit from `next`, matching tracks by place, as one step. Never adds
-    /// or removes a track, and never changes what one plays. A drag on one
-    /// track's fader is "Set Gain", and on a drums track's Tune or Decay
-    /// "Set Tune" or "Set Decay", its switch "Set Drums"; anything else "Edit
-    /// the steps", coalesced per track, so edits to two tracks are two steps.
+    /// Takes the tempo, swing and each track's steps or grid, length, fader,
+    /// kit and sidechain settings from `next`, matching tracks by place, as
+    /// one step. Never adds or removes a track, and never changes what one
+    /// plays or who ducks it. A drag on one track's fader is "Set Gain", on
+    /// its Depth or Release "Set Depth" or "Set Release", its Key only
+    /// switch "Set Key only", and on a drums track's Tune or Decay "Set
+    /// Tune" or "Set Decay", its switch "Set Drums"; anything else "Edit the
+    /// steps", coalesced per track, so edits to two tracks are two steps.
     pub fn set_tracker(&self, next: Tracker) -> Result<Tracker, String> {
         let next = next.sanitised();
         let now = self.tracker();
         // What a track plays is never this call's: a stale `patch` sent back
         // counts for nothing.
+        // Nor who ducks it, which is `set_track_duck`'s.
         let differs = |a: &Track, b: &Track| {
-            (a.length, &a.steps, a.gain, &a.drums) != (b.length, &b.steps, b.gain, &b.drums)
+            (a.length, &a.steps, a.gain, &a.drums, a.duck.settings())
+                != (b.length, &b.steps, b.gain, &b.drums, b.duck.settings())
         };
         let changed: Vec<usize> = now
             .tracks
@@ -907,7 +949,9 @@ impl Session {
             }
             _ => ("Edit the steps", "tracker".to_string()),
         };
-        self.write_tracker(label, Some(&key), next)
+        // A switch is a click, not a drag: each one its own step.
+        let coalesce = (label != "Set Key only").then_some(key.as_str());
+        self.write_tracker(label, coalesce, next)
     }
 
     /// A whole-pattern edit on track `track`, one step; none when it changes
@@ -983,9 +1027,63 @@ impl Session {
                 .map(|s| if s > track { s - 1 } else { s });
         }
         self.edit(&format!("Remove {}", track_name(slot)), None, |tx| {
+            // The tracks it ducked are ducked no more, in the same step, so
+            // a saved file never names a track that has gone and undo
+            // brings the links back with it.
+            let ducked: Vec<(NodeId, &'static str)> = tx
+                .at(node)
+                .map(|n| {
+                    n.referrers()
+                        .into_iter()
+                        .filter(|(r, key)| om::is_track(r) && *key == om::duck_keys(r).by)
+                        .map(|(r, _)| (r.id(), om::duck_keys(&r).by))
+                        .collect()
+                })
+                .unwrap_or_default();
+            for (r, key) in ducked {
+                tx.clear_ref(r, key)?;
+            }
             tx.remove(node)
         })?;
         Ok(())
+    }
+
+    /// Sets which track ducks track `track` (its *Ducked by* picker, roadmap
+    /// row 41): the track at place `key`, or none. One undo step, "Set
+    /// Ducked by", and none when nothing changes. Stored as a reference to
+    /// the key track's node, so it follows the key through a reorder. A
+    /// track can't be ducked by itself. Answers whether anything changed.
+    pub fn set_track_duck(&self, track: usize, key: Option<usize>) -> Result<bool, String> {
+        if key == Some(track) {
+            return Err("a track can't be ducked by itself".into());
+        }
+        let found = self.read(|d| {
+            let tracks = om::tracks(d.tree());
+            let t = tracks
+                .get(track)
+                .ok_or_else(|| format!("there is no track {}", track + 1))?;
+            let k = match key {
+                Some(k) => Some(
+                    tracks
+                        .get(k)
+                        .map(|n| n.id())
+                        .ok_or_else(|| format!("there is no track {}", k + 1))?,
+                ),
+                None => None,
+            };
+            let by = om::duck_keys(t).by;
+            let now = t.resolve(by).map(|n| n.id());
+            Ok::<_, String>((t.id(), by, k, now))
+        })?;
+        let (t, by, want, now) = found;
+        if want == now {
+            return Ok(false);
+        }
+        let (_, changed) = self.edit("Set Ducked by", None, |tx| match want {
+            Some(k) => tx.set_ref(t, by, Ref::here(k)),
+            None => tx.clear_ref(t, by),
+        })?;
+        Ok(changed)
     }
 
     /// Selects track `track` in the scene view: the current patch becomes the
@@ -2019,11 +2117,31 @@ pub fn track_name(slot: Slot) -> String {
 }
 
 /// When a track's change from `a` to `b` is one setting moving, its undo
-/// label and the key a drag coalesces under: the fader, or a drums track's
-/// switch, Tune or Decay.
+/// label and the key a drag coalesces under: the fader, Depth, Release or
+/// Key only, or a drums track's switch, Tune or Decay.
 fn one_setting(a: &Track, b: &Track) -> Option<(&'static str, &'static str)> {
+    let same_duck = a.duck.settings() == b.duck.settings();
     if (a.length, &a.steps, &a.drums) == (b.length, &b.steps, &b.drums) {
-        return Some(("Set Gain", "gain"));
+        if same_duck {
+            return Some(("Set Gain", "gain"));
+        }
+        if a.gain != b.gain {
+            return None;
+        }
+        let (x, y) = (&a.duck, &b.duck);
+        return match (
+            x.depth != y.depth,
+            x.release != y.release,
+            x.key_only != y.key_only,
+        ) {
+            (true, false, false) => Some(("Set Depth", "depth")),
+            (false, true, false) => Some(("Set Release", "release")),
+            (false, false, true) => Some(("Set Key only", "key-only")),
+            _ => None,
+        };
+    }
+    if !same_duck {
+        return None;
     }
     let (Some(x), Some(y)) = (&a.drums, &b.drums) else {
         return None;

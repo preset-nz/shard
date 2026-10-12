@@ -15,7 +15,10 @@
 //!   named by its number and made only once it differs from a blank step. A
 //!   `drums` track (story d) holds its kit's switch, fader, tune, decay and
 //!   length, its beats made the same way. The *k*-th of each kind plays on
-//!   voice or kit *k* (`tracker::Slot`). Then the arrangement's own chain,
+//!   voice or kit *k* (`tracker::Slot`). A track of either kind may be
+//!   ducked by another (roadmap row 41): its reference `<kind>.duck` names
+//!   the key track's node, beside its depth, release and Key only switch
+//!   (`duck_keys`). Then the arrangement's own chain,
 //!   filter and output (a `master`, named `amp`).
 //! - `/materials/<sample>`: WAVs and the built-in drone. A generator reads
 //!   one through its reference `<kind>.source`.
@@ -35,6 +38,7 @@ use rhizome_core::{
 use rhizome_pom::{Kinds, NodeValues, ObjectModel};
 use serde_json::{json, Value as Json};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
+use shard_dsp::duck::{DEPTH_DEFAULT, RELEASE_DEFAULT_MS, RELEASE_MAX_MS, RELEASE_MIN_MS};
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::{DECAY_MAX, DECAY_MIN, HIT_MAX, TUNE_RANGE};
 use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
@@ -113,6 +117,63 @@ pub const TRACK_SOLO: &str = "track.solo";
 /// A drums track's, the same way.
 pub const DRUMS_MUTE: &str = "drums.mute";
 pub const DRUMS_SOLO: &str = "drums.solo";
+
+/// A track's sidechain (roadmap row 41), by its kind: `by` the reference to
+/// the track whose steps dip its volume (unset, or naming a track that has
+/// gone, it is not ducked), how far a full-velocity step dips it (0 to 1,
+/// silence), how long the dip takes to come back (ms), and Key only:
+/// silent, its steps still keying whatever it ducks. Edits, saved in the
+/// tree; a file without them opens not ducked and heard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DuckKeys {
+    pub by: &'static str,
+    pub depth: &'static str,
+    pub release: &'static str,
+    pub key_only: &'static str,
+}
+
+pub const TRACK_DUCK: DuckKeys = DuckKeys {
+    by: "track.duck",
+    depth: "track.duck-depth",
+    release: "track.duck-release",
+    key_only: "track.key-only",
+};
+pub const DRUMS_DUCK: DuckKeys = DuckKeys {
+    by: "drums.duck",
+    depth: "drums.duck-depth",
+    release: "drums.duck-release",
+    key_only: "drums.key-only",
+};
+
+/// A track node's sidechain keys, by its kind.
+pub fn duck_keys(track: &Node<'_>) -> DuckKeys {
+    if track.type_name() == DRUMS {
+        DRUMS_DUCK
+    } else {
+        TRACK_DUCK
+    }
+}
+
+/// A track's sidechain values, declared on its kind.
+fn with_duck(t: NodeType, keys: DuckKeys) -> NodeType {
+    t.float(keys.depth, 0.0..=1.0, float(DEPTH_DEFAULT))
+        .float(
+            keys.release,
+            float(RELEASE_MIN_MS)..=float(RELEASE_MAX_MS),
+            float(RELEASE_DEFAULT_MS),
+        )
+        .bool(keys.key_only, false)
+        .reference(keys.by)
+}
+
+/// A track is ducked by another track, never by itself.
+fn duck_holds(n: &Node<'_>) -> std::result::Result<(), String> {
+    match n.resolve(duck_keys(n).by) {
+        Some(k) if !is_track(&k) => Err(format!("a track is ducked by a track, not {}", k.path())),
+        Some(k) if k.id() == n.id() => Err("a track can't be ducked by itself".into()),
+        _ => Ok(()),
+    }
+}
 
 /// Whether a node is a track of either kind, as the order `tracks` lists.
 pub fn is_track(n: &Node<'_>) -> bool {
@@ -685,9 +746,11 @@ pub fn kinds() -> Vec<KindDecl> {
         .bool(TRACK_MUTE, false)
         .bool(TRACK_SOLO, false)
         .reference(TRACK_PATCH);
+    let t = with_duck(t, TRACK_DUCK);
     push(
         checked(t, Under::Arrangement, |n| {
             length_holds(n, "track.length")?;
+            duck_holds(n)?;
             match n.resolve(TRACK_PATCH) {
                 Some(p) if p.type_name() != PATCH => {
                     Err(format!("a track plays a patch, not {}", p.path()))
@@ -756,8 +819,12 @@ pub fn kinds() -> Vec<KindDecl> {
         .int("drums.length", 4..=STEPS as i64, i64::from(track.length))
         .bool(DRUMS_MUTE, false)
         .bool(DRUMS_SOLO, false);
+    let t = with_duck(t, DRUMS_DUCK);
     push(
-        checked(t, Under::Arrangement, |n| length_holds(n, "drums.length")),
+        checked(t, Under::Arrangement, |n| {
+            length_holds(n, "drums.length")?;
+            duck_holds(n)
+        }),
         Role::Generator,
         false,
         Some(KITS),
@@ -843,7 +910,8 @@ impl ObjectModel for Shard {
             }
             // A preset is a node's sound: its values and links, never its
             // switch, so applying one never switches a node in or out, and
-            // never a patch's name or a drums track's mute and solo.
+            // never a patch's name, a drums track's mute and solo, or its
+            // sidechain, which is routing, not sound.
             if presets {
                 kind.presets(
                     NodeValues::new()
@@ -852,6 +920,9 @@ impl ObjectModel for Shard {
                                 || key == PATCH_LABEL
                                 || key == DRUMS_MUTE
                                 || key == DRUMS_SOLO
+                                || key == DRUMS_DUCK.depth
+                                || key == DRUMS_DUCK.release
+                                || key == DRUMS_DUCK.key_only
                         })
                         .with_bindings(),
                 );
@@ -930,6 +1001,10 @@ pub trait ShardEdit {
     /// One track's steps or grid, length, fader and kit, writing only what
     /// differs.
     fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()>;
+    /// A track's sidechain depth, release and Key only, writing only what
+    /// differs. Who keys it is `Session::set_track_duck`'s, never written
+    /// here.
+    fn write_duck(&mut self, node: NodeId, keys: DuckKeys, track: &Track) -> Result<()>;
     /// Sets `key` to `want`, or resets it when `want` is its default, and
     /// writes nothing when it already is.
     fn put(&mut self, node: NodeId, key: &str, want: Value) -> Result<()>;
@@ -1124,6 +1199,7 @@ impl ShardEdit for Edit<'_> {
             self.put(node, "drums.tune", Value::Float(float(kit.tune)))?;
             self.put(node, "drums.decay", Value::Float(float(kit.decay)))?;
             self.put(node, "drums.length", int(track.length))?;
+            self.write_duck(node, DRUMS_DUCK, track)?;
             for i in 0..STEPS {
                 let hit = |row: &Vec<u8>| row.get(i).copied().unwrap_or(0);
                 let hits = [hit(&kit.kick), hit(&kit.snare), hit(&kit.hat)];
@@ -1138,6 +1214,7 @@ impl ShardEdit for Edit<'_> {
         }
         self.put(node, "track.length", int(track.length))?;
         self.put(node, TRACK_GAIN, Value::Float(float(track.gain)))?;
+        self.write_duck(node, TRACK_DUCK, track)?;
         let blank = Step::default();
         for i in 0..STEPS {
             let s = track.steps.get(i).copied().unwrap_or(blank);
@@ -1151,6 +1228,13 @@ impl ShardEdit for Edit<'_> {
             self.put_cell(node, STEP, i, s == blank, fields)?;
         }
         Ok(())
+    }
+
+    fn write_duck(&mut self, node: NodeId, keys: DuckKeys, track: &Track) -> Result<()> {
+        let d = &track.duck;
+        self.put(node, keys.depth, Value::Float(float(d.depth)))?;
+        self.put(node, keys.release, Value::Float(float(d.release)))?;
+        self.put(node, keys.key_only, Value::Bool(d.key_only))
     }
 
     fn put(&mut self, node: NodeId, key: &str, want: Value) -> Result<()> {

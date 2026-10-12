@@ -41,7 +41,7 @@ use shard_dsp::{ModSet, ParamBank};
 use super::*;
 use crate::materials::{MaterialRecord, Pool, Wires};
 use crate::modulation::{EnvelopeRecord, LfoRecord, LinkRecord, Modulation, Refused};
-use crate::tracker::{Kit, Step, Track, Tracker};
+use crate::tracker::{Duck, Kit, Step, Track, Tracker};
 
 /// What the engine reads, compiled from a session.
 #[derive(Clone, Debug, PartialEq)]
@@ -418,6 +418,23 @@ fn modulation(patch: Node<'_>, chain: &Chain<'_>, ids: &mut Ids<'_>) -> Modulati
     m
 }
 
+/// A track's sidechain, of either kind: its values, and its key resolved to
+/// that track's place in `order`. A key that has gone, or is the track
+/// itself, is none.
+fn read_duck(t: Node<'_>, order: &[Node<'_>]) -> Duck {
+    let keys = duck_keys(&t);
+    let by = t
+        .resolve(keys.by)
+        .filter(|k| k.id() != t.id())
+        .and_then(|k| order.iter().position(|o| o.id() == k.id()));
+    Duck {
+        by,
+        depth: float(&t, keys.depth),
+        release: float(&t, keys.release),
+        key_only: t.value(keys.key_only) == Some(Value::Bool(true)),
+    }
+}
+
 /// A drums track node as a track: the inverse of `ShardEdit::write_track`.
 fn read_drums(t: Node<'_>) -> Track {
     let mut kit = Kit {
@@ -444,12 +461,16 @@ fn read_drums(t: Node<'_>) -> Track {
 
 /// The arrangement as a tracker: the inverse of `ShardEdit::add_arrangement`.
 pub fn read_tracker(arr: Node<'_>) -> Tracker {
-    let tracks = arr
-        .order(TRACKS)
-        .into_iter()
-        .map(|t| {
+    let order = arr.order(TRACKS);
+    let tracks = order
+        .iter()
+        .map(|&t| {
+            let duck = read_duck(t, &order);
             if t.type_name() == DRUMS {
-                return read_drums(t);
+                return Track {
+                    duck,
+                    ..read_drums(t)
+                };
             }
             let mut steps = vec![Step::default(); STEPS];
             for s in t.children().filter(|c| c.type_name() == STEP) {
@@ -469,6 +490,7 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
                 patch: None,
                 steps,
                 drums: None,
+                duck,
             }
         })
         .collect();

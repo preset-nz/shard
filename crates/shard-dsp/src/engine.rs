@@ -35,6 +35,15 @@
 //! rings out and then costs nothing. Kit 0 starts active, its switch off,
 //! as the single kit did; the rest idle.
 //!
+//! **Sidechain ducking** (`duck.rs`, roadmap row 41): any channel can be
+//! ducked by another's steps (`set_voice_duck`, `set_kit_duck`), a kit by
+//! its kick lane. Every frame finds the steps that begin on it, for every
+//! voice and kit, before any channel is mixed, so a dip starts on the very
+//! sample its key's step sounds, whichever order the channels are in. The
+//! dip multiplies the channel before its fader, beside the mute gate. A Key
+//! only channel is silent through a gate of its own while its steps still
+//! key. A key pumps while heard, or while Key only and not muted.
+//!
 //! **One tape.** Brake and rewind are the arrangement's rows
 //! (`arrangement.tape.brake`, `arrangement.tape.reverse`), and slow every
 //! voice, every kit and the transport together (Georg, 2026-10-12). The slew
@@ -48,8 +57,9 @@ use std::sync::Arc;
 
 use crate::arrangement::{self, index_of_arrangement};
 use crate::chain::{Chain, ChainParams, ChainSlots};
+use crate::duck::{Duck, Ducker, Key};
 use crate::inspect::{GrainLog, GrainSpawn};
-use crate::kit::{Kit, KitClock, KitParams, KitPattern, VOICES as KIT_VOICES};
+use crate::kit::{Kit, KitClock, KitParams, KitPattern, KICK, VOICES as KIT_VOICES};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::mix::{gate_frames, Gate, Mix};
 use crate::modulation::ModSet;
@@ -192,8 +202,8 @@ impl Reel {
 }
 
 /// One drums track's kit in the pool (story d): its grid, its sound, its
-/// place in its own loop and its fader. Its hits, step by step, are what a
-/// sidechain keyed by a drums track would follow (roadmap row 41): not built.
+/// place in its own loop and its fader. Its kick lane keys whatever a drums
+/// track ducks (`duck.rs`).
 struct Drums {
     kit: Kit,
     pattern: KitPattern,
@@ -276,6 +286,14 @@ pub struct Engine {
     gates: [Gate; CHANNELS],
     /// The drums tracks' kits. See `kit.rs`.
     drums: [Drums; KITS],
+    /// Each channel's ducking (`duck.rs`): the channel whose steps dip it,
+    /// how deep, its dip, whether it is Key only and the gate that silences
+    /// it then.
+    duck_key: [Option<usize>; CHANNELS],
+    duck_depth: [f32; CHANNELS],
+    duckers: [Ducker; CHANNELS],
+    key_only: [bool; CHANNELS],
+    key_gates: [Gate; CHANNELS],
     /// After everything, the arrangement included.
     limiter: Limiter,
     sample_rate: f32,
@@ -319,6 +337,11 @@ impl Engine {
             gate_frames: gate_frames(sample_rate) as f64,
             gates: [Gate::new(sample_rate); CHANNELS],
             drums,
+            duck_key: [None; CHANNELS],
+            duck_depth: [0.0; CHANNELS],
+            duckers: [Ducker::new(sample_rate); CHANNELS],
+            key_only: [false; CHANNELS],
+            key_gates: [Gate::new(sample_rate); CHANNELS],
             limiter: Limiter::new(sample_rate),
             sample_rate,
             peak: 0.0,
@@ -337,6 +360,8 @@ impl Engine {
             // has them.
             self.gains[i].reset(self.gain_targets[i]);
             self.gates[i].reset(self.audible[i]);
+            self.duckers[i].reset();
+            self.key_gates[i].reset(!self.key_only[i]);
         }
         self.voices[i].set_active(on);
     }
@@ -413,6 +438,8 @@ impl Engine {
             d.rejoin = running;
             d.gain.reset(level);
             self.gates[c].reset(audible);
+            self.duckers[c].reset();
+            self.key_gates[c].reset(!self.key_only[c]);
         }
         d.active = on;
     }
@@ -463,6 +490,53 @@ impl Engine {
         } else {
             None
         }
+    }
+
+    /// Voice `i`'s ducking, once a block: the track whose steps dip it, how
+    /// deep and how long, and whether it is Key only. A key that is this
+    /// voice, or no voice or kit there is, is none.
+    pub fn set_voice_duck(&mut self, i: usize, duck: Duck) {
+        assert!(i < VOICES);
+        self.set_duck(i, duck);
+    }
+
+    /// Kit `k`'s ducking, as `set_voice_duck`.
+    pub fn set_kit_duck(&mut self, k: usize, duck: Duck) {
+        self.set_duck(VOICES + k, duck);
+    }
+
+    fn set_duck(&mut self, c: usize, duck: Duck) {
+        let d = duck.sanitised();
+        self.duck_key[c] = match d.key {
+            Some(Key::Voice(i)) if i < VOICES => Some(i),
+            Some(Key::Kit(k)) if k < KITS => Some(VOICES + k),
+            _ => None,
+        }
+        .filter(|key| *key != c);
+        self.duck_depth[c] = d.depth;
+        self.duckers[c].set_release(d.release_ms);
+        self.key_only[c] = d.key_only;
+        // Stopped, nothing sounds to click: Key only lands at once.
+        if !self.playing {
+            self.key_gates[c].reset(!d.key_only);
+        }
+    }
+
+    /// Voice `i`'s duck gain as it stands: one at rest.
+    pub fn voice_duck(&self, i: usize) -> f32 {
+        self.duckers[i].gain()
+    }
+
+    /// Kit `k`'s, as `voice_duck`.
+    pub fn kit_duck(&self, k: usize) -> f32 {
+        self.duckers[VOICES + k].gain()
+    }
+
+    /// Whether channel `c`'s steps pump what it keys: while it is heard, or
+    /// while it is Key only and not muted.
+    #[inline]
+    fn pumps(&self, c: usize) -> bool {
+        !self.mix[c].mute && (self.audible[c] || self.key_only[c])
     }
 
     /// Every wanted mix applied: on a bar line.
@@ -652,6 +726,11 @@ impl Engine {
             d.rejoin = false;
         }
         self.playing = playing;
+        // No dip outlives the transport, and Key only is where it is set.
+        for (c, d) in self.duckers.iter_mut().enumerate() {
+            d.reset();
+            self.key_gates[c].reset(!self.key_only[c]);
+        }
         // A mute still waiting for its bar lands now: stopped, there is none.
         self.mix = self.mix_wanted;
         self.resolve_mix();
@@ -837,25 +916,19 @@ impl Engine {
                 && self.transport.running()
                 && beat.step % BAR == BAR - 1
                 && f64::from(beat.len) - beat.offset <= self.gate_frames * f64::from(speed.abs());
-            // Each voice through its track's fader. The patch alone hears
-            // every voice at unity, and the glide carries the change.
-            let (mut l, mut r) = (0.0, 0.0);
+            // Every voice's frame first, and the velocity of any step that
+            // begins on it, so a channel keyed by a later one still dips on
+            // its key's sample.
+            let mut fired = [0.0f32; CHANNELS];
+            let mut voiced = [(0.0f32, 0.0f32); VOICES];
             for &i in live {
-                let (vl, vr) = self.voices[i].frame(tape, &beat, swing);
-                let want = if arr.patch_alone {
-                    1.0
-                } else {
-                    self.gain_targets[i]
-                };
-                let heard = self.audible[i] && (!closing || self.wanted_audible[i]);
-                let g = self.gains[i].process(want) * self.gates[i].process(heard);
-                l += vl * g;
-                r += vr * g;
+                voiced[i] = self.voices[i].frame(tape, &beat, swing);
+                fired[i] = self.voices[i].fired();
             }
             // The kits, on the same clock: each reads how far the steps have
             // run, so it stays on their grid at any length of its own. Its
             // clock runs while its switch is off, so switching it on lands in
-            // step.
+            // step. A kit keys by its kick.
             if self.transport.running() {
                 for &k in kits {
                     let d = &mut self.drums[k];
@@ -868,9 +941,38 @@ impl Engine {
                             for v in 0..KIT_VOICES {
                                 d.kit.hit(v, pattern.hit(v, step), &d.params);
                             }
+                            fired[VOICES + k] = pattern.hit(KICK, step);
                         }
                     }
                 }
+            }
+            // Each ducked channel dips on its key's steps, the key heard (or
+            // Key only) under the mix as applied on this frame.
+            for c in 0..CHANNELS {
+                if let Some(key) = self.duck_key[c] {
+                    if fired[key] > 0.0 && self.pumps(key) {
+                        self.duckers[c].hit(self.duck_depth[c] * fired[key]);
+                    }
+                }
+            }
+            // Each voice through its dip and its track's fader. The patch
+            // alone hears every voice at unity, and the glide carries the
+            // change. At rest the dip and the Key only gate are exactly one.
+            let (mut l, mut r) = (0.0, 0.0);
+            for &i in live {
+                let (vl, vr) = voiced[i];
+                let want = if arr.patch_alone {
+                    1.0
+                } else {
+                    self.gain_targets[i]
+                };
+                let heard = self.audible[i] && (!closing || self.wanted_audible[i]);
+                let g = self.gains[i].process(want)
+                    * self.gates[i].process(heard)
+                    * self.duckers[i].process()
+                    * self.key_gates[i].process(!self.key_only[i]);
+                l += vl * g;
+                r += vr * g;
             }
             // A bar began: the next frame is its first, and every waiting
             // mute and solo lands on it.
@@ -893,7 +995,9 @@ impl Engine {
                 kit += d.kit.process_at(speed.abs())
                     * tape_gain(speed)
                     * d.gain.process(level)
-                    * self.gates[c].process(heard);
+                    * self.gates[c].process(heard)
+                    * self.duckers[c].process()
+                    * self.key_gates[c].process(!self.key_only[c]);
             }
             let (l, r) = self.arr_fx.front(l + kit, r + kit, &arr.fx);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
@@ -4036,5 +4140,275 @@ mod tests {
             }
         }
         assert_eq!(first, Some(3_000), "it joins on step two");
+    }
+
+    // Sidechain ducking (roadmap row 41).
+
+    /// A beat at 120: four sixteenths of 6 000 frames.
+    const BEAT_FRAMES: usize = 24_000;
+
+    /// How a ducking render is set up: voice 0 a steady tone looping free,
+    /// ducked by `duck`; kit 0 kicking on every beat at `kick`, Key only or
+    /// not, under `kit_mix`; voice 1 stepping on every beat when `melody_key`.
+    struct DuckRig {
+        duck: Option<Duck>,
+        kick: u8,
+        kit_key_only: bool,
+        kit_mix: Mix,
+        voice_mix: Mix,
+        melody_key: bool,
+        voice_on: bool,
+    }
+
+    impl Default for DuckRig {
+        fn default() -> Self {
+            Self {
+                duck: None,
+                kick: crate::kit::HIT_MAX,
+                kit_key_only: false,
+                kit_mix: Mix::default(),
+                voice_mix: Mix::default(),
+                melody_key: false,
+                voice_on: true,
+            }
+        }
+    }
+
+    /// Each frame's left sample, and voice 0's duck gain after it.
+    fn render_ducked(rig: &DuckRig, frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_source(tone(48_000));
+        e.set_steps(StepParams {
+            on: true,
+            ..StepParams::default()
+        });
+        // Voice 0 loops free over the running transport, as an audition does.
+        e.set_voice_steps(0, StepParams::default());
+        if rig.melody_key {
+            e.set_voice_source(1, tone(4_800));
+            e.set_voice_active(1, true);
+            e.set_voice_steps(
+                1,
+                StepParams {
+                    on: true,
+                    ..StepParams::default()
+                },
+            );
+            e.set_voice_gain(1, 0.0);
+        }
+        let mut hits = [[0u8; crate::steps::STEPS]; KIT_VOICES];
+        for k in (0..16).step_by(4) {
+            hits[KICK][k] = rig.kick;
+        }
+        e.set_kit(
+            0,
+            KitPattern { length: 16, hits },
+            KitParams {
+                on: true,
+                ..KitParams::default()
+            },
+        );
+        e.set_kit_duck(
+            0,
+            Duck {
+                key_only: rig.kit_key_only,
+                ..Duck::default()
+            },
+        );
+        e.place_kit_mix(0, rig.kit_mix);
+        e.place_voice_mix(0, rig.voice_mix);
+        if let Some(d) = rig.duck {
+            e.set_voice_duck(0, d);
+        }
+        if !rig.voice_on {
+            e.set_voice_active(0, false);
+        }
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "material.gain", 0.4);
+        let arr = limiter_off();
+        e.set_arrangement(&arr, false);
+        let mut out = [0.0f32; 2];
+        let (mut samples, mut gains) = (Vec::new(), Vec::new());
+        for _ in 0..frames {
+            e.process_block(&mut out, &bank);
+            samples.push(out[0]);
+            gains.push(e.voice_duck(0));
+        }
+        (samples, gains)
+    }
+
+    fn by_kit(depth: f32, release_ms: f32) -> Option<Duck> {
+        Some(Duck {
+            key: Some(Key::Kit(0)),
+            depth,
+            release_ms,
+            key_only: false,
+        })
+    }
+
+    #[test]
+    fn a_track_with_no_key_or_no_depth_is_bit_exact_with_no_ducking() {
+        let plain = render_ducked(&DuckRig::default(), 60_000).0;
+        let unkeyed = DuckRig {
+            duck: Some(Duck {
+                key: None,
+                depth: 1.0,
+                ..Duck::default()
+            }),
+            ..DuckRig::default()
+        };
+        assert!(render_ducked(&unkeyed, 60_000).0 == plain, "no key");
+        let shallow = DuckRig {
+            duck: by_kit(0.0, 200.0),
+            ..DuckRig::default()
+        };
+        assert!(render_ducked(&shallow, 60_000).0 == plain, "depth zero");
+        // And a self-key is no key.
+        let own = DuckRig {
+            duck: Some(Duck {
+                key: Some(Key::Voice(0)),
+                ..Duck::default()
+            }),
+            ..DuckRig::default()
+        };
+        assert!(render_ducked(&own, 60_000).0 == plain, "keyed by itself");
+    }
+
+    #[test]
+    fn the_dip_starts_on_the_keys_own_sample() {
+        // Keyed by a kit, and by a voice later in the pool than the one
+        // ducked: either way the dip starts on the step's frame.
+        for melody in [false, true] {
+            let duck = Some(Duck {
+                key: Some(if melody { Key::Voice(1) } else { Key::Kit(0) }),
+                ..Duck::default()
+            });
+            let rig = DuckRig {
+                duck,
+                melody_key: melody,
+                ..DuckRig::default()
+            };
+            let (_, g) = render_ducked(&rig, BEAT_FRAMES + 10);
+            assert!(g[0] < 1.0, "dips on the first step's frame: {}", g[0]);
+            let b = BEAT_FRAMES;
+            assert!(g[b - 1] > g[b - 2], "still coming back before the beat");
+            assert!(g[b] < g[b - 1], "dips again on the beat's frame");
+        }
+    }
+
+    #[test]
+    fn between_hits_the_duck_comes_back_to_unity() {
+        let rig = DuckRig {
+            duck: by_kit(0.75, 50.0),
+            ..DuckRig::default()
+        };
+        let (_, g) = render_ducked(&rig, BEAT_FRAMES * 2);
+        let lowest = g[..2_000].iter().copied().fold(1.0f32, f32::min);
+        assert!((lowest - 0.25).abs() < 1e-5, "a full dip: {lowest}");
+        assert_eq!(g[BEAT_FRAMES - 1], 1.0, "back at rest before the next");
+    }
+
+    #[test]
+    fn a_softer_key_step_dips_less() {
+        let lowest = |kick: u8| {
+            let rig = DuckRig {
+                duck: by_kit(0.8, 200.0),
+                kick,
+                ..DuckRig::default()
+            };
+            let (_, g) = render_ducked(&rig, 4_000);
+            1.0 - g.iter().copied().fold(1.0f32, f32::min)
+        };
+        let (full, half) = (lowest(crate::kit::HIT_MAX), lowest(64));
+        assert!((full - 0.8).abs() < 1e-5, "{full}");
+        let want = 0.8 * 64.0 / f32::from(crate::kit::HIT_MAX);
+        assert!((half - want).abs() < 1e-5, "{half} against {want}");
+    }
+
+    #[test]
+    fn a_key_only_kit_is_silent_and_still_ducks() {
+        // Voice 0 switched out: once it has faded, what is left is the kit,
+        // whose second beat lands at 24 000. Key only silences it.
+        let ghost = DuckRig {
+            kit_key_only: true,
+            voice_on: false,
+            ..DuckRig::default()
+        };
+        let (out, _) = render_ducked(&ghost, 30_000);
+        assert!(
+            out[10_000..].iter().all(|s| *s == 0.0),
+            "a Key only kit is heard"
+        );
+        let heard = DuckRig {
+            voice_on: false,
+            ..DuckRig::default()
+        };
+        let (out, _) = render_ducked(&heard, 30_000);
+        assert!(
+            out[10_000..].iter().any(|s| s.abs() > 0.01),
+            "the kit was never on"
+        );
+        // And it still ducks voice 0.
+        let ducking = DuckRig {
+            duck: by_kit(0.75, 200.0),
+            kit_key_only: true,
+            ..DuckRig::default()
+        };
+        let (_, g) = render_ducked(&ducking, 4_000);
+        assert!(g.iter().any(|g| *g < 0.3));
+    }
+
+    #[test]
+    fn a_key_pumps_while_heard_or_key_only_and_never_while_muted() {
+        let muted = Mix {
+            mute: true,
+            ..Mix::default()
+        };
+        let soloed = Mix {
+            solo: true,
+            ..Mix::default()
+        };
+        let pumps = |kit_mix: Mix, voice_mix: Mix, key_only: bool| {
+            let rig = DuckRig {
+                duck: by_kit(0.75, 200.0),
+                kit_mix,
+                voice_mix,
+                kit_key_only: key_only,
+                ..DuckRig::default()
+            };
+            render_ducked(&rig, 4_000).1.iter().any(|g| *g < 1.0)
+        };
+        let none = Mix::default();
+        assert!(pumps(none, none, false), "a heard key pumps");
+        assert!(!pumps(muted, none, false), "a muted key does not");
+        assert!(!pumps(muted, none, true), "nor a muted Key only one");
+        assert!(pumps(none, none, true), "a Key only key pumps");
+        // Another track soloed: the key is not heard, so it does not pump,
+        // unless it is Key only.
+        assert!(!pumps(none, soloed, false), "a key silenced by a solo");
+        assert!(pumps(none, soloed, true), "a Key only key under a solo");
+    }
+
+    #[test]
+    fn a_dip_does_not_click() {
+        let worst = |duck: Option<Duck>| {
+            let rig = DuckRig {
+                duck,
+                kit_key_only: true,
+                ..DuckRig::default()
+            };
+            let (out, _) = render_ducked(&rig, BEAT_FRAMES * 2);
+            out.windows(2)
+                .skip(2_000)
+                .map(|w| (w[1] - w[0]).abs())
+                .fold(0.0f32, f32::max)
+        };
+        let steady = worst(None);
+        let ducked = worst(by_kit(1.0, 10.0));
+        assert!(
+            ducked < steady * 1.5 + 0.005,
+            "ducking jumped by {ducked} against a steady {steady}"
+        );
     }
 }

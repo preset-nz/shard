@@ -29,6 +29,8 @@ mod document;
 #[cfg(test)]
 mod drums_tests;
 #[cfg(test)]
+mod duck_tests;
+#[cfg(test)]
 mod e2e;
 mod mapping;
 mod materials;
@@ -896,6 +898,19 @@ fn set_track_patch(
     Ok(())
 }
 
+/// Sets which track ducks track `track`, by its place, or none: one step of
+/// Undo, "Set Ducked by" (roadmap row 41). A track can't be ducked by
+/// itself.
+#[tauri::command]
+fn set_track_duck(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    key: Option<usize>,
+) -> Result<tracker::Tracker, String> {
+    state.session.set_track_duck(track, key)?;
+    Ok(state.session.tracker())
+}
+
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
@@ -1664,6 +1679,7 @@ pub(crate) fn hand_over(
         let (player, grain) = feed.readings.load();
         engine.set_voice_readings(i, player, grain);
         engine.set_voice_gain(i, feed.gain());
+        engine.set_voice_duck(i, feed.duck.load());
         // Mute and solo: a press lands on the next bar; a track arriving on
         // the voice brings its switches at once. Before the switch, so a
         // voice wakes with its gate where its track has it.
@@ -1685,6 +1701,7 @@ pub(crate) fn hand_over(
         let (pattern, params) = feed.bank.load();
         engine.set_kit(k, pattern, params);
         engine.set_kit_gain(k, feed.gain());
+        engine.set_kit_duck(k, feed.duck.load());
         let placed = feed.placed.load(Ordering::Acquire);
         let mix = Mix::from_bits(feed.mix.load(Ordering::Acquire));
         if placed != held.kit_placed[k] {
@@ -2082,6 +2099,7 @@ pub fn run() {
             toggle_track_mute,
             toggle_track_solo,
             set_track_patch,
+            set_track_duck,
             rename_patch,
             delete_patch,
             duplicate_patch,

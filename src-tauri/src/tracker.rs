@@ -25,11 +25,16 @@
 //! melody track plays on voice *k*, the *k*-th drums track on kit *k*. So
 //! adding or moving a drums track never moves a melody track's voice.
 //!
+//! **Sidechain** (roadmap row 41): any track may be ducked by another, its
+//! volume dipping on the key track's steps (`Duck`, `shard_dsp::duck`). A
+//! drums track keys by its kick lane.
+//!
 //! Saved in the same `.shard` file as the patch, in the arrangement node
 //! (`object_model::write_tracker`).
 
 use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
+use shard_dsp::duck::{self, DEPTH_DEFAULT, RELEASE_DEFAULT_MS, RELEASE_MAX_MS, RELEASE_MIN_MS};
 use shard_dsp::kit::{
     KitParams, KitPattern, DECAY_MAX, DECAY_MIN, HAT, HIT_MAX, KICK, SNARE, TUNE_RANGE,
 };
@@ -79,6 +84,51 @@ pub fn slots(drums: impl IntoIterator<Item = bool>) -> Vec<Slot> {
             }
         })
         .collect()
+}
+
+/// A track's sidechain (roadmap row 41): the track whose steps dip its
+/// volume, how deep, how long, and Key only.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Duck {
+    /// The place of the track that ducks this one, as the session resolved
+    /// its reference (`<kind>.duck`). Read only: a pick goes through
+    /// `Session::set_track_duck`.
+    pub by: Option<usize>,
+    /// How far a full-velocity step of the key dips the volume, 0 to 1
+    /// (silence); the step's velocity scales it.
+    pub depth: f32,
+    /// How long the dip takes to come back, in ms.
+    pub release: f32,
+    /// Silent, its steps still keying whatever it ducks: a ghost kick.
+    pub key_only: bool,
+}
+
+impl Default for Duck {
+    fn default() -> Self {
+        Self {
+            by: None,
+            depth: DEPTH_DEFAULT,
+            release: RELEASE_DEFAULT_MS,
+            key_only: false,
+        }
+    }
+}
+
+impl Duck {
+    /// What the webview may change through `set_tracker`: all but `by`.
+    pub fn settings(&self) -> (f32, f32, bool) {
+        (self.depth, self.release, self.key_only)
+    }
+}
+
+/// Where a slot's engine channel is, as a duck's key names it.
+fn key_of(slot: Slot) -> Option<duck::Key> {
+    match slot {
+        Slot::Melody(k) if k < VOICES => Some(duck::Key::Voice(k)),
+        Slot::Drums(k) if k < KITS => Some(duck::Key::Kit(k)),
+        _ => None,
+    }
 }
 
 /// A drums track's kit: its kick, snare and hat grid, synthesised
@@ -166,6 +216,8 @@ pub struct Track {
     pub steps: Vec<Step>,
     /// A drums track's kit; none on a melody track.
     pub drums: Option<Kit>,
+    /// Its sidechain: ducked by which track, and Key only.
+    pub duck: Duck,
 }
 
 /// One sixteenth of a track.
@@ -229,6 +281,7 @@ impl Default for Track {
                 })
                 .collect(),
             drums: None,
+            duck: Duck::default(),
         }
     }
 }
@@ -242,6 +295,7 @@ impl Track {
             patch: None,
             steps: vec![Step::default(); STEPS],
             drums: None,
+            duck: Duck::default(),
         }
     }
 
@@ -302,7 +356,21 @@ impl Tracker {
                 .min_by_key(|n| n.abs_diff(length))
                 .unwrap_or(16)
         };
-        for t in &mut self.tracks {
+        let count = self.tracks.len();
+        for (i, t) in self.tracks.iter_mut().enumerate() {
+            let fallback = Duck::default();
+            let d = &mut t.duck;
+            d.by = d.by.filter(|b| *b != i && *b < count);
+            d.depth = if d.depth.is_finite() {
+                d.depth.clamp(0.0, 1.0)
+            } else {
+                fallback.depth
+            };
+            d.release = if d.release.is_finite() {
+                d.release.clamp(RELEASE_MIN_MS, RELEASE_MAX_MS)
+            } else {
+                fallback.release
+            };
             if let Some(kit) = &mut t.drums {
                 t.patch = None;
                 let fallback = Kit::default();
@@ -343,6 +411,30 @@ impl Tracker {
     /// Each track's slot, in order: which voice or kit plays it.
     pub fn slots(&self) -> Vec<Slot> {
         slots(self.tracks.iter().map(Track::is_drums))
+    }
+
+    /// Each track's slot and its sidechain as the engine takes it
+    /// (`Engine::set_voice_duck`, `set_kit_duck`): its key track's place
+    /// mapped to that track's voice or kit through its slot.
+    pub fn ducks(&self) -> Vec<(Slot, duck::Duck)> {
+        let slots = self.slots();
+        self.tracks
+            .iter()
+            .zip(&slots)
+            .map(|(t, slot)| {
+                let d = &t.duck;
+                let key = d.by.and_then(|b| slots.get(b)).copied().and_then(key_of);
+                (
+                    *slot,
+                    duck::Duck {
+                        key,
+                        depth: d.depth,
+                        release_ms: d.release,
+                        key_only: d.key_only,
+                    },
+                )
+            })
+            .collect()
     }
 
     /// The melody tracks, in order: the *k*-th plays on voice *k*.

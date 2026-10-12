@@ -920,3 +920,82 @@ fn every_voice_playing_never_touches_the_allocator() {
     }
     assert!(retired_sources.len() >= 10 && retired_sets.len() >= 10);
 }
+
+#[test]
+fn ducking_never_touches_the_allocator() {
+    // Sidechain ducking (roadmap row 41): every voice and kit playing, each
+    // ducked by another (voices and kits, cycles included), the keys, depths
+    // and releases moving every block through the bank the callback reads,
+    // Key only toggled, and the keys' mutes and solos landing on the bars.
+    use shard_dsp::{Duck, DuckBank, Key, KitParams, KitPattern, KITS};
+    let mut e = Engine::new(SR, 256);
+    let bank = ParamBank::new();
+    for i in 0..VOICES {
+        e.set_voice_source(i, tone(12_000 + i * 500));
+        e.set_voice_active(i, true);
+        e.set_voice_steps(
+            i,
+            StepParams {
+                on: true,
+                pattern: 0x1111_1111 << (i % 4),
+                ..Default::default()
+            },
+        );
+    }
+    for k in 0..KITS {
+        e.set_kit(
+            k,
+            KitPattern::default(),
+            KitParams {
+                on: true,
+                ..KitParams::default()
+            },
+        );
+        e.set_kit_active(k, true);
+    }
+    e.set_transport(&StepParams {
+        on: true,
+        tempo_bpm: 200.0,
+        ..Default::default()
+    });
+    e.set_playing(true);
+    let banks: Vec<DuckBank> = (0..VOICES + KITS).map(|_| DuckBank::default()).collect();
+    let mut out = vec![0.0f32; 512];
+
+    let ((), caught) = no_alloc(|| {
+        for block in 0..1_200 {
+            for (c, duck) in banks.iter().enumerate() {
+                let n = (block / 40 + c * 3) % (VOICES + KITS + 1);
+                let key = match n {
+                    0 => None,
+                    n if n <= VOICES => Some(Key::Voice(n - 1)),
+                    n => Some(Key::Kit(n - 1 - VOICES)),
+                };
+                duck.store(&Duck {
+                    key,
+                    depth: ((block + c) % 11) as f32 * 0.1,
+                    release_ms: 5.0 + ((block * 7 + c) % 120) as f32 * 10.0,
+                    key_only: (block / (23 + c)) % 4 == 0,
+                });
+                let d = duck.load();
+                let m = Mix {
+                    mute: (block / (19 + c)) % 5 == 0,
+                    solo: (block / (29 + c)) % 7 == 0,
+                    solo_safe: false,
+                };
+                if c < VOICES {
+                    e.set_voice_duck(c, d);
+                    e.set_voice_mix(c, m);
+                    black_box(e.voice_duck(c));
+                } else {
+                    e.set_kit_duck(c - VOICES, d);
+                    e.set_kit_mix(c - VOICES, m);
+                    black_box(e.kit_duck(c - VOICES));
+                }
+            }
+            e.process_block(&mut out, &bank);
+            assert!(out.iter().all(|v| v.is_finite()), "block {block}");
+        }
+    });
+    assert_eq!(caught, 0, "ducking touched the allocator {caught} time(s)");
+}

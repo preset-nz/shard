@@ -90,6 +90,16 @@ the tree (`with_mix`) and saves that; `open` reads them back. Never write
 `track.mute`, `track.solo` (or a drums track's `drums.mute`, `drums.solo`,
 `om::mix_keys`) into the live tree. The engine lands a press on
 the next bar (`shard_dsp::mix`; mute wins over solo).
+**Sidechain** (row 41, `shard_dsp::duck`): a track's *Ducked by* is a
+reference to the key track's node (`om::duck_keys`), never a place; set it
+only through `Session::set_track_duck`, and Remove Track clears the
+references to the removed track in the same step. Depth, Release and Key
+only are tree values like the fader, and unlike mute. The key's steps dip
+the volume, velocity scaling depth; a drums key keys by its kick lane. A key
+pumps while heard, or while Key only and not muted: a muted key, or one
+silenced by another's solo, does not. The engine finds every channel's step
+onsets for a frame before mixing any channel, so a dip starts on its key's
+sample; at rest the dip is exactly 1.0, keep it so.
 
 **The table is the patch, and the tracker is the level above it.** Tempo,
 swing and tracks of steps belong to the arrangement, not to a sound, so they are not

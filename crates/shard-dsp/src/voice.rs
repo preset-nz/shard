@@ -311,6 +311,9 @@ pub(crate) struct Voice {
     /// gliding to. Unity while the steps are off.
     vel: Ramp,
     vel_target: f32,
+    /// The velocity of a step that began on the last frame, 0 to 1, or zero
+    /// for none: what a track this one keys dips by (`duck.rs`).
+    fired: f32,
     /// The patch's own effects and output.
     fx: Chain,
     /// The driven 4-pole between the patch's filter and its output gain.
@@ -480,6 +483,7 @@ impl Voice {
                 r
             },
             vel_target: 1.0,
+            fired: 0.0,
             fx: Chain::new(sample_rate, defs, &slots.fx, salt),
             ladder: Ladder::new(sample_rate),
             slots,
@@ -657,6 +661,12 @@ impl Voice {
 
     pub(crate) fn active_grains(&self) -> usize {
         self.granular.active_grains()
+    }
+
+    /// The velocity of a step that began on the last frame, or zero.
+    #[inline]
+    pub(crate) fn fired(&self) -> f32 {
+        self.fired
     }
 
     /// This track's step clock, for the step it is in and how far it has run.
@@ -948,7 +958,9 @@ impl Voice {
         // pass's clock from this frame, so a shaped envelope (anything
         // but flat, which is the default) still puts an edge on the tail
         // and on the cloud. Open, roadmap row 4.
+        self.fired = 0.0;
         if let Some(k) = self.steps.tick(steps, beat, swing) {
+            self.fired = steps.velocity_of(k);
             // A pass that has played out has nothing to fade, and must
             // not replace a tail that is still fading.
             if self.player.sounding() {
