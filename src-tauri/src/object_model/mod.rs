@@ -100,6 +100,12 @@ pub const PATCH_LABEL: &str = "patch.label";
 pub const TRACK_PATCH: &str = "track.patch";
 /// A track's fader, 0 to `TRACK_GAIN_MAX` (epic 28).
 pub const TRACK_GAIN: &str = "track.gain";
+/// A track's mute and solo (epic 28, story c). Session state, not edits:
+/// the live tree never has them written. Saving writes them into a copy of
+/// the tree, and opening reads them back (`session.rs`), so they are the
+/// file's and never the history's.
+pub const TRACK_MUTE: &str = "track.mute";
+pub const TRACK_SOLO: &str = "track.solo";
 
 /// Played, not edited: a held button or a pedal writes them to the bank, and
 /// a document never stores them. The tape's gestures, on the arrangement's
@@ -642,8 +648,8 @@ pub fn kinds() -> Vec<KindDecl> {
         Some(1),
     );
 
-    // A track, with its fader and the patch it plays (epic 28). Every track
-    // plays while the transport runs; muting one is story c's.
+    // A track, with its fader, the patch it plays (epic 28) and its mute and
+    // solo, which only a saved file carries (`TRACK_MUTE`).
     let track = Track::default();
     let t = NodeType::new(TRACK)
         .in_categories(&[ARRANGEMENTS])
@@ -653,6 +659,8 @@ pub fn kinds() -> Vec<KindDecl> {
             float(TRACK_GAIN_DEFAULT),
         )
         .int("track.length", 4..=STEPS as i64, i64::from(track.length))
+        .bool(TRACK_MUTE, false)
+        .bool(TRACK_SOLO, false)
         .reference(TRACK_PATCH);
     push(
         checked(t, Under::Arrangement, |n| {

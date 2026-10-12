@@ -86,6 +86,8 @@ import {
   setTrackPatch,
   type Tracker,
   type TrackerEdit,
+  toggleTrackMute,
+  toggleTrackSolo,
   unlinkParam,
   wireMaterial,
 } from '@/audio';
@@ -164,6 +166,7 @@ export default function App() {
     block_us: 0,
     block_budget_us: 0,
     audio_allocs: 0,
+    mix: [],
   });
   /**
    * The grain scrollback. The Rust side drains — it hands over what has
@@ -864,6 +867,25 @@ export default function App() {
       setError(String(e));
     }
   };
+  // Mute and solo, per track (epic 28, story c). Session state, not edits:
+  // no undo step, no unsaved mark. While playing they land on the next bar;
+  // the poll shows a press still waiting.
+  const toggleMute = async (track: number) => {
+    try {
+      const mix = await toggleTrackMute(track);
+      setMeter((m) => ({ ...m, mix }));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const toggleSolo = async (track: number) => {
+    try {
+      const mix = await toggleTrackSolo(track);
+      setMeter((m) => ({ ...m, mix }));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   const newPatchRow = () => {
     // The panels read the new patch along `document-opened`.
     void newPatch()
@@ -965,6 +987,12 @@ export default function App() {
       case 'track.remove':
         if (mode === 'tracker' && canRemoveTrack) void removeTrackRow(selectedTrack);
         break;
+      case 'track.mute':
+        if (mode === 'tracker') void toggleMute(selectedTrack);
+        break;
+      case 'track.solo':
+        if (mode === 'tracker') void toggleSolo(selectedTrack);
+        break;
       case 'fx-remove':
         if (node?.fx) removeEffect(node);
         break;
@@ -991,6 +1019,8 @@ export default function App() {
     }
   };
   const commandTable = useCommandTable();
+  const selectedMute = meter.mix[selectedTrack]?.mute ?? false;
+  const selectedSolo = meter.mix[selectedTrack]?.solo ?? false;
   const bindings = useMemo(() => {
     const enabled: Record<string, boolean> = {
       'edit.rename': canRename,
@@ -998,14 +1028,35 @@ export default function App() {
       'edit.delete': canDelete,
       'track.add:melody': canAddTrack,
       'track.remove': mode === 'tracker' && canRemoveTrack,
+      'track.mute': mode === 'tracker',
+      'track.solo': mode === 'tracker',
+    };
+    // Checked as the selected track is pressed.
+    const pressed: Record<string, boolean> = {
+      'track.mute': mode === 'tracker' && selectedMute,
+      'track.solo': mode === 'tracker' && selectedSolo,
     };
     return Object.fromEntries(
       (commandTable ?? []).map((c) => [
         c.id,
-        { run: () => menuRef.current(c.id), enabled: enabled[c.id] ?? true },
+        {
+          run: () => menuRef.current(c.id),
+          enabled: enabled[c.id] ?? true,
+          pressed: pressed[c.id],
+        },
       ]),
     );
-  }, [commandTable, canRename, canDuplicate, canDelete, canAddTrack, canRemoveTrack, mode]);
+  }, [
+    commandTable,
+    canRename,
+    canDuplicate,
+    canDelete,
+    canAddTrack,
+    canRemoveTrack,
+    mode,
+    selectedMute,
+    selectedSolo,
+  ]);
   useCommands(bindings);
 
   // How many parameters follow each modulator, for the tree and the editors.
@@ -1126,6 +1177,9 @@ export default function App() {
             onPlays={(track, id) => void pickPlays(track, id)}
             onAddTrack={() => void addTrackRow()}
             onRemoveTrack={(i) => void removeTrackRow(i)}
+            mix={meter.mix}
+            onMute={(i) => void toggleMute(i)}
+            onSolo={(i) => void toggleSolo(i)}
             onSelectPatch={(id) => void selectPatchRow(id)}
             onNewPatch={newPatchRow}
             renaming={renaming}
@@ -1379,6 +1433,9 @@ export default function App() {
                           patchName={patches.find((p) => p.id === t.patch)?.name ?? ''}
                           gain={t.gain}
                           selected={selectedTrack === i && selection === null}
+                          mix={meter.mix[i]}
+                          onMute={() => void toggleMute(i)}
+                          onSolo={() => void toggleSolo(i)}
                           onSelect={() => void selectTrackRow(i)}
                           onGain={(gain) =>
                             void changeTracker({

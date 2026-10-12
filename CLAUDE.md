@@ -80,6 +80,12 @@ document's: every patch-scoped command acts on it (`patch_node(tree,
 current)`, `locate`) and the patch view shows it, but it never decides what
 plays. A selected patch no track plays loops on the last voice
 (`session::AUDITION`). Undo is rhizome's, one step per gesture.
+**Mute and solo are the one exception to the tree** (epic 28, story c): they
+are session state by track node (`Sent::mix`), never an edit, so a press is
+no undo step and no unsaved mark. `Session::save` writes them into a copy of
+the tree (`with_mix`) and saves that; `open` reads them back. Never write
+`track.mute` or `track.solo` into the live tree. The engine lands a press on
+the next bar (`shard_dsp::mix`; mute wins over solo).
 
 **The table is the patch, and the tracker is the level above it.** Tempo,
 swing and tracks of steps belong to the arrangement, not to a sound, so they are not

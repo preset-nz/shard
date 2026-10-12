@@ -31,25 +31,34 @@
 //! mix, as sound scaping did, on the last voice (`AUDITION`). There is no
 //! audition while all `VOICES` voices play tracks.
 //!
+//! **Mute and solo are session state, not edits** (story c). They live in
+//! `Sent::mix`, by track node, so they follow a track through a reorder, a
+//! removal and its undo. A press never touches the tree, so it is no undo
+//! step and leaves the unsaved mark alone, like a drum machine's. Saving
+//! writes them into a copy of the tree (`with_mix`), so the file carries
+//! them and the live tree and its history never do; opening reads them back.
+//! Each voice is handed its track's switches (`VoiceFeed::mix`), and the
+//! engine lands a change on the next bar.
+//!
 //! **Lock order:** `doc`, then `gesture`, then `sent`, then `decoded`, then `feeding`, then the
-//! engine's hand-off slots. Nothing here takes a controller lock; MIDI calls
+//! engine's hand-off slots. `pending` is a leaf, taken only under `doc`. Nothing here takes a controller lock; MIDI calls
 //! in with its own locks already released. Decoding a WAV never happens under
 //! `doc`: it happens before the edit that needs it.
 
 use std::collections::HashMap;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use rhizome_core::{Edit, GestureId, NodeId, On, Ref, Value};
-use rhizome_pom::{Document, FileStore, PresetRef};
+use rhizome_core::{Edit, GestureId, NodeId, On, Ref, Tree, Value};
+use rhizome_pom::{Document, FileStore, PresetRef, Store};
 use serde::Serialize;
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::StepBank;
-use shard_dsp::{Generator, ModSet, ParamBank, ReadingBank, StepParams, VOICES};
+use shard_dsp::{Generator, Mix, ModSet, ParamBank, ReadingBank, StepParams, VOICES};
 
 use crate::mapping::MapRef;
 use crate::materials::{self, Pool, Wires, DRONE_NAME};
@@ -89,6 +98,17 @@ pub struct VoiceFeed {
     /// Whether it plays. Stored after everything above, so a voice wakes on
     /// its own patch.
     pub active: AtomicBool,
+    /// Its track's mute and solo, as `Mix::bits`, which the engine lands on
+    /// the next bar.
+    pub mix: AtomicU8,
+    /// Counts the tracks that have arrived on this voice. When it moves, the
+    /// mix is placed at once rather than on the bar: the switches go with
+    /// their track.
+    pub placed: AtomicU32,
+    /// The mix the engine has applied, as `Mix::bits`, written by the audio
+    /// thread: what is heard, so the scene view can show a press still
+    /// waiting for its bar.
+    pub heard_mix: AtomicU8,
     /// A modulation set waiting for the audio thread, and one it gave back.
     pub mod_swap: Mutex<Option<ModSet>>,
     pub mod_retired: Mutex<Option<ModSet>>,
@@ -105,6 +125,9 @@ impl VoiceFeed {
             readings: ReadingBank::new(),
             gain: AtomicU32::new(TRACK_GAIN_DEFAULT.to_bits()),
             active: AtomicBool::new(false),
+            mix: AtomicU8::new(0),
+            placed: AtomicU32::new(0),
+            heard_mix: AtomicU8::new(0),
             mod_swap: Mutex::new(None),
             mod_retired: Mutex::new(None),
             swap: Mutex::new([None, None]),
@@ -181,6 +204,23 @@ struct Voiced {
     gain: f32,
 }
 
+/// A track's mute and solo, as the session holds them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct TrackMix {
+    pub mute: bool,
+    pub solo: bool,
+}
+
+/// A track's mute and solo as pressed, and as the engine applies them: they
+/// differ while a press waits for its bar.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
+pub struct MixState {
+    pub mute: bool,
+    pub solo: bool,
+    pub heard_mute: bool,
+    pub heard_solo: bool,
+}
+
 /// The plan the engine was handed, what each voice was, and what the scene
 /// view has selected.
 struct Sent {
@@ -188,6 +228,13 @@ struct Sent {
     voices: [Voiced; VOICES],
     /// The track selected in the scene view, or none with a patch selected.
     selected_track: Option<usize>,
+    /// Every track's node, in the arrangement's order.
+    tracks: Vec<NodeId>,
+    /// Mute and solo by track node. Kept for a removed track, so undoing
+    /// the removal brings its switches back; emptied only by open and new.
+    mix: HashMap<NodeId, TrackMix>,
+    /// The track each voice was last handed the switches of.
+    voice_tracks: [Option<NodeId>; VOICES],
 }
 
 /// What a load could not take as written. Surfaced rather than logged, because
@@ -233,6 +280,23 @@ pub struct ApplyReport {
     pub refused: Vec<Refused>,
 }
 
+/// The session's files: plain files, written atomically as `FileStore`
+/// writes them, except that a save hands over the text to write in place of
+/// the live tree's, the tree with its mutes and solos (`Session::save`).
+/// Shared with the session, which sets the text just before saving.
+struct MixedStore(Arc<Mutex<Option<String>>>);
+
+impl Store for MixedStore {
+    fn read(&self, path: &Path) -> std::io::Result<String> {
+        FileStore.read(path)
+    }
+
+    fn write(&mut self, path: &Path, text: &str) -> std::io::Result<()> {
+        let mixed = lock(&self.0).take();
+        FileStore.write(path, mixed.as_deref().unwrap_or(text))
+    }
+}
+
 /// A gesture rhizome has open, and the envelope it edits.
 struct Open {
     id: GestureId,
@@ -260,6 +324,9 @@ pub struct Session {
     /// Told after every edit, undo, redo, open, new and save, with every lock
     /// released: the menu's Undo title and the window's unsaved mark follow.
     changed: OnceLock<Box<dyn Fn() + Send + Sync>>,
+    /// The text the next save writes, the tree with its mutes and solos
+    /// (`MixedStore`).
+    pending: Arc<Mutex<Option<String>>>,
 }
 
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -282,13 +349,17 @@ fn name_of(id: &str) -> &'static str {
 impl Session {
     /// A new session at its defaults, handed to the engine whole.
     pub fn new(feeds: Feeds, drone: Arc<Loaded>, sample_rate: f32) -> Result<Self, String> {
-        let doc = Document::<Shard>::new(FileStore).map_err(err)?;
+        let pending = Arc::new(Mutex::new(None));
+        let doc = Document::<Shard>::new(MixedStore(Arc::clone(&pending))).map_err(err)?;
         let session = Self {
             doc: Mutex::new(doc),
             sent: Mutex::new(Sent {
                 plan: Plan::default(),
                 voices: std::array::from_fn(|_| Voiced::default()),
                 selected_track: None,
+                tracks: Vec::new(),
+                mix: HashMap::new(),
+                voice_tracks: [None; VOICES],
             }),
             decoded: Mutex::new([(None, drone)].into()),
             feeding: Mutex::new(std::array::from_fn(|_| [None, None])),
@@ -297,6 +368,7 @@ impl Session {
             gesture: Mutex::new(None),
             untitled: AtomicU32::new(1),
             changed: OnceLock::new(),
+            pending,
         };
         session.sync(&lock(&session.doc), true);
         Ok(session)
@@ -348,6 +420,8 @@ impl Session {
             self.hand(i, &want, &sent.voices[i], all, materials, &plan.pool);
             sent.voices[i] = want;
         }
+        sent.tracks = om::tracks(doc.tree()).iter().map(|t| t.id()).collect();
+        self.hand_mix(&mut sent, all);
         let shown = sent
             .voices
             .iter()
@@ -386,6 +460,36 @@ impl Session {
         }
         if all || was.patch.is_none() {
             feed.active.store(true, Ordering::Release);
+        }
+    }
+
+    /// Every voice's mute and solo: track *i*'s on voice *i*, and the
+    /// audition loop, which is no track, safe from solos. A voice whose track
+    /// changed (or every voice, with `all`) has its switches placed at once;
+    /// otherwise the engine lands the change on the bar.
+    fn hand_mix(&self, sent: &mut Sent, all: bool) {
+        for i in 0..VOICES {
+            let track = sent.tracks.get(i).copied();
+            let mix = match track {
+                Some(t) => {
+                    let m = sent.mix.get(&t).copied().unwrap_or_default();
+                    Mix {
+                        mute: m.mute,
+                        solo: m.solo,
+                        solo_safe: false,
+                    }
+                }
+                None => Mix {
+                    solo_safe: true,
+                    ..Mix::default()
+                },
+            };
+            let feed = &self.feeds.voices.voice[i];
+            feed.mix.store(mix.bits(), Ordering::Release);
+            if all || sent.voice_tracks[i] != track {
+                feed.placed.fetch_add(1, Ordering::Release);
+                sent.voice_tracks[i] = track;
+            }
         }
     }
 
@@ -779,6 +883,73 @@ impl Session {
             self.changed();
         }
         Ok(moved)
+    }
+
+    // Mute and solo.
+
+    /// Every track's mute and solo, in order, as pressed and as heard.
+    pub fn mix(&self) -> Vec<MixState> {
+        let sent = lock(&self.sent);
+        sent.tracks
+            .iter()
+            .enumerate()
+            .map(|(i, t)| {
+                let m = sent.mix.get(t).copied().unwrap_or_default();
+                let heard = self
+                    .feeds
+                    .voices
+                    .voice
+                    .get(i)
+                    .map(|v| Mix::from_bits(v.heard_mix.load(Ordering::Acquire)))
+                    .unwrap_or_default();
+                MixState {
+                    mute: m.mute,
+                    solo: m.solo,
+                    heard_mute: heard.mute,
+                    heard_solo: heard.solo,
+                }
+            })
+            .collect()
+    }
+
+    /// Mutes or unmutes track `track`, from the next bar while playing. Not
+    /// an edit: no undo step, no unsaved mark.
+    pub fn set_mute(&self, track: usize, on: bool) -> Result<Vec<MixState>, String> {
+        self.set_mix(track, |m| m.mute = on)
+    }
+
+    /// Solos or unsolos track `track`, the same way. Any soloed track
+    /// silences the tracks that are not; a muted track stays muted.
+    pub fn set_solo(&self, track: usize, on: bool) -> Result<Vec<MixState>, String> {
+        self.set_mix(track, |m| m.solo = on)
+    }
+
+    /// Flips track `track`'s mute: what a click, a key and the menu send, so
+    /// a press always undoes the one before, whatever the webview last read.
+    pub fn toggle_mute(&self, track: usize) -> Result<Vec<MixState>, String> {
+        self.set_mix(track, |m| m.mute = !m.mute)
+    }
+
+    /// Flips track `track`'s solo, the same way.
+    pub fn toggle_solo(&self, track: usize) -> Result<Vec<MixState>, String> {
+        self.set_mix(track, |m| m.solo = !m.solo)
+    }
+
+    fn set_mix(
+        &self,
+        track: usize,
+        f: impl FnOnce(&mut TrackMix),
+    ) -> Result<Vec<MixState>, String> {
+        {
+            let mut sent = lock(&self.sent);
+            let node = *sent
+                .tracks
+                .get(track)
+                .ok_or_else(|| format!("there is no track {}", track + 1))?;
+            f(sent.mix.entry(node).or_default());
+            self.hand_mix(&mut sent, false);
+        }
+        Ok(self.mix())
     }
 
     // Modulation.
@@ -1492,8 +1663,22 @@ impl Session {
     // Files.
 
     /// Writes the session to `path` in rhizome's format, and remembers it.
+    /// The file carries every track's mute and solo, written into a copy of
+    /// the tree (`with_mix`): the live tree and its history never see them,
+    /// and saving marks the session saved as ever.
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let saved = lock(&self.doc).save_as(path).map_err(err);
+        let saved = (|| {
+            let mut doc = lock(&self.doc);
+            let text = {
+                let sent = lock(&self.sent);
+                with_mix(doc.tree(), &sent.mix)?
+            };
+            *lock(&self.pending) = Some(text);
+            let saved = doc.save_as(path).map_err(err);
+            // Never left for a later save: a failed write leaves it unused.
+            lock(&self.pending).take();
+            saved
+        })();
         self.changed();
         saved
     }
@@ -1515,10 +1700,11 @@ impl Session {
     /// Replaces the session with a new one at its defaults, `Untitled-{n}`,
     /// with an empty history. Decoded materials stay cached.
     pub fn new_document(&self, untitled: u32) -> Result<(), String> {
-        let fresh = Document::<Shard>::new(FileStore).map_err(err)?;
+        let fresh = Document::<Shard>::new(self.store()).map_err(err)?;
         {
             let mut doc = lock(&self.doc);
             *doc = fresh;
+            lock(&self.sent).mix.clear();
             // A gesture belonged to the document it was opened on.
             lock(&self.gesture).take();
             self.untitled.store(untitled, Ordering::Relaxed);
@@ -1533,7 +1719,7 @@ impl Session {
     /// document. A file in the old JSON format is refused with rhizome's own
     /// error.
     pub fn open(&self, path: &Path) -> Result<LoadReport, String> {
-        let (doc, load) = Document::<Shard>::open(FileStore, path).map_err(err)?;
+        let (doc, load) = Document::<Shard>::open(self.store(), path).map_err(err)?;
         let pool = doc.projection().pool.clone();
         for m in &pool.materials {
             // A file that has gone is simply absent from the cache.
@@ -1568,11 +1754,58 @@ impl Session {
             let mut current = lock(&self.doc);
             *current = doc;
             lock(&self.gesture).take();
+            // The mutes and solos the file was saved with. The live tree keeps
+            // them as loaded and nothing reads them there again: the next save
+            // writes the session's over them.
+            lock(&self.sent).mix = read_mix(current.tree());
             self.sync(&current, true);
         }
         self.changed();
         Ok(report)
     }
+
+    /// The store every document of this session saves through.
+    fn store(&self) -> MixedStore {
+        MixedStore(Arc::clone(&self.pending))
+    }
+}
+
+/// `tree`'s text with every track's mute and solo from `mix` written in, for
+/// the file. Written into a copy loaded from the tree's own text, matched by
+/// place in the arrangement's order, so the tree itself is never touched.
+fn with_mix(tree: &Tree, mix: &HashMap<NodeId, TrackMix>) -> Result<String, String> {
+    let (mut copy, _) = Tree::load(&tree.serialise(), tree.registry().clone()).map_err(err)?;
+    let want: Vec<TrackMix> = om::tracks(tree)
+        .iter()
+        .map(|t| mix.get(&t.id()).copied().unwrap_or_default())
+        .collect();
+    let nodes: Vec<NodeId> = om::tracks(&copy).iter().map(|t| t.id()).collect();
+    copy.edit("Mute and solo", |tx| {
+        for (node, m) in nodes.iter().zip(&want) {
+            tx.set_value(*node, om::TRACK_MUTE, Value::Bool(m.mute))?;
+            tx.set_value(*node, om::TRACK_SOLO, Value::Bool(m.solo))?;
+        }
+        Ok(())
+    })
+    .map_err(err)?;
+    Ok(copy.serialise())
+}
+
+/// Every track's mute and solo as `tree` holds them: as a file was saved.
+fn read_mix(tree: &Tree) -> HashMap<NodeId, TrackMix> {
+    om::tracks(tree)
+        .iter()
+        .map(|t| {
+            let on = |key| t.value(key) == Some(Value::Bool(true));
+            (
+                t.id(),
+                TrackMix {
+                    mute: on(om::TRACK_MUTE),
+                    solo: on(om::TRACK_SOLO),
+                },
+            )
+        })
+        .collect()
 }
 
 /// What every voice should play: track *i* on voice *i*, its patch, steps

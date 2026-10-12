@@ -14,8 +14,8 @@ use preset_math::Basis;
 use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
-    adsr_curve, Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, ModSet, ParamBank, Reading, Shape,
-    StepParams, Taper, PARAMS, VOICES,
+    adsr_curve, Engine, EnvSpec, Generator, GrainSpawn, LfoSpec, Mix, ModSet, ParamBank, Reading,
+    Shape, StepParams, Taper, PARAMS, VOICES,
 };
 
 #[global_allocator]
@@ -710,6 +710,24 @@ fn every_voice_playing_never_touches_the_allocator() {
                 "arrangement.tape.reverse",
                 if block % 400 > 330 { 1.0 } else { 0.0 },
             );
+            // Mutes and solos pressed, cancelled and landing on the bars,
+            // a track's switches placed when it moves voice, and the applied
+            // mix read back for the scene view.
+            for i in 0..VOICES {
+                let m = Mix {
+                    mute: (block / (13 + i)) % 3 == 0,
+                    solo: (block / (29 + i)) % 5 == 0,
+                    solo_safe: i == VOICES - 1,
+                };
+                if block % 170 == 90 + i {
+                    e.place_voice_mix(i, m);
+                } else {
+                    e.set_voice_mix(i, m);
+                }
+                black_box(e.voice_mix(i));
+                black_box(e.voice_audible(i));
+            }
+            black_box(e.kit_audible());
             // Every voice's fader moving, and what the shown voice heard,
             // where it is and how many grains it has, as the host reads them.
             for i in 0..VOICES {

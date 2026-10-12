@@ -1,6 +1,7 @@
 import { Icons } from '@preset.nz/ux-kit';
 import { type ReactNode, useRef, useState } from 'react';
-import { MAX_TRACKS, type PatchInfo, type Track } from '@/audio';
+import { audible, MAX_TRACKS, type MixState, type PatchInfo, type Track } from '@/audio';
+import { MixSwitch } from '@/components/MixSwitch';
 import { PlaysPicker } from '@/components/PlaysPicker';
 import {
   ContextMenu,
@@ -27,8 +28,13 @@ import {
  * it. Moving the cursor does not select, because selecting a patch changes
  * what you hear. Return on the patch already selected renames it, as Return
  * on a selected item does in the Finder, and so does a double-click. Delete
- * takes the track or patch under the cursor, when it may go. Right-click a
- * patch for Rename, Duplicate and Delete, a track for Remove.
+ * takes the track or patch under the cursor, when it may go. M and S mute
+ * and solo the track under it. Right-click a patch for Rename, Duplicate and
+ * Delete, a track for Mute, Solo and Remove.
+ *
+ * Each track has M and S switches (story c). A press lands on the next bar
+ * while playing, and blinks until it does; a track not heard is dimmed. They
+ * are session state, not edits.
  */
 export function SceneView({
   tracks,
@@ -40,6 +46,9 @@ export function SceneView({
   onPlays,
   onAddTrack,
   onRemoveTrack,
+  mix,
+  onMute,
+  onSolo,
   onNewPatch,
   renaming,
   onRenaming,
@@ -62,6 +71,11 @@ export function SceneView({
   onAddTrack: () => void;
   /** Only offered while there is more than one track. */
   onRemoveTrack: (track: number) => void;
+  /** Every track's mute and solo, pressed and heard, in order. */
+  mix: MixState[];
+  /** Toggle track `track`'s mute or solo. */
+  onMute: (track: number) => void;
+  onSolo: (track: number) => void;
   onNewPatch: () => void;
   /** The patch whose name is being edited in place, by id. */
   renaming: number | null;
@@ -131,6 +145,17 @@ export function SceneView({
       }}
       onKeyDown={(e) => {
         if (e.metaKey || e.ctrlKey || e.altKey || e.shiftKey) return;
+        // M and S on a track row, only with the panel itself focused: never
+        // from a field or a picker inside it.
+        if ((e.code === 'KeyM' || e.code === 'KeyS') && e.target === navRef.current) {
+          if (here >= t) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.repeat) return;
+          if (e.code === 'KeyM') onMute(here);
+          else onSolo(here);
+          return;
+        }
         if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
           e.preventDefault();
           setCursor(Math.max(0, Math.min(rowCount - 1, here + (e.key === 'ArrowDown' ? 1 : -1))));
@@ -196,21 +221,52 @@ export function SceneView({
             <ContextMenuTrigger render={<div className={rowClass(i, selectedTrack === i)} />}>
               <button
                 type="button"
-                title="Show this track's steps"
+                title={
+                  audible(mix, i)
+                    ? "Show this track's steps"
+                    : "Show this track's steps. Not heard: muted, or another track is soloed."
+                }
                 onMouseDown={focusPanel}
                 onClick={() => selectRow(i)}
-                className="min-w-0 flex-1 truncate text-left"
+                className={`min-w-0 flex-1 truncate text-left ${audible(mix, i) ? '' : 'opacity-50'}`}
               >
                 Track {i + 1}
               </button>
+              <MixSwitch
+                letter="M"
+                verb="Mute"
+                track={i}
+                on={mix[i]?.mute ?? false}
+                heard={mix[i]?.heard_mute ?? false}
+                chord="⌃M"
+                onMouseDown={focusPanel}
+                onToggle={() => onMute(i)}
+              />
+              <MixSwitch
+                letter="S"
+                verb="Solo"
+                track={i}
+                on={mix[i]?.solo ?? false}
+                heard={mix[i]?.heard_solo ?? false}
+                chord="⌃S"
+                onMouseDown={focusPanel}
+                onToggle={() => onSolo(i)}
+              />
               <PlaysPicker
                 patches={patches}
                 value={track.patch}
                 onPick={(id) => onPlays(i, id)}
-                className="w-[5.5rem]"
+                className="w-[4.75rem]"
               />
             </ContextMenuTrigger>
             <ContextMenuContent className="w-48" finalFocus={false}>
+              <ContextMenuItem onClick={() => onMute(i)}>
+                {mix[i]?.mute ? 'Unmute' : 'Mute'} Track {i + 1}
+              </ContextMenuItem>
+              <ContextMenuItem onClick={() => onSolo(i)}>
+                {mix[i]?.solo ? 'Unsolo' : 'Solo'} Track {i + 1}
+              </ContextMenuItem>
+              <ContextMenuSeparator />
               <ContextMenuItem disabled={!removable} onClick={() => onRemoveTrack(i)}>
                 Remove Track {i + 1}
               </ContextMenuItem>

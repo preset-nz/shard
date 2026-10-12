@@ -22,7 +22,7 @@ use serde::Serialize;
 use shard_dsp::arrangement;
 use shard_dsp::params::{ParamDef, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
-use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, ModSet, ParamBank, VOICES};
+use shard_dsp::{Engine, Generator, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, VOICES};
 
 mod controllers;
 mod document;
@@ -32,6 +32,8 @@ mod mapping;
 mod materials;
 mod menu;
 mod midi;
+#[cfg(test)]
+mod mix_tests;
 mod modulation;
 pub mod object_model;
 #[cfg(test)]
@@ -156,6 +158,9 @@ pub struct Meters {
     /// Allocator calls inside the audio callback since launch. Debug builds
     /// only; a release build has no guard and reports zero.
     pub audio_allocs: u64,
+    /// Each track's mute and solo, as pressed and as heard, in the tracks'
+    /// order. They differ while a press waits for its bar.
+    pub mix: Vec<session::MixState>,
 }
 
 /// One logged grain, on its way to the UI. Mirrors `shard_dsp::GrainSpawn`,
@@ -357,6 +362,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         playhead: f32::from_bits(state.playhead.load(Ordering::Relaxed)),
         auditioning: state.auditioning.load(Ordering::Relaxed),
         reversing: state.reversing.load(Ordering::Relaxed),
+        mix: state.session.mix(),
     }
 }
 
@@ -789,6 +795,24 @@ fn select_track(
 #[tauri::command]
 fn add_track(state: tauri::State<'_, Audio>) -> Result<usize, String> {
     state.session.add_track()
+}
+
+/// Mutes or unmutes a track, on the next bar while playing. Not an edit.
+#[tauri::command]
+fn toggle_track_mute(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+) -> Result<Vec<session::MixState>, String> {
+    state.session.toggle_mute(track)
+}
+
+/// Solos or unsolos a track, on the next bar while playing. Not an edit.
+#[tauri::command]
+fn toggle_track_solo(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+) -> Result<Vec<session::MixState>, String> {
+    state.session.toggle_solo(track)
 }
 
 /// Remove Track: one step of Undo, "Remove Track 2". Refused for the last.
@@ -1539,6 +1563,8 @@ impl Audio {
 pub(crate) struct Held {
     retiring: [SourceSlots; VOICES],
     mods: [Option<ModSet>; VOICES],
+    /// Each voice's `VoiceFeed::placed` as last seen.
+    placed: [u32; VOICES],
 }
 
 impl Held {
@@ -1546,14 +1572,15 @@ impl Held {
         Self {
             retiring: std::array::from_fn(|_| [None, None]),
             mods: std::array::from_fn(|_| None),
+            placed: [0; VOICES],
         }
     }
 }
 
 /// One block's hand-offs from the session's feeds into the engine, voice by
 /// voice: buffers and sets given back, new materials (once the voice is
-/// silent) and modulation taken, then the steps, readings and fader, and last
-/// whether it plays; then the transport and the arrangement. Locks are only ever tried: a slot the
+/// silent) and modulation taken, then the steps, readings, fader and mix,
+/// and last whether it plays; then the transport and the arrangement. Locks are only ever tried: a slot the
 /// command thread holds this block is taken on the next.
 pub(crate) fn hand_over(
     engine: &mut Engine,
@@ -1612,6 +1639,17 @@ pub(crate) fn hand_over(
         let (player, grain) = feed.readings.load();
         engine.set_voice_readings(i, player, grain);
         engine.set_voice_gain(i, feed.gain());
+        // Mute and solo: a press lands on the next bar; a track arriving on
+        // the voice brings its switches at once. Before the switch, so a
+        // voice wakes with its gate where its track has it.
+        let placed = feed.placed.load(Ordering::Acquire);
+        let mix = Mix::from_bits(feed.mix.load(Ordering::Acquire));
+        if placed != held.placed[i] {
+            held.placed[i] = placed;
+            engine.place_voice_mix(i, mix);
+        } else {
+            engine.set_voice_mix(i, mix);
+        }
         let active = feed.active.load(Ordering::Acquire) && !parked;
         if active != engine.voice_active(i) {
             engine.set_voice_active(i, active);
@@ -1623,11 +1661,15 @@ pub(crate) fn hand_over(
     engine.set_arrangement(arrangement, false);
 }
 
-/// One block of every voice into `out`, and what the voice playing the
-/// current patch heard into `heard`.
+/// One block of every voice into `out`, what the voice playing the current
+/// patch heard into `heard`, and every voice's applied mix.
 pub(crate) fn render(engine: &mut Engine, voices: &Voices, heard: &ParamBank, out: &mut [f32]) {
     let banks: [&ParamBank; VOICES] = std::array::from_fn(|i| &voices.voice[i].bank);
     engine.process_voices(out, &banks);
+    for (i, feed) in voices.voice.iter().enumerate() {
+        feed.heard_mix
+            .store(engine.voice_mix(i).bits(), Ordering::Release);
+    }
     if let Some(i) = voices.shown() {
         engine.publish_voice_heard(i, &voices.voice[i].bank, heard);
     }
@@ -1987,6 +2029,8 @@ pub fn run() {
             select_track,
             add_track,
             remove_track,
+            toggle_track_mute,
+            toggle_track_solo,
             set_track_patch,
             rename_patch,
             delete_patch,
@@ -2109,6 +2153,7 @@ mod tests {
             block_us: 0,
             block_budget_us: 0,
             audio_allocs: 0,
+            mix: vec![session::MixState::default()],
         })
         .expect("Meters is serialisable");
         for key in [
@@ -2124,8 +2169,13 @@ mod tests {
             "block_us",
             "block_budget_us",
             "audio_allocs",
+            "mix",
         ] {
             assert!(meters.get(key).is_some(), "Meters lost `{key}`");
+        }
+        let mix = &meters["mix"][0];
+        for key in ["mute", "solo", "heard_mute", "heard_solo"] {
+            assert!(mix.get(key).is_some(), "MixState lost `{key}`");
         }
 
         let tracker =

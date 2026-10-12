@@ -42,6 +42,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     // Logic's New Tracks chord. Remove Track has none: every Cmd+Backspace
     // is taken (Remove Effect, Clear Bar) or would be stolen from text fields.
     (TRACK_ADD_MELODY, "CmdOrCtrl+Alt+N"),
+    // Logic's Mute Track and Solo Track: Control, not Command, so Minimise
+    // and Save keep theirs.
+    ("track.mute", "Ctrl+M"),
+    ("track.solo", "Ctrl+S"),
     ("fx-remove", "CmdOrCtrl+Shift+Backspace"),
     ("fx-earlier", "CmdOrCtrl+Alt+Up"),
     ("fx-later", "CmdOrCtrl+Alt+Down"),
@@ -59,8 +63,16 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
 
 /// A command with its accelerator from `SHORTCUTS`, if it has one.
 fn item(id: &str, label: &str) -> Command {
-    let c = Command::item(id, label);
-    match SHORTCUTS.iter().find(|(i, _)| *i == id) {
+    with_shortcut(Command::item(id, label))
+}
+
+/// A check item, unchecked to start with, the same way.
+fn toggle(id: &str, label: &str) -> Command {
+    with_shortcut(Command::toggle(id, label).unchecked())
+}
+
+fn with_shortcut(c: Command) -> Command {
+    match SHORTCUTS.iter().find(|(i, _)| *i == c.id()) {
         Some((_, accelerator)) => c.accelerator(accelerator),
         None => c,
     }
@@ -110,6 +122,10 @@ pub fn commands() -> Vec<Command> {
         // the last one. Before Pattern, which edits the selected track.
         track(TRACK_ADD_MELODY, "Melody", 0).submenu("Add Track"),
         track("track.remove", "Remove Track", 1),
+        // Mute and solo the selected track, checked as it is pressed. They
+        // land on the next bar, and are not edits (story c).
+        toggle("track.mute", "Mute").domain("Track").section(2),
+        toggle("track.solo", "Solo").domain("Track").section(2),
         // The tracker's bar commands, on the step last focused.
         pattern("pattern-copy", "Copy Bar", 0),
         pattern("pattern-paste", "Paste Bar", 0),

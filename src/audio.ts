@@ -55,6 +55,29 @@ export interface Meters {
    * builds only; a release build has no guard and always reports zero.
    */
   audio_allocs: number;
+  /** Each track's mute and solo, in the tracks' order, as pressed and as heard. */
+  mix: MixState[];
+}
+
+/**
+ * A track's mute and solo. `mute` and `solo` are what was pressed;
+ * `heard_mute` and `heard_solo` what the engine applies. They differ while a
+ * press waits for the next bar. Mute wins: a muted track is silent even when
+ * soloed, and any solo silences every track not soloed.
+ */
+export interface MixState {
+  mute: boolean;
+  solo: boolean;
+  heard_mute: boolean;
+  heard_solo: boolean;
+}
+
+/** Whether track `i` is heard under the applied mutes and solos. */
+export function audible(mix: MixState[], i: number): boolean {
+  const m = mix[i];
+  if (!m) return true;
+  const anySolo = mix.some((x) => x.heard_solo);
+  return !m.heard_mute && (m.heard_solo || !anySolo);
 }
 
 export interface SourceInfo {
@@ -168,6 +191,17 @@ export const selectTrack = (track: number) => invoke<void>('select_track', { tra
 export const addTrack = () => invoke<number>('add_track');
 /** Remove Track: one step of Undo, "Remove Track 2". Refused for the last track. */
 export const removeTrack = (track: number) => invoke<void>('remove_track', { track });
+/**
+ * Mutes a track, or unmutes it: on the next bar while playing and at once
+ * while stopped. Flipped in Rust, so a second press before the bar always
+ * cancels the first. Not an edit: no undo step, and the session stays saved.
+ * Saved with the session all the same. Answers every track's mix.
+ */
+export const toggleTrackMute = (track: number) =>
+  invoke<MixState[]>('toggle_track_mute', { track });
+/** Solos a track, or unsolos it, the same way. */
+export const toggleTrackSolo = (track: number) =>
+  invoke<MixState[]>('toggle_track_solo', { track });
 
 /**
  * The patch a track plays (its *Plays* picker). One step of Undo, "Set

@@ -19,6 +19,15 @@
 //! read the same position each frame, so their step ones land on the same
 //! sample and "the next bar" means one thing (`bar`).
 //!
+//! **Mute and solo** (`mix.rs`): each voice has its mix switches and a gate
+//! after its fader. The host says what it wants (`set_voice_mix`); while the
+//! transport runs a change lands on the first sample of the next bar, and
+//! while it does not, at once. The gate ramps over `mix::GATE_MS`, so a
+//! landing never clicks: silencing fades over the gate's length *before* the
+//! bar line and is silent from it, so the downbeat's note never sounds
+//! through the fade; bringing back fades in from the bar line. Any solo silences the kit too, until drums are
+//! tracks with switches of their own (story d).
+//!
 //! **One tape.** Brake and rewind are the arrangement's rows
 //! (`arrangement.tape.brake`, `arrangement.tape.reverse`), and slow every
 //! voice, the kit and the transport together (Georg, 2026-10-12). The slew
@@ -35,11 +44,12 @@ use crate::chain::{Chain, ChainParams, ChainSlots};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::kit::{Kit, KitClock, KitParams, KitPattern, VOICES as KIT_VOICES};
 use crate::limiter::{Limiter, LimiterParams};
+use crate::mix::{gate_frames, Gate, Mix};
 use crate::modulation::ModSet;
 use crate::params::ParamBank;
 use crate::smooth::OnePole;
 use crate::sources::{Generator, Reading};
-use crate::steps::{StepParams, Transport};
+use crate::steps::{StepParams, Transport, BAR};
 use crate::voice::{tape_gain, Tape, Voice};
 
 /// How many voices the engine holds: the most melody tracks that can play at
@@ -203,6 +213,22 @@ pub struct Engine {
     /// (`set_voice_gain`) and where the glide has got to.
     gain_targets: [f32; VOICES],
     gains: [OnePole; VOICES],
+    /// Each voice's mix switches: what the host wants, what is applied (the
+    /// next bar line copies one onto the other), whether that is heard, and
+    /// the gate carrying it.
+    mix_wanted: [Mix; VOICES],
+    mix: [Mix; VOICES],
+    audible: [bool; VOICES],
+    /// Who will be heard once the wanted mix lands, and the kit likewise:
+    /// the gates' targets for the last stretch before the bar.
+    wanted_audible: [bool; VOICES],
+    kit_wanted: bool,
+    /// The gate's length in frames: how far before the bar silencing starts.
+    gate_frames: f64,
+    gates: [Gate; VOICES],
+    /// The kit's gate: silent while any voice is soloed.
+    kit_audible: bool,
+    kit_gate: Gate,
     /// The drum kit beside the voices, its grid, its place in its own loop,
     /// and its fader. See `kit.rs`.
     kit: Kit,
@@ -245,6 +271,15 @@ impl Engine {
             arr,
             gain_targets: [arrangement::TRACK_GAIN_DEFAULT; VOICES],
             gains,
+            mix_wanted: [Mix::default(); VOICES],
+            mix: [Mix::default(); VOICES],
+            audible: [true; VOICES],
+            wanted_audible: [true; VOICES],
+            kit_wanted: true,
+            gate_frames: gate_frames(sample_rate) as f64,
+            gates: [Gate::new(sample_rate); VOICES],
+            kit_audible: true,
+            kit_gate: Gate::new(sample_rate),
             kit: Kit::new(sample_rate),
             kit_pattern: steps.kit,
             kit_clock: KitClock::default(),
@@ -263,8 +298,10 @@ impl Engine {
     /// where it is skipped whole. At a block boundary, like every hand-off.
     pub fn set_voice_active(&mut self, i: usize, on: bool) {
         if on && self.voices[i].idle() {
-            // Woken clean, its fader already where its track has it.
+            // Woken clean, its fader and its gate already where its track
+            // has them.
             self.gains[i].reset(self.gain_targets[i]);
+            self.gates[i].reset(self.audible[i]);
         }
         self.voices[i].set_active(on);
     }
@@ -277,6 +314,70 @@ impl Engine {
         } else {
             arrangement::TRACK_GAIN_DEFAULT
         };
+    }
+
+    /// Voice `i`'s mute and solo, as the host wants them. Once a block is
+    /// enough. While the transport runs, the change lands on the first sample
+    /// of the next bar, for every voice at once, and wanting the applied
+    /// state again before then cancels it. While it does not run (stopped,
+    /// or the steps off) it applies at once.
+    pub fn set_voice_mix(&mut self, i: usize, mix: Mix) {
+        self.mix_wanted[i] = mix;
+        if !self.transport.running() && self.mix[i] != mix {
+            self.mix[i] = mix;
+            self.resolve_mix();
+        }
+    }
+
+    /// Voice `i`'s mix, applied at once rather than on the bar: for a track
+    /// arriving on the voice (a track removed before it, an undo, a file
+    /// opened), whose switches go with it. The gate still ramps.
+    pub fn place_voice_mix(&mut self, i: usize, mix: Mix) {
+        self.mix_wanted[i] = mix;
+        if self.mix[i] != mix {
+            self.mix[i] = mix;
+            self.resolve_mix();
+        }
+    }
+
+    /// Voice `i`'s mix as applied: what is heard, or fading towards it.
+    pub fn voice_mix(&self, i: usize) -> Mix {
+        self.mix[i]
+    }
+
+    /// Whether voice `i` is heard under the applied mutes and solos.
+    pub fn voice_audible(&self, i: usize) -> bool {
+        self.audible[i]
+    }
+
+    /// Whether the kit is heard: not while any voice is soloed.
+    pub fn kit_audible(&self) -> bool {
+        self.kit_audible
+    }
+
+    /// Every wanted mix applied: on a bar line.
+    #[inline]
+    fn land_mix(&mut self) {
+        if self.mix != self.mix_wanted {
+            self.mix = self.mix_wanted;
+            self.resolve_mix();
+        }
+    }
+
+    /// Who is heard under the applied mix. While stopped the gates jump
+    /// there, since nothing is sounding to click.
+    fn resolve_mix(&mut self) {
+        let any_solo = self.mix.iter().any(|m| m.solo);
+        for (a, m) in self.audible.iter_mut().zip(&self.mix) {
+            *a = m.audible(any_solo);
+        }
+        self.kit_audible = !any_solo;
+        if !self.playing {
+            for (g, a) in self.gates.iter_mut().zip(&self.audible) {
+                g.reset(*a);
+            }
+            self.kit_gate.reset(self.kit_audible);
+        }
     }
 
     /// Whether voice `i` is switched in. A voice switched out may still be
@@ -441,6 +542,9 @@ impl Engine {
         self.kit.reset();
         self.kit_clock.reset();
         self.playing = playing;
+        // A mute still waiting for its bar lands now: stopped, there is none.
+        self.mix = self.mix_wanted;
+        self.resolve_mix();
     }
 
     /// Start voice 0's pass again from the top, with nothing of the last one
@@ -560,6 +664,19 @@ impl Engine {
         if self.transport.begin_block() {
             self.kit_clock.reset();
         }
+        // No bar to wait for while the steps are off.
+        if !self.transport.running() {
+            self.land_mix();
+        }
+        // A change waiting for its bar: who will be heard once it lands.
+        let waiting = self.mix != self.mix_wanted;
+        if waiting {
+            let any_solo = self.mix_wanted.iter().any(|m| m.solo);
+            for (w, m) in self.wanted_audible.iter_mut().zip(&self.mix_wanted) {
+                *w = m.audible(any_solo);
+            }
+            self.kit_wanted = !any_solo;
+        }
         let frames = out.len() / 2;
         // The voices that play this block. One that goes idle does so at
         // the end of a block, so this holds for every frame of it.
@@ -599,6 +716,14 @@ impl Engine {
             // This frame's place, read by every voice and the kit before the
             // transport moves on.
             let beat = *self.transport.beat();
+            // The last gate's length before a bar line a change waits for:
+            // whatever will be silent from the bar fades out now, so it is
+            // silent on the downbeat. Only bringing back waits for the bar.
+            let closing = waiting
+                && self.mix != self.mix_wanted
+                && self.transport.running()
+                && beat.step % BAR == BAR - 1
+                && f64::from(beat.len) - beat.offset <= self.gate_frames * f64::from(speed.abs());
             // Each voice through its track's fader. The patch alone hears
             // every voice at unity, and the glide carries the change.
             let (mut l, mut r) = (0.0, 0.0);
@@ -609,7 +734,8 @@ impl Engine {
                 } else {
                     self.gain_targets[i]
                 };
-                let g = self.gains[i].process(want);
+                let heard = self.audible[i] && (!closing || self.wanted_audible[i]);
+                let g = self.gains[i].process(want) * self.gates[i].process(heard);
                 l += vl * g;
                 r += vr * g;
             }
@@ -626,7 +752,11 @@ impl Engine {
                     }
                 }
             }
-            self.transport.advance(speed);
+            // A bar began: the next frame is its first, and every waiting
+            // mute and solo lands on it.
+            if self.transport.advance(speed) {
+                self.land_mix();
+            }
 
             // Into the arrangement's own drive, crush, ring, chorus, filter
             // and output. It has no pass, so its crusher has no envelope.
@@ -636,7 +766,10 @@ impl Engine {
             // Mono, into both sides.
             let kit = self.kit.process_at(speed.abs())
                 * tape_gain(speed)
-                * self.kit_gain.process(arr.kit_gain);
+                * self.kit_gain.process(arr.kit_gain)
+                * self
+                    .kit_gate
+                    .process(self.kit_audible && (!closing || self.kit_wanted));
             let (l, r) = self.arr_fx.front(l + kit, r + kit, &arr.fx);
             let (l, r) = self.arr_fx.back(l, r, &arr.fx);
 
