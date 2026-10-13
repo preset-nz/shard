@@ -1783,13 +1783,19 @@ export default function App() {
                         : null
                     }
                     onScrub={(t) => {
+                      // The cloud follows the hand in both feels, so its
+                      // grains move wherever you scrub (Georg, 2026-10-13).
                       if (scrub === 'tape') {
-                        if (!shownIsPlayer) return;
-                        // A press on Tape switches Scrub on, if it is off.
-                        if ((values['material.scrub'] ?? 0) < 0.5) {
-                          void setParam('material.scrub', 1).catch((e) => setError(String(e)));
+                        if (shownIsPlayer) {
+                          // A press on Tape switches Scrub on, if it is off.
+                          if ((values['material.scrub'] ?? 0) < 0.5) {
+                            void setParam('material.scrub', 1).catch((e) => setError(String(e)));
+                          }
+                          void setParam('material.position', t).catch((e) => setError(String(e)));
                         }
-                        void setParam('material.position', t).catch((e) => setError(String(e)));
+                        if (shownIsGrain) {
+                          void setParam('grain.position', t).catch((e) => setError(String(e)));
+                        }
                       } else if (shownIsGrain) {
                         void setParam('grain.position', t).catch((e) => setError(String(e)));
                       }
