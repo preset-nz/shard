@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 
 use crate::fx_rows::{
     CHORUS_ROWS, CRUSH_ROWS, DELAY_ROWS, DRIVE_ROWS, ECHO_ROWS, FLANGER_ROWS, FREQSHIFT_ROWS,
-    OVERTONE_ROWS, REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS, WEAR_ROWS,
+    OVERTONE_ROWS, PEAKS_ROWS, REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS, WEAR_ROWS,
 };
 use crate::params::{ParamBank, ParamDef, Taper, Unit};
 
@@ -39,10 +39,11 @@ pub enum Kind {
     Reverb,
     Repeat,
     FreqShift,
+    Peaks,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 13] = [
+    pub const ALL: [Kind; 14] = [
         Kind::Drive,
         Kind::Crush,
         Kind::Ring,
@@ -56,6 +57,7 @@ impl Kind {
         Kind::Reverb,
         Kind::Repeat,
         Kind::FreqShift,
+        Kind::Peaks,
     ];
 
     /// The name in ids, and in the template rows: `chorus`.
@@ -74,6 +76,7 @@ impl Kind {
             Kind::Reverb => "reverb",
             Kind::Repeat => "repeat",
             Kind::FreqShift => "freqshift",
+            Kind::Peaks => "peaks",
         }
     }
 
@@ -97,6 +100,7 @@ impl Kind {
             Kind::Reverb => REVERB_ROWS,
             Kind::Repeat => REPEAT_ROWS,
             Kind::FreqShift => FREQSHIFT_ROWS,
+            Kind::Peaks => PEAKS_ROWS,
         }
     }
 
@@ -109,7 +113,7 @@ impl Kind {
 /// How many of each kind a chain can hold at once.
 pub const COPIES: usize = 2;
 /// Every instance in the pool.
-pub const INSTANCES: usize = 26;
+pub const INSTANCES: usize = 28;
 /// How many effects a chain can run.
 pub const ORDER_LEN: usize = 16;
 
@@ -144,6 +148,8 @@ pub const POOL: [(Kind, u8); INSTANCES] = [
     (Kind::Repeat, 1),
     (Kind::FreqShift, 0),
     (Kind::FreqShift, 1),
+    (Kind::Peaks, 0),
+    (Kind::Peaks, 1),
 ];
 
 pub fn kind_of(n: usize) -> Kind {
@@ -430,6 +436,9 @@ mod tests {
         // The Shifter (row 48) came after Repeat, both copies at the end.
         assert_eq!(POOL[24], (Kind::FreqShift, 0));
         assert_eq!(POOL[25], (Kind::FreqShift, 1));
+        // Peaks (row 48) came after the Shifter, both copies at the end.
+        assert_eq!(POOL[26], (Kind::Peaks, 0));
+        assert_eq!(POOL[27], (Kind::Peaks, 1));
     }
 
     #[test]

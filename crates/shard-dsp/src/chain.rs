@@ -35,6 +35,7 @@ use crate::freqshift::{FreqShift, FreqShiftParams};
 use crate::fx::{self, Kind, Order, INSTANCES, ORDER_LEN, POOL};
 use crate::overtone::{Overtone, OvertoneParams};
 use crate::params::ParamDef;
+use crate::peaks::{Peaks, PeaksParams};
 use crate::repeat::{Repeat, RepeatParams};
 use crate::reverb::{Reverb, ReverbParams, ReverbType};
 use crate::ringmod::{RingMod, RingModParams};
@@ -121,6 +122,7 @@ pub(crate) enum FxParams {
     Reverb(ReverbParams),
     Repeat(RepeatParams),
     FreqShift(FreqShiftParams),
+    Peaks(PeaksParams),
 }
 
 /// The rows of each kind that `read_fx` takes, after `on` and `mix`, in the
@@ -142,6 +144,7 @@ pub(crate) fn read_order(kind: Kind) -> &'static [&'static str] {
         Kind::Reverb => &["type", "decay", "size", "tone", "predelay"],
         Kind::Repeat => &["hold", "length", "speed", "reverse"],
         Kind::FreqShift => &["shift", "feedback", "spread"],
+        Kind::Peaks => &["low", "high", "boost", "width"],
     }
 }
 
@@ -245,6 +248,13 @@ fn read_fx(
             spread: v(4),
             mix,
         }),
+        Kind::Peaks => FxParams::Peaks(PeaksParams {
+            low_hz: v(2),
+            high_hz: v(3),
+            boost_db: v(4),
+            width: v(5),
+            mix,
+        }),
     }
 }
 
@@ -320,6 +330,7 @@ enum Proc {
     Reverb(Reverb),
     Repeat(Repeat),
     FreqShift(FreqShift),
+    Peaks(Peaks),
 }
 
 impl Proc {
@@ -339,6 +350,7 @@ impl Proc {
             Kind::Reverb => Proc::Reverb(Reverb::new(sr)),
             Kind::Repeat => Proc::Repeat(Repeat::new(sr)),
             Kind::FreqShift => Proc::FreqShift(FreqShift::new(sr)),
+            Kind::Peaks => Proc::Peaks(Peaks::new(sr)),
         }
     }
 
@@ -357,6 +369,7 @@ impl Proc {
             Proc::Reverb(x) => x.reset(),
             Proc::Repeat(x) => x.reset(),
             Proc::FreqShift(x) => x.reset(),
+            Proc::Peaks(x) => x.reset(),
         }
     }
 }
@@ -709,6 +722,14 @@ impl Chain {
                     l,
                     r,
                     &FreqShiftParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Peaks(x), FxParams::Peaks(q)) => x.process(
+                    l,
+                    r,
+                    &PeaksParams {
                         mix: q.mix * level,
                         ..*q
                     },
