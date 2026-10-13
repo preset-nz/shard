@@ -912,7 +912,7 @@ fn every_voice_playing_never_touches_the_allocator() {
             ModSet::new(&[LfoSpec {
                 id: 1,
                 rate_hz: 1.0 + i as f32,
-                shape: Shape::SmoothRandom,
+                shape: [Shape::SmoothRandom, Shape::Random, Shape::Noise][i % 3],
                 phase: 0.0,
             }]),
         ));

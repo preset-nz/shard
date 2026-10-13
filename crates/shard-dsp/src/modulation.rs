@@ -61,6 +61,11 @@ pub enum Shape {
     /// A new random point once per cycle, eased into with a raised cosine, so
     /// it wanders without corners. The movement drift used to give.
     SmoothRandom,
+    /// A new random value once per cycle, held until the next: sample and
+    /// hold. Rate sets how often.
+    Random,
+    /// A new random value every block, whatever the rate: jitter.
+    Noise,
     /// Rises from -1 to 1 along an easing curve, then falls back along the
     /// same curve: a triangle whose ramps have character. Continuous at both
     /// turns, because every easing starts at 0 and ends at 1.
@@ -68,7 +73,7 @@ pub enum Shape {
 }
 
 impl Shape {
-    pub const ALL: [Shape; 20] = [
+    pub const ALL: [Shape; 22] = [
         Shape::Sine,
         Shape::Triangle,
         Shape::Saw,
@@ -89,6 +94,8 @@ impl Shape {
         Shape::Eased(Curve::Bounce, Ease::In),
         Shape::Eased(Curve::Bounce, Ease::Out),
         Shape::Eased(Curve::Bounce, Ease::InOut),
+        Shape::Random,
+        Shape::Noise,
     ];
 
     /// How each shape in `ALL` is spelled in a patch, in the same order.
@@ -96,7 +103,7 @@ impl Shape {
     /// **A wire format**, like parameter ids: renaming one breaks every saved
     /// LFO that uses it. Flat kebab-case, so a hand-edited `.shard` file stays
     /// readable, and so this crate needs no serialiser to define it.
-    pub const NAMES: [&'static str; 20] = [
+    pub const NAMES: [&'static str; 22] = [
         "sine",
         "triangle",
         "saw",
@@ -117,6 +124,8 @@ impl Shape {
         "bounce-in",
         "bounce-out",
         "bounce-in-out",
+        "random",
+        "noise",
     ];
 
     pub fn name(self) -> &'static str {
@@ -330,8 +339,8 @@ pub struct LfoSpec {
     /// Clamped to `MIN_RATE_HZ..=MAX_RATE_HZ`.
     pub rate_hz: f32,
     pub shape: Shape,
-    /// Phase offset, 0 to 1, so two LFOs at one rate can move apart. Smooth
-    /// random has no phase to offset and ignores it.
+    /// Phase offset, 0 to 1, so two LFOs at one rate can move apart. Random
+    /// shapes have no phase to offset and ignore it.
     pub phase: f32,
 }
 
@@ -393,6 +402,7 @@ impl Lfo {
                 let t = 0.5 - 0.5 * (core::f32::consts::PI * self.cycle).cos();
                 self.from + (self.to - self.from) * t
             }
+            Shape::Random | Shape::Noise => self.from,
             Shape::Eased(curve, mode) => {
                 let v = if p < 0.5 {
                     -1.0 + 2.0 * ease(curve, mode, 2.0 * p)
@@ -406,6 +416,9 @@ impl Lfo {
 
     #[inline]
     fn advance(&mut self, frames: f32, sample_rate: f32) {
+        if self.spec.shape == Shape::Noise {
+            self.from = self.rng.next_bipolar();
+        }
         self.value = self.output();
         self.cycle += self.spec.rate_hz * frames / sample_rate;
         // At 20 Hz and any sane block this runs at most once; the loop only
@@ -1088,6 +1101,110 @@ mod tests {
             b.advance(BLOCK, SR);
             assert_eq!(a.value(9), b.value(9));
         }
+    }
+
+    #[test]
+    fn random_holds_within_a_cycle_and_changes_between() {
+        // 2 Hz at 256-frame blocks: a cycle is 93.75 blocks.
+        let mut set = ModSet::new(&[spec(5, 2.0, Shape::Random)]);
+        let blocks_per_cycle = SR / (2.0 * BLOCK as f32);
+        let mut seen: Vec<f32> = Vec::new();
+        let mut changes = 0;
+        let mut prev: Option<f32> = None;
+        for _ in 0..(blocks_per_cycle as usize * 40) {
+            set.advance(BLOCK, SR);
+            let v = set.lfo_value(5).unwrap();
+            assert!((-1.0..=1.0).contains(&v), "out of range: {v}");
+            if prev.is_some_and(|p| p != v) {
+                changes += 1;
+            }
+            prev = Some(v);
+            if seen.last() != Some(&v) {
+                seen.push(v);
+            }
+        }
+        // One new value per cycle: about 40 changes, never one per block.
+        assert!(
+            (38..=42).contains(&changes),
+            "{changes} changes in 40 cycles"
+        );
+        assert!(seen.len() > 30, "values should vary across cycles");
+    }
+
+    #[test]
+    fn random_ignores_phase() {
+        let mut a = ModSet::new(&[spec(5, 3.0, Shape::Random)]);
+        let mut b = ModSet::new(&[LfoSpec {
+            phase: 0.37,
+            ..spec(5, 3.0, Shape::Random)
+        }]);
+        for _ in 0..500 {
+            a.advance(BLOCK, SR);
+            b.advance(BLOCK, SR);
+            assert_eq!(a.lfo_value(5), b.lfo_value(5));
+        }
+    }
+
+    #[test]
+    fn noise_changes_every_block_whatever_the_rate() {
+        for rate in [MIN_RATE_HZ, 1.0, MAX_RATE_HZ] {
+            let mut set = ModSet::new(&[spec(6, rate, Shape::Noise)]);
+            let mut prev = set.lfo_value(6).unwrap();
+            let mut sum = 0.0f64;
+            let n = 20_000;
+            for _ in 0..n {
+                set.advance(BLOCK, SR);
+                let v = set.lfo_value(6).unwrap();
+                assert!((-1.0..=1.0).contains(&v), "out of range: {v}");
+                assert_ne!(v, prev, "repeated a value at {rate} Hz");
+                prev = v;
+                sum += v as f64;
+            }
+            let mean = sum / n as f64;
+            assert!(mean.abs() < 0.03, "mean {mean} at {rate} Hz");
+        }
+    }
+
+    #[test]
+    fn random_shapes_are_deterministic_and_salted() {
+        for shape in [Shape::Random, Shape::Noise] {
+            let run = |salt: u32| {
+                let mut set = ModSet::new(&[spec(7, 5.0, shape)]);
+                set.salt(salt);
+                (0..300)
+                    .map(|_| {
+                        set.advance(BLOCK, SR);
+                        set.lfo_value(7).unwrap()
+                    })
+                    .collect::<Vec<f32>>()
+            };
+            assert_eq!(run(0), run(0), "{shape:?} is deterministic");
+            assert_eq!(run(11), run(11), "{shape:?} is deterministic per salt");
+            assert_ne!(run(11), run(12), "{shape:?}: salts differ");
+            assert_ne!(run(0), run(11), "{shape:?}: salted differs from unsalted");
+        }
+    }
+
+    #[test]
+    fn unsalted_random_globals_agree() {
+        for shape in [Shape::Random, Shape::Noise] {
+            let (mut a, mut b) = (
+                Globals::new(&[spec(9, 3.0, shape)]),
+                Globals::new(&[spec(9, 3.0, shape)]),
+            );
+            for _ in 0..500 {
+                a.advance(BLOCK, SR);
+                b.advance(BLOCK, SR);
+                assert_eq!(a.value(9), b.value(9));
+            }
+        }
+    }
+
+    #[test]
+    fn shape_names_round_trip() {
+        assert_eq!(Shape::Random.name(), "random");
+        assert_eq!(Shape::Noise.name(), "noise");
+        assert_eq!(Shape::ALL.len(), Shape::NAMES.len());
     }
 
     // ----- Curve envelopes -----
