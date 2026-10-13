@@ -803,3 +803,57 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         smooth_ms: 0.0,
     },
 ];
+
+pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
+    // Shifter: a single-sideband frequency shifter. Every partial moves by the same number of hertz, so the sound turns inharmonic. Feedback sends the shifted sound round again for a rising or falling spiral; Spread shifts the sides apart.
+    ParamDef {
+        id: "freqshift.on",
+        name: "Shifter",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "freqshift.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "freqshift.shift",
+        name: "Shift",
+        min: -crate::freqshift::SHIFT_MAX_HZ,
+        max: crate::freqshift::SHIFT_MAX_HZ,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "freqshift.feedback",
+        name: "Feedback",
+        min: 0.0,
+        max: crate::freqshift::FEEDBACK_MAX,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "freqshift.spread",
+        name: "Spread",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+];

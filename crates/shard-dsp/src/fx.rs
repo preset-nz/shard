@@ -18,8 +18,8 @@
 use std::sync::LazyLock;
 
 use crate::fx_rows::{
-    CHORUS_ROWS, CRUSH_ROWS, DELAY_ROWS, DRIVE_ROWS, ECHO_ROWS, FLANGER_ROWS, OVERTONE_ROWS,
-    REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS, WEAR_ROWS,
+    CHORUS_ROWS, CRUSH_ROWS, DELAY_ROWS, DRIVE_ROWS, ECHO_ROWS, FLANGER_ROWS, FREQSHIFT_ROWS,
+    OVERTONE_ROWS, REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS, WEAR_ROWS,
 };
 use crate::params::{ParamBank, ParamDef, Taper, Unit};
 
@@ -38,10 +38,11 @@ pub enum Kind {
     Rise,
     Reverb,
     Repeat,
+    FreqShift,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 12] = [
+    pub const ALL: [Kind; 13] = [
         Kind::Drive,
         Kind::Crush,
         Kind::Ring,
@@ -54,6 +55,7 @@ impl Kind {
         Kind::Rise,
         Kind::Reverb,
         Kind::Repeat,
+        Kind::FreqShift,
     ];
 
     /// The name in ids, and in the template rows: `chorus`.
@@ -71,6 +73,7 @@ impl Kind {
             Kind::Rise => "rise",
             Kind::Reverb => "reverb",
             Kind::Repeat => "repeat",
+            Kind::FreqShift => "freqshift",
         }
     }
 
@@ -93,6 +96,7 @@ impl Kind {
             Kind::Rise => RISE_ROWS,
             Kind::Reverb => REVERB_ROWS,
             Kind::Repeat => REPEAT_ROWS,
+            Kind::FreqShift => FREQSHIFT_ROWS,
         }
     }
 
@@ -105,7 +109,7 @@ impl Kind {
 /// How many of each kind a chain can hold at once.
 pub const COPIES: usize = 2;
 /// Every instance in the pool.
-pub const INSTANCES: usize = 24;
+pub const INSTANCES: usize = 26;
 /// How many effects a chain can run.
 pub const ORDER_LEN: usize = 16;
 
@@ -138,6 +142,8 @@ pub const POOL: [(Kind, u8); INSTANCES] = [
     (Kind::Reverb, 1),
     (Kind::Repeat, 0),
     (Kind::Repeat, 1),
+    (Kind::FreqShift, 0),
+    (Kind::FreqShift, 1),
 ];
 
 pub fn kind_of(n: usize) -> Kind {
@@ -421,6 +427,9 @@ mod tests {
         // Repeat came after the first twenty-two, both copies at the end.
         assert_eq!(POOL[22], (Kind::Repeat, 0));
         assert_eq!(POOL[23], (Kind::Repeat, 1));
+        // The Shifter (row 48) came after Repeat, both copies at the end.
+        assert_eq!(POOL[24], (Kind::FreqShift, 0));
+        assert_eq!(POOL[25], (Kind::FreqShift, 1));
     }
 
     #[test]

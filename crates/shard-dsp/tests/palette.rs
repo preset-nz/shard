@@ -68,7 +68,7 @@ fn worst_step(blocks: usize, from: usize, script: impl Fn(usize, &ParamBank)) ->
 /// The kinds whose output does not wander at random, so a click is a click.
 /// Repeat with Hold down passes the dry, so only its listening path is
 /// checked here; `repeat.rs` holds its loop to the same contract.
-const STEADY: [Kind; 7] = [
+const STEADY: [Kind; 8] = [
     Kind::Drive,
     Kind::Ring,
     Kind::Chorus,
@@ -76,6 +76,7 @@ const STEADY: [Kind; 7] = [
     Kind::Delay,
     Kind::Reverb,
     Kind::Repeat,
+    Kind::FreqShift,
 ];
 
 #[test]
