@@ -431,6 +431,9 @@ pub struct ApplyReport {
     pub applied: usize,
     /// Values in the preset this node no longer has.
     pub unknown: Vec<String>,
+    /// Values the preset's links were on, left unlinked because the link
+    /// followed an LFO in another patch; the rest of the preset applied.
+    pub other_patch: Vec<String>,
     /// This node's links the engine could not use.
     pub refused: Vec<Refused>,
 }
@@ -1751,9 +1754,28 @@ impl Session {
             .into_iter()
             .filter(|r| r.id.starts_with(&prefix))
             .collect();
+        let (other, unknown): (Vec<_>, Vec<_>) = report
+            .skipped
+            .into_iter()
+            .partition(|s| s.ends_with(om::OTHER_PATCH_LINK));
+        // By the row's name, as the note reads it: "Density", not
+        // "grain.density". A palette effect's keys are its kind's own ids.
+        let other_patch = other
+            .into_iter()
+            .map(|s| {
+                let key = s.trim_end_matches(om::OTHER_PATCH_LINK);
+                PARAMS
+                    .iter()
+                    .chain(Fx::ALL.iter().flat_map(|k| k.rows()))
+                    .find(|p| p.id == key)
+                    .map_or(key, |p| p.name)
+                    .to_string()
+            })
+            .collect();
         Ok(ApplyReport {
             applied: report.applied,
-            unknown: report.skipped,
+            unknown,
+            other_patch,
             refused,
         })
     }

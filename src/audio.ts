@@ -442,6 +442,8 @@ export interface Refused {
 export interface PresetReport {
   applied: number;
   unknown: string[];
+  /** Values whose link followed an LFO in another patch: left unlinked. */
+  other_patch: string[];
   /** Links the preset restored that the engine could not use. */
   refused: Refused[];
 }

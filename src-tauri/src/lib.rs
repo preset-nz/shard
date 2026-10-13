@@ -2607,7 +2607,7 @@ mod tests {
 
         let report = serde_json::to_value(session::ApplyReport::default())
             .expect("ApplyReport is serialisable");
-        for key in ["applied", "unknown", "refused"] {
+        for key in ["applied", "unknown", "other_patch", "refused"] {
             assert!(report.get(key).is_some(), "ApplyReport lost `{key}`");
         }
 

@@ -381,3 +381,53 @@ fn two_tracks_on_two_patches_read_one_global_alike_every_block() {
         .fold((f32::MAX, f32::MIN), |(l, h), v| (l.min(*v), h.max(*v)));
     assert!(hi > lo * 1.2, "the global barely moved: {lo}..{hi}");
 }
+
+#[test]
+fn a_preset_linking_another_patchs_own_lfo_applies_the_rest_and_reports_the_link() {
+    let r = rig();
+    let a = r.session.current_patch().unwrap();
+    r.session.set_param("grain.size", 80.0).unwrap();
+    r.session
+        .link_new("grain.density", "lfo", 0.2, 0.6)
+        .unwrap();
+    r.session.save_preset("grain", "Own").unwrap();
+
+    // Applied on another patch: the value comes, the link is left out and
+    // named, and one undo takes the whole apply back.
+    let b = r.session.new_patch().unwrap();
+    r.session.set_param("grain.size", 200.0).unwrap();
+    let before = modulation_of(&r, b).links.len();
+    let report = r.session.apply_preset("grain", "Own").unwrap();
+    assert!(report.applied > 0);
+    assert_eq!(report.other_patch, ["Density"]);
+    assert!(report.unknown.is_empty(), "{:?}", report.unknown);
+    assert!(report.refused.is_empty(), "{:?}", report.refused);
+    assert_eq!(r.bank.get_by_id("grain.size").unwrap(), 80.0);
+    assert!(link_of(&r, b, "grain.density").is_none());
+    assert_eq!(modulation_of(&r, b).links.len(), before);
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Apply Preset"));
+    assert_eq!(r.bank.get_by_id("grain.size").unwrap(), 200.0);
+
+    // Applied on its own patch, the link applies as before.
+    r.session.select_patch(a).unwrap();
+    r.session.unlink_param("grain.density").unwrap();
+    let report = r.session.apply_preset("grain", "Own").unwrap();
+    assert!(report.other_patch.is_empty(), "{:?}", report.other_patch);
+    assert!(link_of(&r, a, "grain.density").is_some());
+}
+
+#[test]
+fn a_preset_linking_a_global_lfo_applies_fully_in_another_patch() {
+    let r = rig();
+    r.session.set_param("grain.size", 80.0).unwrap();
+    r.session
+        .link_new("grain.density", "global-lfo", 0.2, 0.6)
+        .unwrap();
+    let g = only_global(&r);
+    r.session.save_preset("grain", "Shared").unwrap();
+    let b = r.session.new_patch().unwrap();
+    let report = r.session.apply_preset("grain", "Shared").unwrap();
+    assert!(report.other_patch.is_empty(), "{:?}", report.other_patch);
+    assert_eq!(link_of(&r, b, "grain.density").unwrap().source, g);
+    assert_eq!(r.bank.get_by_id("grain.size").unwrap(), 80.0);
+}

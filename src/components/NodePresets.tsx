@@ -75,6 +75,11 @@ export function NodePresets({
       if (report.unknown.length > 0) {
         parts.push(`${report.unknown.length} of its values no longer exist and were skipped`);
       }
+      if (report.other_patch.length > 0) {
+        parts.push(
+          `the link on ${report.other_patch.join(', ')} follows an LFO in another patch and was left out`,
+        );
+      }
       if (report.refused.length > 0) {
         parts.push(`${report.refused.length} of its links name an LFO this patch cannot use`);
       }

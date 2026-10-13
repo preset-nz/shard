@@ -44,7 +44,7 @@ use rhizome_core::{
     Changeset, Edit, Node, NodeId, NodeType, On, Origin, Ref, Result, Shape, Tree, Value,
     ValueKind, ValueSpec,
 };
-use rhizome_pom::{Kinds, NodeValues, ObjectModel};
+use rhizome_pom::{Aggregate, Kinds, NodeValues, NodeValuesState, ObjectModel, Report};
 use serde_json::{json, Value as Json};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
 use shard_dsp::duck::{DEPTH_DEFAULT, RELEASE_DEFAULT_MS, RELEASE_MAX_MS, RELEASE_MIN_MS};
@@ -463,6 +463,65 @@ fn links_hold(node: &Node<'_>) -> std::result::Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// What a preset's skipped list says of a link it left out because it follows
+/// a modulator in another patch: the linked value's key, then this.
+pub const OTHER_PATCH_LINK: &str = " ← an LFO in another patch";
+
+/// `NodeValues` for a preset, except that a link `links_hold` would refuse
+/// (a source that is neither a modulator of this node's patch nor a global
+/// LFO) is left out and reported, so the rest of the preset still applies
+/// rather than the whole edit failing at its check.
+struct PresetValues(NodeValues);
+
+impl Aggregate for PresetValues {
+    type State = NodeValuesState;
+
+    fn get(&self, node: Node<'_>) -> NodeValuesState {
+        self.0.get(node)
+    }
+
+    fn set(&self, tx: &mut Edit<'_>, node: NodeId, state: &NodeValuesState) -> Result<Report> {
+        let patch = tx.at(node).and_then(|n| {
+            if n.type_name() == PATCH {
+                Some(n.id())
+            } else {
+                n.parent()
+                    .filter(|p| p.type_name() == PATCH)
+                    .map(|p| p.id())
+            }
+        });
+        let mut kept = state.clone();
+        kept.bindings.clear();
+        let mut left_out = Vec::new();
+        for b in &state.bindings {
+            // A source that is gone is the inner apply's to report.
+            let usable = tx.at(b.source).is_none_or(|s| {
+                patch.is_some() && (s.parent().map(|p| p.id()) == patch || is_global(&s))
+            });
+            if usable {
+                kept.bindings.push(b.clone());
+            } else {
+                let key = match &b.on {
+                    On::Value(k) => k.clone(),
+                    On::Slot(k) => k.clone(),
+                };
+                left_out.push(format!("{key}{OTHER_PATCH_LINK}"));
+            }
+        }
+        let mut report = self.0.set(tx, node, &kept)?;
+        report.skipped.extend(left_out);
+        Ok(report)
+    }
+
+    fn matches(&self, current: &NodeValuesState, preset: &NodeValuesState) -> bool {
+        self.0.matches(current, preset)
+    }
+
+    fn portable(&self, state: NodeValuesState) -> NodeValuesState {
+        self.0.portable(state)
+    }
 }
 
 /// An order lists exactly the children `belongs` picks.
@@ -982,7 +1041,7 @@ impl ObjectModel for Shard {
             // never a patch's name, a drums track's mute and solo, or its
             // sidechain, which is routing, not sound.
             if presets {
-                kind.presets(
+                kind.presets(PresetValues(
                     NodeValues::new()
                         .skip(|key| {
                             key.ends_with(".on")
@@ -994,7 +1053,7 @@ impl ObjectModel for Shard {
                                 || key == DRUMS_DUCK.key_only
                         })
                         .with_bindings(),
-                );
+                ));
             }
         }
     }
