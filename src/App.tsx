@@ -66,6 +66,7 @@ import {
   type ParamInfo,
   type PatchInfo,
   type PatchPreview as PatchPreviewData,
+  type PlayMode,
   paramDefs,
   patchPreview,
   type RecordingState,
@@ -91,6 +92,7 @@ import {
   setEnvelope as setModEnvelope,
   setParam,
   setPlaying,
+  setPlayMode,
   setRecordMenu,
   setTrackDuck,
   setTracker,
@@ -158,9 +160,20 @@ const GRAIN_SCROLLBACK = 200;
  * (`soundscape`). The scene view picks it: selecting a track is the one,
  * selecting a patch the other. Since epic 28 it never changes what plays:
  * every track plays while the transport runs, and a selected patch no track
- * plays loops on its own over them. Remembered across launches as UI state.
+ * plays loops on its own over them. What Play plays is the header's own
+ * choice (`PlayMode`), since Georg, 2026-10-13: *"play always plays the
+ * sequencer, I can't just loop the note"*: Song is all of the above, Loop
+ * and Once play the current patch alone. Remembered across launches as UI
+ * state.
  */
 type Mode = 'tracker' | 'soundscape';
+
+/** What Play plays, with the words the header shows and its tooltip. */
+const PLAY_MODES: [PlayMode, string, string][] = [
+  ['song', 'Song', 'Play the song'],
+  ['loop', 'Loop', 'Loop the patch on its own'],
+  ['once', 'Once', 'Play the patch once, start to end'],
+];
 
 /** Seconds as m:ss. */
 function formatElapsed(seconds: number): string {
@@ -183,6 +196,7 @@ export default function App() {
     reduction: 1,
     grains: 0,
     playing: false,
+    play_mode: 'song',
     steps: [],
     playhead: 0,
     auditioning: false,
@@ -224,6 +238,13 @@ export default function App() {
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
+  // What Play plays. UI state, remembered across launches and told to the
+  // backend on launch and whenever it changes; the backend keeps it for the
+  // session, outside the document.
+  const [playMode, setPlayModeState] = usePersistedState<PlayMode>('shard.playMode', 'song');
+  useEffect(() => {
+    void setPlayMode(playMode).catch((e) => setError(String(e)));
+  }, [playMode]);
   // Read once at startup, to tell Rust a track is selected.
   const startMode = useRef(mode);
   /** The session's patches, in order, as the scene view lists them. */
@@ -1229,6 +1250,26 @@ export default function App() {
           >
             {meter.playing ? 'Stop' : 'Play'}
           </button>
+          <fieldset aria-label="What Play plays" className="m-0 flex min-w-0 border-0 p-0">
+            {PLAY_MODES.map(([value, label, hint], i) => (
+              <button
+                key={value}
+                type="button"
+                title={hint}
+                aria-pressed={playMode === value}
+                onClick={() => setPlayModeState(value)}
+                className={`border border-border px-2 py-1 text-xs ${
+                  i === 0 ? 'rounded-l' : '-ml-px'
+                } ${i === PLAY_MODES.length - 1 ? 'rounded-r' : ''} ${
+                  playMode === value
+                    ? 'bg-accent font-medium text-accent-foreground'
+                    : 'text-muted-foreground hover:bg-accent'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </fieldset>
 
           <button
             type="button"

@@ -26,12 +26,22 @@ export interface ParamInfo {
   smooth_ms: number;
 }
 
+/**
+ * What Play plays: the song, or the current patch on its own. `loop` holds
+ * its note for ever with the sample looping underneath; `once` is one pass
+ * from the trim start to the trim end, and then the transport stops by
+ * itself. Session state, never an edit: no undo step, not in the document.
+ */
+export type PlayMode = 'song' | 'loop' | 'once';
+
 export interface Meters {
   peak: number;
   /** The limiter's lowest gain since the last poll; one means it did nothing. */
   reduction: number;
   grains: number;
   playing: boolean;
+  /** What Play plays, as the backend holds it. */
+  play_mode: PlayMode;
   /**
    * Each track's step, in the tracks' order, from zero, or -1 while the
    * transport is off: a melody track's and a drums track's alike.
@@ -560,6 +570,9 @@ export const patchPreview = () => invoke<PatchPreview>('patch_preview');
 
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
+
+/** Chooses what Play plays. Answers with the mode now set. */
+export const setPlayMode = (mode: PlayMode) => invoke<PlayMode>('set_play_mode', { mode });
 
 /** What a take is recorded from: the master, or a track by its place in the order. */
 export type RecordSource = 'master' | number;

@@ -1143,3 +1143,31 @@ fn tapping_never_touches_the_allocator() {
     });
     assert_eq!(caught, 0, "tapping touched the allocator {caught} time(s)");
 }
+
+#[test]
+fn the_patch_alone_never_touches_the_allocator() {
+    // Loop and Once with the parameters swept, switching between them and
+    // the song, and Once stopping the transport itself and starting again.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(9_600));
+    drop(e.swap_source(Generator::Grain, tone(7_000)));
+    let bank = ParamBank::new();
+    let mut out = vec![0.0f32; 1024];
+    let mut stops = 0;
+    for block in 0..900 {
+        sweep(&bank, block);
+        let (stopped, caught) = no_alloc(|| {
+            e.set_alone(shard_dsp::Alone::from_bits((block / 150 % 3) as u8));
+            if !e.playing() {
+                e.set_playing(true);
+            }
+            e.process_block(&mut out, &bank);
+            !e.playing()
+        });
+        assert_eq!(caught, 0, "block {block} touched the allocator");
+        if stopped {
+            stops += 1;
+        }
+    }
+    assert!(stops > 0, "Once never stopped the transport");
+}

@@ -32,3 +32,53 @@ impl Length {
         Self::ALL[(v.round().max(0.0) as usize).min(Self::ALL.len() - 1)]
     }
 }
+
+/// What the patch is asked to do on its own, apart from the song (Georg,
+/// 2026-10-13: *"play always plays the sequencer, I can't just loop the
+/// note"* and *"there is no longer a way to just play the sample start to
+/// stop"*). The host chooses it; the engine only follows.
+///
+/// Under `Loop` and `Once` the host has silenced every other voice and kit
+/// and given one voice the patch with its steps off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Alone {
+    /// The song: every track plays its own patch. A voice with its steps off
+    /// does what its Length says.
+    #[default]
+    Song,
+    /// For ever, whatever the Length: the note is held and the sample loops
+    /// underneath. Hold, which would let go, holds for ever instead.
+    Loop,
+    /// One pass from the trim start to the trim end, and then the engine
+    /// stops the transport itself. Loop, which has no end, is fitted as a
+    /// Sample pass; Hold lasts as long as its note.
+    Once,
+}
+
+impl Alone {
+    pub fn bits(self) -> u8 {
+        match self {
+            Alone::Song => 0,
+            Alone::Loop => 1,
+            Alone::Once => 2,
+        }
+    }
+
+    pub fn from_bits(b: u8) -> Alone {
+        match b {
+            1 => Alone::Loop,
+            2 => Alone::Once,
+            _ => Alone::Song,
+        }
+    }
+
+    /// The Length a voice plays under this: what the patch says, except
+    /// where it cannot be honoured.
+    pub fn length(self, set: Length) -> Length {
+        match (self, set) {
+            (Alone::Loop, Length::Hold) => Length::Loop,
+            (Alone::Once, Length::Loop) => Length::Sample,
+            _ => set,
+        }
+    }
+}

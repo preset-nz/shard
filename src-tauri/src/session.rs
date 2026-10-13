@@ -34,6 +34,19 @@
 //! mix, as sound scaping did, on the last voice (`AUDITION`). There is no
 //! audition while all `VOICES` voices play tracks.
 //!
+//! **What Play plays** (`PlayMode`; Georg, 2026-10-13: *"play always plays
+//! the sequencer, I can't just loop the note"* and *"there is no longer a
+//! way to just play the sample start to stop"*). `Song` is all of the above.
+//! `Loop` and `Once` play the current patch and nothing else, whether or not
+//! a track plays it and whether or not a track is selected: every voice and
+//! kit is handed nothing, so the fades carry them out, and `AUDITION` plays
+//! the patch with its steps off, at unity, through the arrangement's chain.
+//! `Loop` holds the note for ever with the sample looping underneath (Hold
+//! holds too); `Once` is one pass from the trim start to the trim end, and
+//! then the engine stops the transport itself (`Alone`). The choice is
+//! session state in `Sent::play_mode`, like mute and solo: never an edit, no
+//! undo step, no unsaved mark, and not in the document.
+//!
 //! **Mute and solo are session state, not edits** (story c). They live in
 //! `Sent::mix`, by track node, so they follow a track through a reorder, a
 //! removal and its undo. A press never touches the tree, so it is no undo
@@ -70,15 +83,15 @@ use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use rhizome_core::{Edit, GestureId, NodeId, On, Ref, Tree, Value};
 use rhizome_pom::{Document, FileStore, PresetRef, Store};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::{KitParams, KitPattern};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::StepBank;
 use shard_dsp::{
-    Duck, DuckBank, Generator, Globals, KitBank, Mix, ModSet, ParamBank, ReadingBank, StepParams,
-    KITS, VOICES,
+    Alone, Duck, DuckBank, Generator, Globals, KitBank, Mix, ModSet, ParamBank, ReadingBank,
+    StepParams, KITS, VOICES,
 };
 
 use crate::mapping::MapRef;
@@ -209,6 +222,8 @@ pub struct Voices {
     pub kits: [KitFeed; KITS],
     /// The transport: tempo and swing. Always running.
     pub transport: StepBank,
+    /// What Play plays, as `Alone::bits`.
+    pub alone: AtomicU8,
     /// The voice playing the current patch, whose heard values, playhead and
     /// grains the patch view shows, or `NO_VOICE`.
     pub shown: AtomicUsize,
@@ -224,6 +239,7 @@ impl Voices {
             voice: std::array::from_fn(|_| VoiceFeed::new()),
             kits: std::array::from_fn(|_| KitFeed::new()),
             transport: StepBank::new(Tracker::default().transport()),
+            alone: AtomicU8::new(Alone::Song.bits()),
             shown: AtomicUsize::new(NO_VOICE),
             globals_swap: Mutex::new(None),
             globals_retired: Mutex::new(None),
@@ -319,10 +335,43 @@ pub struct MixState {
     pub heard_solo: bool,
 }
 
+/// What Play plays: the song, or the current patch on its own.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PlayMode {
+    /// Every track plays its own patch (and a selected patch no track plays
+    /// loops over them).
+    #[default]
+    Song,
+    /// The current patch alone, its note held for ever, the sample looping.
+    Loop,
+    /// The current patch alone, one pass from the trim start to the trim
+    /// end, and then the transport stops by itself.
+    Once,
+}
+
+impl PlayMode {
+    /// What the engine is asked to do.
+    pub fn alone(self) -> Alone {
+        match self {
+            PlayMode::Song => Alone::Song,
+            PlayMode::Loop => Alone::Loop,
+            PlayMode::Once => Alone::Once,
+        }
+    }
+
+    /// Whether the current patch plays by itself.
+    pub fn is_alone(self) -> bool {
+        self != PlayMode::Song
+    }
+}
+
 /// The plan the engine was handed, what each voice was, and what the scene
 /// view has selected.
 struct Sent {
     plan: Plan,
+    /// What Play plays. Session state, not the document's.
+    play_mode: PlayMode,
     voices: [Voiced; VOICES],
     /// The track selected in the scene view, or none with a patch selected.
     selected_track: Option<usize>,
@@ -457,6 +506,7 @@ impl Session {
             doc: Mutex::new(doc),
             sent: Mutex::new(Sent {
                 plan: Plan::default(),
+                play_mode: PlayMode::Song,
                 voices: std::array::from_fn(|_| Voiced::default()),
                 kits: [None; KITS],
                 selected_track: None,
@@ -525,20 +575,22 @@ impl Session {
             *lock(&voices.globals_swap) = Some(plan.global_set().0);
         }
         let materials = all || plan.pool.materials != sent.plan.pool.materials;
-        let next = voicing(&plan, sent.selected_track);
+        let next = voicing(&plan, sent.selected_track, sent.play_mode);
         for (i, want) in next.into_iter().enumerate() {
             self.hand(i, &want, &sent.voices[i], all, materials, &plan);
             sent.voices[i] = want;
         }
         for k in 0..KITS {
-            let want = plan.tracker.kit(k);
+            // On its own, the patch is all that plays: no kit is handed a
+            // track, so each fades out.
+            let want = plan.tracker.kit(k).filter(|_| !sent.play_mode.is_alone());
             self.hand_kit(k, &want, &sent.kits[k], all);
             sent.kits[k] = want;
         }
         sent.tracks = om::tracks(doc.tree()).iter().map(|t| t.id()).collect();
         sent.slots = plan.tracker.slots();
         self.hand_mix(&mut sent, all);
-        self.hand_ducks(&plan.tracker);
+        self.hand_ducks(&plan.tracker, sent.play_mode.is_alone());
         let shown = sent
             .voices
             .iter()
@@ -609,7 +661,14 @@ impl Session {
     fn hand_mix(&self, sent: &mut Sent, all: bool) {
         let mut voice_tracks = [None; VOICES];
         let mut kit_tracks = [None; KITS];
-        for (node, slot) in sent.tracks.iter().zip(&sent.slots) {
+        // On its own, no voice is a track's: the patch is heard whatever a
+        // track is muted or soloed to.
+        let tracks = if sent.play_mode.is_alone() {
+            &[][..]
+        } else {
+            &sent.tracks[..]
+        };
+        for (node, slot) in tracks.iter().zip(&sent.slots) {
             match *slot {
                 Slot::Melody(k) if k < VOICES => voice_tracks[k] = Some(*node),
                 Slot::Drums(k) if k < KITS => kit_tracks[k] = Some(*node),
@@ -653,10 +712,12 @@ impl Session {
     /// its slot names, its key mapped the same way; none on the ones no
     /// track plays (the audition among them). Atomics only, so all of it
     /// every time.
-    fn hand_ducks(&self, tracker: &Tracker) {
+    fn hand_ducks(&self, tracker: &Tracker, alone: bool) {
         let mut voice = [Duck::default(); VOICES];
         let mut kit = [Duck::default(); KITS];
-        for (slot, duck) in tracker.ducks() {
+        // On its own, nothing ducks the patch.
+        let ducks = if alone { Vec::new() } else { tracker.ducks() };
+        for (slot, duck) in ducks {
             match slot {
                 Slot::Melody(k) if k < VOICES => voice[k] = duck,
                 Slot::Drums(k) if k < KITS => kit[k] = duck,
@@ -1116,6 +1177,31 @@ impl Session {
             None => tx.clear_ref(t, by),
         })?;
         Ok(changed)
+    }
+
+    /// What Play plays.
+    pub fn play_mode(&self) -> PlayMode {
+        lock(&self.sent).play_mode
+    }
+
+    /// Chooses what Play plays. Not an edit: no undo step, no unsaved mark,
+    /// nothing in the document. The voices and kits are handed over at once;
+    /// the engine's fades carry the change.
+    pub fn set_play_mode(&self, mode: PlayMode) {
+        let doc = lock(&self.doc);
+        {
+            let mut sent = lock(&self.sent);
+            if sent.play_mode == mode {
+                return;
+            }
+            sent.play_mode = mode;
+        }
+        // The engine hears the rule before the voices change under it.
+        self.feeds
+            .voices
+            .alone
+            .store(mode.alone().bits(), Ordering::Release);
+        self.sync(&doc, false);
     }
 
     /// Selects track `track` in the scene view: the current patch becomes the
@@ -1757,7 +1843,10 @@ impl Session {
             let tree = d.tree();
             let current = patch_node(tree, self.current()).map(|n| n.id());
             let played = played_patches(tree);
-            let auditioned = lock(&self.sent).voices[AUDITION].patch;
+            let (auditioned, mode) = {
+                let sent = lock(&self.sent);
+                (sent.voices[AUDITION].patch, sent.play_mode)
+            };
             let all = om::patches(tree);
             let several = all.len() > 1;
             all.iter()
@@ -1769,7 +1858,7 @@ impl Session {
                         name: om::patch_name(p, i),
                         current: Some(p.id()) == current,
                         played: is_played,
-                        auditioned: !is_played && auditioned == Some(p.id()),
+                        auditioned: (mode.is_alone() || !is_played) && auditioned == Some(p.id()),
                         deletable: several && !is_played,
                     })
                 })
@@ -2144,7 +2233,7 @@ fn read_mix(tree: &Tree) -> HashMap<NodeId, TrackMix> {
 /// patch, steps and fader; and a selected patch no track plays on
 /// `AUDITION`, looping free, while that voice is spare and no track is
 /// selected.
-fn voicing(plan: &Plan, selected_track: Option<usize>) -> [Voiced; VOICES] {
+fn voicing(plan: &Plan, selected_track: Option<usize>, mode: PlayMode) -> [Voiced; VOICES] {
     let mut out: [Voiced; VOICES] = std::array::from_fn(|_| Voiced::default());
     let of = |patch: NodeId, steps: StepParams, gain: f32| {
         plan.patch_plan(patch).map(|p| Voiced {
@@ -2156,6 +2245,18 @@ fn voicing(plan: &Plan, selected_track: Option<usize>) -> [Voiced; VOICES] {
             gain,
         })
     };
+    // On its own the current patch plays on `AUDITION`, steps off, at unity,
+    // and nothing else does, track or no track.
+    if mode.is_alone() {
+        let free = StepParams {
+            on: false,
+            ..plan.tracker.transport()
+        };
+        if let Some(v) = plan.current.and_then(|c| of(c, free, TRACK_GAIN_DEFAULT)) {
+            out[AUDITION] = v;
+        }
+        return out;
+    }
     let melody = plan
         .tracker
         .tracks

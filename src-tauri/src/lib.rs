@@ -23,7 +23,7 @@ use shard_dsp::arrangement;
 use shard_dsp::params::{ParamDef, Taper, Unit, PARAMS};
 use shard_dsp::rt::{self, BlockTimer};
 use shard_dsp::{
-    Engine, Generator, Globals, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, KITS, VOICES,
+    Alone, Engine, Generator, Globals, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, KITS, VOICES,
 };
 
 mod controllers;
@@ -52,6 +52,8 @@ pub mod session;
 #[cfg(test)]
 mod session_tests;
 // Writes a `.shard` from a flat sketch, for `just shard-write`.
+#[cfg(test)]
+mod play_mode_tests;
 #[cfg(test)]
 mod sketch;
 mod source;
@@ -150,6 +152,8 @@ pub struct Meters {
     pub reduction: f32,
     pub grains: u32,
     pub playing: bool,
+    /// What Play plays: the song, or the current patch on its own.
+    pub play_mode: session::PlayMode,
     /// Each track's current step, from zero, or -1 while it is off, in the
     /// tracks' order: a melody track's voice's, a drums track's kit's.
     pub steps: Vec<i32>,
@@ -366,6 +370,7 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
         reduction: f32::from_bits(state.reduction.swap(1.0f32.to_bits(), Ordering::Relaxed)),
         grains: state.grains.load(Ordering::Relaxed),
         playing: state.playing.load(Ordering::Relaxed),
+        play_mode: state.session.play_mode(),
         steps: state
             .session
             .slots()
@@ -1011,6 +1016,16 @@ fn set_track_duck(
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
     state.play_request.store(playing, Ordering::Relaxed);
+}
+
+/// Chooses what Play plays: `song`, `loop` (the current patch alone, held
+/// for ever) or `once` (the current patch alone, one pass, then the
+/// transport stops by itself). Not an edit: no undo step, no unsaved mark,
+/// not saved in the document. Answers with the mode now set.
+#[tauri::command]
+fn set_play_mode(state: tauri::State<'_, Audio>, mode: session::PlayMode) -> session::PlayMode {
+    state.session.set_play_mode(mode);
+    state.session.play_mode()
 }
 
 /// The tracker, as saved and as the engine plays it, each track with the
@@ -1832,6 +1847,7 @@ pub(crate) fn hand_over(
     }
     // The transport always runs: every track plays while it does, and an
     // auditioned patch loops free over them because its own steps are off.
+    engine.set_alone(Alone::from_bits(voices.alone.load(Ordering::Acquire)));
     engine.set_transport(&voices.transport.load());
     engine.set_arrangement(arrangement, false);
 }
@@ -1980,6 +1996,20 @@ fn build_audio() -> Result<Audio, String> {
                                     &mut scratch[..needed],
                                 );
                                 audio_recorder.after_render(&engine, tap_applied);
+
+                                // Once, the engine stops the transport itself
+                                // when the pass has played out. Withdraw the
+                                // request, unless a press has already changed
+                                // it, and mirror the stop for the UI.
+                                if audio_playing.load(Ordering::Relaxed) && !engine.playing() {
+                                    let _ = audio_request.compare_exchange(
+                                        true,
+                                        false,
+                                        Ordering::Relaxed,
+                                        Ordering::Relaxed,
+                                    );
+                                    audio_playing.store(false, Ordering::Relaxed);
+                                }
 
                                 for (i, frame) in out.chunks_mut(channels).enumerate() {
                                     let l = scratch[i * 2];
@@ -2234,6 +2264,7 @@ pub fn run() {
             duplicate_patch,
             meters,
             set_playing,
+            set_play_mode,
             tracker,
             set_tracker,
             edit_tracker,
@@ -2344,6 +2375,7 @@ mod tests {
             reduction: 1.0,
             grains: 0,
             playing: false,
+            play_mode: session::PlayMode::Song,
             steps: vec![-1],
             playhead: 0.0,
             auditioning: false,
@@ -2360,6 +2392,7 @@ mod tests {
             "grains",
             "steps",
             "playing",
+            "play_mode",
             "playhead",
             "auditioning",
             "reversing",

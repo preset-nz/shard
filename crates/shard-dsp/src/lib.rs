@@ -74,6 +74,7 @@ pub use mix::Mix;
 pub use modulation::{
     adsr_curve, Curve, Ease, EnvSpec, Globals, LfoSpec, LinkError, ModSet, Shape,
 };
+pub use note::{Alone, Length};
 pub use overtone::{Overtone, OvertoneParams};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};
 pub use player::Player;

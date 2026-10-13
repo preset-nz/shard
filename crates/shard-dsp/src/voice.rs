@@ -26,7 +26,7 @@ use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::ladder::{self, Ladder, LadderParams, LadderSlots};
 use crate::modulation::{Globals, ModSet};
-use crate::note::Length;
+use crate::note::{Alone, Length};
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
 use crate::smooth::{OnePole, Ramp};
@@ -238,6 +238,9 @@ struct Block {
     material_on_target: f32,
     env_on_target: f32,
     steps_off: bool,
+    /// Alone, one pass: nothing loops, nothing is retriggered, and the
+    /// engine stops when `once_done`.
+    once: bool,
     looping: bool,
     env: EnvParams,
     grain_semis: f32,
@@ -334,6 +337,8 @@ pub(crate) struct Voice {
     /// Under Hold, the generators fall to an exact zero once the note has
     /// ended, whether or not the Envelope node is on.
     note_fade: Ramp,
+    /// Whether the patch plays on its own, and how; see `Alone`.
+    alone: Alone,
     /// This block's values; see `Block`.
     block: Block,
     /// What this voice mixes into its seeds; see `new`.
@@ -429,6 +434,7 @@ impl Voice {
             material_on_target: 0.0,
             env_on_target: 0.0,
             steps_off: true,
+            once: false,
             looping: true,
             env: EnvParams {
                 amount: 0.0,
@@ -502,6 +508,7 @@ impl Voice {
                 r.set_time(BYPASS_MS, sample_rate);
                 r
             },
+            alone: Alone::Song,
             block,
         }
     }
@@ -637,6 +644,37 @@ impl Voice {
         }
         if playing && !was_playing {
             self.note.pending = true;
+            // On its own, play starts the patch from the top, every time.
+            if self.alone != Alone::Song && !self.step_params.on {
+                self.player.rewind();
+            }
+        }
+    }
+
+    /// Whether the patch plays on its own, and how. Takes effect at the next
+    /// block; a pass in flight carries on under the new rule.
+    pub(crate) fn set_alone(&mut self, alone: Alone) {
+        self.alone = alone;
+    }
+
+    /// Once, whether the pass has played out: the sample has reached the end
+    /// of its window and the cloud's grains have died away, or, under Hold,
+    /// the note has ended. Its own envelope's release lands inside the pass
+    /// (Sample) or the note (Hold), so nothing of this voice is left to cut.
+    /// Always false otherwise, and for a voice that is not playing.
+    pub(crate) fn once_done(&self) -> bool {
+        if self.alone != Alone::Once || !self.active {
+            return false;
+        }
+        let b = &self.block;
+        match b.length {
+            Length::Hold => self.note.age >= self.note.end,
+            // A window too short to play ends at once; so does a pass that
+            // has left it.
+            _ => {
+                (b.window_len < 2.0 || !self.player.sounding())
+                    && self.granular.active_grains() == 0
+            }
         }
     }
 
@@ -690,7 +728,9 @@ impl Voice {
         transport: &Transport,
         globals: &Globals,
     ) {
-        let length = Length::from_value(bank.get(self.slots.patch_length));
+        let length = self
+            .alone
+            .length(Length::from_value(bank.get(self.slots.patch_length)));
         // LFOs move with the transport, and once per block, before anything
         // below reads a parameter through them. A global LFO is the engine's,
         // so every voice following it reads the same value.
@@ -825,11 +865,14 @@ impl Voice {
         }
         // Whether the sample loops: always for Loop, never for Hold, and for
         // Sample, whenever the steps are off, as it always has.
-        let looping = match length {
-            Length::Loop => true,
-            Length::Sample => steps_off,
-            Length::Hold => false,
-        };
+        // Alone and once through, none does.
+        let once = self.alone == Alone::Once;
+        let looping = !once
+            && match length {
+                Length::Loop => true,
+                Length::Sample => steps_off,
+                Length::Hold => false,
+            };
         // Who the order names this block. Reorders, resets and fades start
         // here.
         self.fx.prepare(&fx);
@@ -920,6 +963,7 @@ impl Voice {
             material_on_target,
             env_on_target,
             steps_off,
+            once,
             looping,
             env,
             grain_semis,
@@ -1013,7 +1057,7 @@ impl Voice {
         // Under Hold with nothing to trigger it, a note that has ended
         // starts again, the way a pass loops under Sample, so the patch
         // keeps sounding in sound scaping.
-        if length == Length::Hold && b.steps_off && self.note.age >= self.note.end {
+        if length == Length::Hold && b.steps_off && !b.once && self.note.age >= self.note.end {
             self.note.start(b.note_gate, b.note_released, b.note_end);
             if tape.speed < 0.0 {
                 self.player.rewind_to_end(source.len());
@@ -1074,7 +1118,7 @@ impl Voice {
         // the steps it sounds while a pass does. Mono, into both sides.
         let fm_on = self.fades.fm.process(b.fm_on_target);
         let note_sounding = match length {
-            Length::Sample => b.steps_off || self.player.sounding(),
+            Length::Sample => (b.steps_off && !b.once) || self.player.sounding(),
             Length::Loop => true,
             Length::Hold => self.note.age < self.note.end,
         };

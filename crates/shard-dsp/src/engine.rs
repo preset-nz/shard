@@ -63,6 +63,7 @@ use crate::kit::{Kit, KitClock, KitParams, KitPattern, KICK, VOICES as KIT_VOICE
 use crate::limiter::{Limiter, LimiterParams};
 use crate::mix::{gate_frames, Gate, Mix};
 use crate::modulation::{Globals, ModSet};
+use crate::note::Alone;
 use crate::params::ParamBank;
 use crate::rng::salt;
 use crate::smooth::OnePole;
@@ -259,6 +260,9 @@ pub struct Engine {
     voices: Box<[Voice]>,
     /// Transport. Stopped means silence out and no grains left hanging.
     playing: bool,
+    /// What the patch does on its own; see `Alone`. Under `Once` the engine
+    /// stops the transport itself when the pass has played out.
+    alone: Alone,
     /// The steps' clock, shared by every voice and kit.
     transport: Transport,
     /// The tape's speed, shared the same way.
@@ -350,6 +354,7 @@ impl Engine {
                 .map(|i| Voice::new(sample_rate, max_grains, i))
                 .collect(),
             playing: false,
+            alone: Alone::Song,
             transport,
             reel: Reel::new(),
             arr_fx: Chain::new(sample_rate, arr_defs, &arr_slots.fx, 0),
@@ -766,6 +771,21 @@ impl Engine {
         self.playing
     }
 
+    /// Whether the patch plays on its own, and how (`Alone`). Landed at the
+    /// next block; the host silences the other voices and kits itself.
+    pub fn set_alone(&mut self, alone: Alone) {
+        if alone != self.alone {
+            self.alone = alone;
+            for v in self.voices.iter_mut() {
+                v.set_alone(alone);
+            }
+        }
+    }
+
+    pub fn alone(&self) -> Alone {
+        self.alone
+    }
+
     /// Start or stop. Stopping clears every grain pool rather than letting
     /// the clouds ring out, so stop means stop.
     pub fn set_playing(&mut self, playing: bool) {
@@ -1108,6 +1128,19 @@ impl Engine {
 
         for &i in live {
             self.voices[i].end_block();
+        }
+
+        // Once, the pass has played out when every voice that plays has
+        // finished its own: stop as the host's Stop would, at this block
+        // boundary. The host reads `playing` and follows.
+        if self.alone == Alone::Once
+            && self
+                .voices
+                .iter()
+                .filter(|v| v.active())
+                .all(|v| v.once_done())
+        {
+            self.set_playing(false);
         }
     }
 }
