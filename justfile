@@ -69,6 +69,17 @@ shard-check file:
 shard-write sketch out:
     SHARD_SKETCH="{{join(invocation_directory(), sketch)}}" SHARD_OUT="{{join(invocation_directory(), out)}}" cargo test -q -p shard write_a_sketch -- --nocapture
 
+# Node pages (docs/nodes/) from the words the kinds carry. Rewrites each page's
+# generated block and leaves the prose around it.
+[group('docs')]
+docs:
+    cargo run -q -p shard --example shard-docs
+
+# Fails if a page is missing, stale or orphaned, or a kind has no summary.
+[group('docs')]
+docs-check:
+    cargo run -q -p shard --example shard-docs -- --check
+
 [group('quality')]
 check:
     ./node_modules/.bin/tsc --noEmit
@@ -79,6 +90,7 @@ check:
     cargo fmt --all --check
     cargo clippy --workspace --all-targets -- -D warnings
     cargo test --workspace
+    just docs-check
     just licences
 
 # Licence check against the committed lock (preset-compliance.toml). Reads files

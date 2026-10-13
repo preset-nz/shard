@@ -2,7 +2,7 @@
 title: Ladder
 node: ladder
 group: effect
-summary: A driven four-pole low-pass after the patch filter, modelled on the Moog ladder.
+summary: "A driven four-pole low-pass after the patch filter, modelled on the Moog ladder: growls when pushed, whistles at full resonance."
 ---
 
 # Ladder
@@ -12,11 +12,12 @@ A driven four-pole low-pass after the patch filter, modelled on the Moog ladder:
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
-| Mix | 0% to 100% | 100% | How much of the ladder's sound is blended with what goes into it; full is all ladder. |
-| Drive | 0% to 100% | 30% | Pushes the signal into the filter so it gets dirtier rather than louder. |
-| Cutoff | 20 Hz to 20 kHz | 2 kHz | The frequency above which the ladder cuts, at a steep 24 dB per octave. |
-| Resonance | 0% to 100% | 20% | Emphasis at the cutoff: it growls as it rises and whistles on its own at full. |
-| Tracking | Off, Half, Full | Off | How far the ladder's cutoff follows each step's pitch, separate from the filter's own. |
+| Ladder | on or off | off | A driven four-pole low-pass after the patch filter, modelled on the Moog ladder: growls when pushed, whistles at full resonance. |
+| Mix | 0 to 1 | 1 | How much of the ladder's sound is blended with what goes into it; full is all ladder. |
+| Drive | 0 to 1 | 0.3 | Pushes the signal into the filter so it gets dirtier rather than louder. |
+| Cutoff | 20 Hz to 20000 Hz | 2000 Hz | The frequency above which the ladder cuts, at a steep 24 dB per octave. |
+| Resonance | 0 to 1 | 0.2 | Emphasis at the cutoff: it growls as it rises and whistles on its own at full. |
+| Tracking | 0 to 2 | 0 | How far the ladder's cutoff follows each step's pitch: off, half, or full, separate from the filter's own. |
 <!-- generated:end -->
 
 ## What it's for

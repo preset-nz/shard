@@ -51,7 +51,7 @@ use shard_dsp::duck::{DEPTH_DEFAULT, RELEASE_DEFAULT_MS, RELEASE_MAX_MS, RELEASE
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::{DECAY_MAX, DECAY_MIN, HIT_MAX, TUNE_RANGE};
 use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
-use shard_dsp::params::{ParamDef, Taper, GENERATORS, PARAMS};
+use shard_dsp::params::{ParamDef, Taper, Unit, GENERATORS, PARAMS};
 use shard_dsp::sources::OCTAVE_RANGE;
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
 
@@ -183,12 +183,22 @@ pub fn duck_keys(track: &Node<'_>) -> DuckKeys {
 /// A track's sidechain values, declared on its kind.
 fn with_duck(t: NodeType, keys: DuckKeys) -> NodeType {
     t.float(keys.depth, 0.0..=1.0, float(DEPTH_DEFAULT))
+        .described(
+            "Duck depth",
+            "How far a full-strength step on the key track dips this track; 1 is silence.",
+        )
         .float(
             keys.release,
             float(RELEASE_MIN_MS)..=float(RELEASE_MAX_MS),
             float(RELEASE_DEFAULT_MS),
         )
+        .described("Duck release", "How long the dip takes to come back.")
+        .unit("ms")
         .bool(keys.key_only, false)
+        .described(
+            "Key only",
+            "Silences this track while its steps still dip whatever it ducks.",
+        )
         .reference(keys.by)
 }
 
@@ -350,12 +360,46 @@ fn effect_rows(kind: Fx) -> Vec<ParamDef> {
 /// A parameter row as a value. A switch is a bool, any other stepped row an
 /// int (the table holds every stepped row to whole steps), the rest floats.
 pub fn spec(def: &ParamDef) -> ValueSpec {
-    match def.taper {
+    let spec = match def.taper {
         Taper::Stepped(_) if def.id.ends_with(".on") => ValueSpec::bool(def.id, def.default >= 0.5),
         Taper::Stepped(_) => {
             ValueSpec::int(def.id, def.min as i64..=def.max as i64, def.default as i64)
         }
         _ => ValueSpec::float(def.id, float(def.min)..=float(def.max), float(def.default)),
+    }
+    .described(def.name, def.description);
+    match unit_text(def.unit) {
+        Some(u) => spec.unit(u),
+        None => spec,
+    }
+}
+
+/// A unit as the pages and tooltips write it. Percent is left out: those rows
+/// hold a fraction (0 to 1) in the tree, and rhizome writes a range with its
+/// unit unscaled, so "%" would read "0% to 1%".
+fn unit_text(unit: Unit) -> Option<&'static str> {
+    match unit {
+        Unit::Ms => Some("ms"),
+        Unit::Seconds => Some("s"),
+        Unit::Hz => Some("Hz"),
+        Unit::Semitones => Some("st"),
+        Unit::Octaves => Some("oct"),
+        Unit::Db => Some("dB"),
+        Unit::Percent | Unit::None => None,
+    }
+}
+
+/// A kind's words, written by hand where no switch row speaks for it.
+fn words(t: NodeType, label: &str, summary: &str, group: &str) -> NodeType {
+    t.label(label).summary(summary).group(group)
+}
+
+/// A kind with a switch row (`<kind>.on`) is named and summed up by it: the
+/// row's name is the label, its description the summary.
+fn words_from_switch(t: NodeType, rows: &[ParamDef], group: &str) -> NodeType {
+    match rows.iter().find(|r| r.id.ends_with(".on")) {
+        Some(sw) => words(t, sw.name, sw.description, group),
+        None => t,
     }
 }
 
@@ -368,8 +412,14 @@ fn with_rows(mut t: NodeType, rows: &[ParamDef]) -> NodeType {
 
 fn link_values() -> Vec<ValueSpec> {
     vec![
-        ValueSpec::float("lo", 0.0..=1.0, 0.0),
-        ValueSpec::float("hi", 0.0..=1.0, 1.0),
+        ValueSpec::float("lo", 0.0..=1.0, 0.0).described(
+            "Low",
+            "Where the linked control sits when the modulator is at its lowest, from the bottom to the top of its range.",
+        ),
+        ValueSpec::float("hi", 0.0..=1.0, 1.0).described(
+            "High",
+            "Where the linked control sits when the modulator is at its highest, from the bottom to the top of its range.",
+        ),
     ]
 }
 
@@ -726,9 +776,20 @@ pub fn kinds() -> Vec<KindDecl> {
         &patch_rows("patch"),
     )
     .text(PATCH_LABEL, "")
+    .described("Name", "What the patch is called in the scene view.")
     .shaped(
         "patch.map",
         Shape::optional(Shape::record([("id", Shape::Int), ("name", Shape::Text)])),
+    )
+    .described(
+        "Controller map",
+        "The controller map this patch plays with, by its id in the app's own list.",
+    );
+    let patch = words(
+        patch,
+        "Patch",
+        "One sound: its generators, effects and settings, played by one or more tracks.",
+        "patch",
     );
     push(
         // Not held to the order, as a sample is to the pool's: a file saved
@@ -750,7 +811,8 @@ pub fn kinds() -> Vec<KindDecl> {
     // A patch's sections. A generator is added and removed by the tree; the
     // rest stay once made.
     for &name in PATCH_NODES {
-        let mut t = with_rows(NodeType::new(name), &patch_rows(name));
+        let rows = patch_rows(name);
+        let mut t = with_rows(NodeType::new(name), &rows);
         if READS_MATERIAL.contains(&name) {
             t = t.reference(format!("{name}.source").as_str());
         }
@@ -761,6 +823,29 @@ pub fn kinds() -> Vec<KindDecl> {
         } else {
             Role::Fixed
         };
+        t = match role {
+            Role::Generator => words_from_switch(t, &rows, "generator"),
+            Role::Effect => words_from_switch(t, &rows, "effect"),
+            _ => words(
+                t,
+                "Tape",
+                "How the tape slows, stops or runs backwards when a brake or reverse is played.",
+                "patch",
+            ),
+        };
+        if name == "material" {
+            // The row says "Material"; the work area has always called the
+            // generator Sample.
+            t = t.label("Sample");
+        }
+        if name == "amp" {
+            t = words(
+                t,
+                "Output",
+                "The patch's master level, after every generator and effect.",
+                "patch",
+            );
+        }
         let under = if name == "filter" {
             Under::Either
         } else {
@@ -772,7 +857,9 @@ pub fn kinds() -> Vec<KindDecl> {
 
     // The palette.
     for kind in Fx::ALL {
-        let t = with_rows(NodeType::new(kind.name()), &effect_rows(kind));
+        let rows = effect_rows(kind);
+        let t = with_rows(NodeType::new(kind.name()), &rows);
+        let t = words_from_switch(t, &rows, "effect");
         push(
             checked(t, Under::Either, none),
             Role::Effect,
@@ -786,14 +873,31 @@ pub fn kinds() -> Vec<KindDecl> {
     let lfo = NodeType::new(LFO)
         .in_categories(&[PATCHES, GLOBALS])
         .text("lfo.label", "")
+        .described("Name", "What the LFO is called in the list of modulators.")
         .float(
             "lfo.rate",
             float(MIN_RATE_HZ)..=float(MAX_RATE_HZ),
             float(NEW_RATE_HZ),
         )
+        .described("Rate", "How many times a second the wave goes round.")
+        .unit("Hz")
         .choice("lfo.shape", &LfoShape::NAMES, NEW_SHAPE)
+        .described(
+            "Shape",
+            "The wave it draws: smooth, stepped, random, or one of the curves.",
+        )
         .float("lfo.phase", 0.0..=1.0, 0.0)
+        .described(
+            "Phase",
+            "Where in the wave it starts, as a fraction of one turn.",
+        )
         .bindable(link_values());
+    let lfo = words(
+        lfo,
+        "LFO",
+        "A slow wave that a control can follow, so it drifts, wobbles or jumps by itself.",
+        "modulator",
+    );
     push(
         checked(lfo, Under::PatchOrGlobals, |n| {
             if is_global(n) {
@@ -812,9 +916,26 @@ pub fn kinds() -> Vec<KindDecl> {
     let env = NodeType::new(MOD_ENV)
         .in_categories(&[PATCHES])
         .text("mod-env.label", "")
+        .described(
+            "Name",
+            "What the envelope is called in the list of modulators.",
+        )
         .choice("mod-env.mode", &MODES, MODES[0])
-        .value(curve)
+        .described(
+            "Mode",
+            "ADSR draws the curve with four sliders; free lets you place the points yourself.",
+        )
+        .value(curve.described(
+            "Curve",
+            "The shape a linked control follows over the length of a note.",
+        ))
         .bindable(link_values());
+    let env = words(
+        env,
+        "Mod envelope",
+        "A curve drawn over each note that a control can follow, so it swells, dips or snaps back as the note plays.",
+        "modulator",
+    );
     push(
         checked(env, Under::Patch, envelope_holds),
         Role::Modulator,
@@ -831,11 +952,23 @@ pub fn kinds() -> Vec<KindDecl> {
             float(TEMPO_MIN)..=float(TEMPO_MAX),
             float(blank.tempo),
         )
+        .described("Tempo", "How fast the steps play, in beats a minute.")
+        .unit("BPM")
         .float(
             "arrangement.swing",
             0.0..=float(SWING_MAX),
             float(blank.swing),
+        )
+        .described(
+            "Swing",
+            "How far the even steps are pushed late, as a fraction of a sixteenth; 0 is straight.",
         );
+    let arr = words(
+        arr,
+        "Arrangement",
+        "The level above the patches: tempo, swing and the tracks of steps that play them.",
+        "arrangement",
+    );
     push(
         checked(arr, Under::Category, |n| {
             order_holds(n, CHAIN, is_effect)?;
@@ -857,11 +990,31 @@ pub fn kinds() -> Vec<KindDecl> {
             0.0..=float(TRACK_GAIN_MAX),
             float(TRACK_GAIN_DEFAULT),
         )
+        .described("Level", "The track's fader; 1 leaves the patch as it is.")
         .int("track.length", 4..=STEPS as i64, i64::from(track.length))
+        .described(
+            "Length",
+            "How many steps the track plays before it goes round again.",
+        )
+        .unit("steps")
         .bool(TRACK_MUTE, false)
+        .described(
+            "Mute",
+            "Silences the track. Kept in the file, not in the undo history.",
+        )
         .bool(TRACK_SOLO, false)
+        .described(
+            "Solo",
+            "Plays only the soloed tracks. Kept in the file, not in the undo history.",
+        )
         .reference(TRACK_PATCH);
     let t = with_duck(t, TRACK_DUCK);
+    let t = words(
+        t,
+        "Track",
+        "A row of steps that plays one patch as a melody.",
+        "arrangement",
+    );
     push(
         checked(t, Under::Arrangement, |n| {
             length_holds(n, "track.length")?;
@@ -882,22 +1035,38 @@ pub fn kinds() -> Vec<KindDecl> {
     let t = NodeType::new(STEP)
         .in_categories(&[ARRANGEMENTS])
         .bool("step.on", step.on)
+        .described("On", "Whether the step plays a note.")
         .int(
             "step.pitch",
             -i64::from(PITCH_RANGE)..=i64::from(PITCH_RANGE),
             i64::from(step.pitch),
         )
+        .described("Pitch", "How far the note is moved from the sample's own pitch.")
+        .unit("st")
         .int("step.hold", 0..=i64::from(HOLD_MAX), i64::from(step.hold))
+        .described(
+            "Hold",
+            "How many sixteenths the note is held before its release, when the patch's Length is Hold.",
+        )
         .int(
             "step.velocity",
             0..=i64::from(VELOCITY_MAX),
             i64::from(step.velocity),
         )
+        .described("Velocity", "How hard the note is hit, as MIDI counts it.")
         .int(
             "step.nudge",
             -i64::from(NUDGE_MAX_MS)..=i64::from(NUDGE_MAX_MS),
             i64::from(step.nudge),
-        );
+        )
+        .described("Nudge", "Moves the note earlier or later than the grid.")
+        .unit("ms");
+    let t = words(
+        t,
+        "Step",
+        "One position in a track's row: whether it plays, and how.",
+        "arrangement",
+    );
     push(
         checked(t, Under::Track, |n| {
             step_number(n)
@@ -916,25 +1085,52 @@ pub fn kinds() -> Vec<KindDecl> {
     let t = NodeType::new(DRUMS)
         .in_categories(&[ARRANGEMENTS])
         .bool("drums.on", kit.on)
+        .described("On", "Whether the drum track sounds.")
         .float(
             "drums.gain",
             0.0..=float(TRACK_GAIN_MAX),
             float(TRACK_GAIN_DEFAULT),
         )
+        .described("Level", "The track's fader; 1 leaves the kit as it is.")
         .float(
             "drums.tune",
             float(-TUNE_RANGE)..=float(TUNE_RANGE),
             float(kit.tune),
         )
+        .described("Tune", "Moves the whole kit up or down in pitch.")
+        .unit("st")
         .float(
             "drums.decay",
             float(DECAY_MIN)..=float(DECAY_MAX),
             float(kit.decay),
         )
+        .described(
+            "Decay",
+            "How long each drum rings; below 1 is tighter, above is longer.",
+        )
         .int("drums.length", 4..=STEPS as i64, i64::from(track.length))
+        .described(
+            "Length",
+            "How many steps the track plays before it goes round again.",
+        )
+        .unit("steps")
         .bool(DRUMS_MUTE, false)
-        .bool(DRUMS_SOLO, false);
+        .described(
+            "Mute",
+            "Silences the track. Kept in the file, not in the undo history.",
+        )
+        .bool(DRUMS_SOLO, false)
+        .described(
+            "Solo",
+            "Plays only the soloed tracks. Kept in the file, not in the undo history.",
+        );
     let t = with_duck(t, DRUMS_DUCK);
+    let t = words(
+        t,
+        "Drums",
+        "A drum kit played by a grid of kick, snare and hat hits.",
+        "arrangement",
+    );
     push(
         checked(t, Under::Arrangement, |n| {
             length_holds(n, "drums.length")?;
@@ -945,12 +1141,32 @@ pub fn kinds() -> Vec<KindDecl> {
         Some(KITS),
     );
 
-    let hit = |key: &str| ValueSpec::int(key, 0..=i64::from(HIT_MAX), 0);
+    let hit = |key: &str, label: &str, what: &str| {
+        ValueSpec::int(key, 0..=i64::from(HIT_MAX), 0).described(label, what)
+    };
     let t = NodeType::new(BEAT)
         .in_categories(&[ARRANGEMENTS])
-        .value(hit("beat.kick"))
-        .value(hit("beat.snare"))
-        .value(hit("beat.hat"));
+        .value(hit(
+            "beat.kick",
+            "Kick",
+            "How hard the kick hits on this step; 0 is silent.",
+        ))
+        .value(hit(
+            "beat.snare",
+            "Snare",
+            "How hard the snare hits on this step; 0 is silent.",
+        ))
+        .value(hit(
+            "beat.hat",
+            "Hat",
+            "How hard the hat hits on this step; 0 is silent.",
+        ));
+    let t = words(
+        t,
+        "Beat",
+        "One position in a drums track's grid: how hard each drum hits there.",
+        "arrangement",
+    );
     push(
         checked(t, Under::Drums, |n| {
             step_number(n)
@@ -967,6 +1183,12 @@ pub fn kinds() -> Vec<KindDecl> {
         NodeType::new(MASTER).in_categories(&[ARRANGEMENTS]),
         &arrangement_rows("amp"),
     );
+    let t = words(
+        t,
+        "Output",
+        "The arrangement's master level and limiter, after every track and effect.",
+        "arrangement",
+    );
     push(
         checked(t, Under::Arrangement, none),
         Role::Fixed,
@@ -978,17 +1200,36 @@ pub fn kinds() -> Vec<KindDecl> {
     let t = NodeType::new(SAMPLE)
         .in_categories(&[MATERIALS])
         .text("sample.label", "")
+        .described(
+            "Name",
+            "What the sample is called in the list of materials.",
+        )
         // Empty for the built-in drone, which has no file.
         .text("sample.path", "")
+        .described(
+            "File",
+            "Where the WAV lives on disk; empty for the built-in drone.",
+        )
         .int(
             "sample.octave",
             -(OCTAVE_RANGE as i64)..=OCTAVE_RANGE as i64,
             0,
         )
+        .described(
+            "Octave",
+            "Moves the sample up or down whole octaves before anything plays it.",
+        )
+        .unit("oct")
         .float("sample.start", 0.0..=1.0, 0.0)
+        .described("Start", "Where playback begins, as a fraction of the file.")
         .float("sample.end", 0.0..=1.0, 1.0)
+        .described("End", "Where playback ends, as a fraction of the file.")
         // The MIDI note it sounds at, when known.
         .shaped("sample.root", Shape::optional(Shape::Int))
+        .described(
+            "Root note",
+            "The MIDI note the sample sounds at, when known.",
+        )
         // Marked regions, as fractions of the file (row 49); null for none.
         .shaped(
             "sample.regions",
@@ -996,7 +1237,17 @@ pub fn kinds() -> Vec<KindDecl> {
                 ("start", Shape::Float),
                 ("end", Shape::Float),
             ]))),
+        )
+        .described(
+            "Regions",
+            "Marked stretches of the file, as fractions of its length.",
         );
+    let t = words(
+        t,
+        "Material",
+        "A WAV file, or the built-in drone, that a generator reads and plays.",
+        "material",
+    );
     push(
         checked(t, Under::Category, |n| listed_in(n, POOL)),
         Role::Structure,

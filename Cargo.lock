@@ -3222,8 +3222,6 @@ dependencies = [
 [[package]]
 name = "rhizome-core"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a9270992ec5527404939a3e57dccc1534b428064d00a979aa2ae8397139f7393"
 dependencies = [
  "serde",
  "serde_json",
@@ -3232,10 +3230,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rhizome-docs"
+version = "0.1.5"
+dependencies = [
+ "rhizome-core",
+ "serde_json",
+]
+
+[[package]]
 name = "rhizome-pom"
 version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "71d20a9330f41b76bec7456101ceacba9f5c290cb977b40f2663a8ac9239356f"
 dependencies = [
  "rhizome-core",
  "serde",
@@ -3552,6 +3556,7 @@ dependencies = [
  "preset-app-kit",
  "preset-math",
  "rhizome-core",
+ "rhizome-docs",
  "rhizome-pom",
  "serde",
  "serde_json",

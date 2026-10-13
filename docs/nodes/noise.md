@@ -2,7 +2,7 @@
 title: Noise
 node: noise
 group: generator
-summary: A noise generator, from low rumble to bright hiss, with an optional pitched band for wind and whistles.
+summary: A continuous noise generator, from low rumble to bright hiss, with an optional pitched band for wind and whistles.
 ---
 
 # Noise
@@ -12,12 +12,13 @@ A continuous noise generator, from low rumble to bright hiss, with an optional p
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
-| Gain | 0% to 200% | 100% | How loud the noise is, from silence to double. |
-| Colour | −1 to 1 | 0 | The kind of noise: brown rumble at the far left, then pink, white at the centre, blue, and violet hiss at the far right. |
-| Band | 0% to 100% | 0% | How much of the noise is squeezed into a narrow band at Frequency, for wind, whistles and pitched hiss; zero leaves the plain noise. |
-| Frequency | 20 Hz to 8 kHz | 440 Hz | The centre of the noise band; a step's pitch moves it. |
-| Width | 0% to 100% | 30% | How wide the noise band is, from a thin whistle to a broad blow two octaves wide. |
-| Run | Notes, Free | Notes | Whether the noise follows the notes or sounds for as long as the transport plays, past the envelope. |
+| Noise | on or off | off | A continuous noise generator, from low rumble to bright hiss, with an optional pitched band for wind and whistles. |
+| Gain | 0 to 2 | 1 | How loud the noise is, from silence to double. |
+| Colour | -1 to 1 | 0 | The kind of noise: brown rumble at the far left, then pink, white at the centre, blue, and violet hiss at the far right. |
+| Band | 0 to 1 | 0 | How much of the noise is squeezed into a narrow band at Frequency, for wind, whistles and pitched hiss; zero leaves the plain noise. |
+| Frequency | 20 Hz to 8000 Hz | 440 Hz | The centre of the noise band; a step's pitch moves it. |
+| Width | 0 to 1 | 0.3 | How wide the noise band is, from a thin whistle to a broad blow two octaves wide. |
+| Run | 0 to 1 | 0 | Whether the noise follows the notes (Notes) or sounds for as long as the transport plays, past the envelope (Free). |
 <!-- generated:end -->
 
 ## What it's for
