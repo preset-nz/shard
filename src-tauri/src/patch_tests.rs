@@ -635,6 +635,7 @@ fn a_patch_whose_material_was_removed_duplicates_reading_nothing() {
 fn a_copy_reads_the_same_materials() {
     let r = rig();
     let original = current(&r).id;
+    r.session.add_generator("grain").unwrap();
     let before = r.session.pool().wires;
     assert!(before.material.is_some() && before.grain.is_some());
     r.session.duplicate_patch(original).unwrap();

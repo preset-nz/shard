@@ -58,6 +58,8 @@ mod play_mode_tests;
 #[cfg(test)]
 mod regions_tests;
 #[cfg(test)]
+mod section_tests;
+#[cfg(test)]
 mod sketch;
 mod source;
 mod tracker;
@@ -293,6 +295,26 @@ fn fx_move(
     by: i32,
 ) -> Result<Option<usize>, String> {
     state.session.fx_move(&layer, n, by)
+}
+
+/// The generators the current patch holds, by table prefix, in table order.
+/// A generator is in the patch while its node is; its switch only mutes it.
+#[tauri::command]
+fn generators(state: tauri::State<'_, Audio>) -> Vec<&'static str> {
+    state.session.generators()
+}
+
+/// Adds a generator to the current patch, switched on. One undo step.
+#[tauri::command]
+fn add_generator(state: tauri::State<'_, Audio>, kind: String) -> Result<bool, String> {
+    state.session.add_generator(&kind)
+}
+
+/// Takes a generator out of the current patch. Undo brings it back with its
+/// settings.
+#[tauri::command]
+fn remove_generator(state: tauri::State<'_, Audio>, kind: String) -> Result<bool, String> {
+    state.session.remove_generator(&kind)
 }
 
 fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
@@ -2221,7 +2243,7 @@ fn build_audio() -> Result<Audio, String> {
         .recv()
         .map_err(|_| "the audio thread died during startup".to_string())??;
 
-    // A new session plays the built-in drone through both generators, and
+    // A new session plays the built-in drone through its material, and
     // lists it, so nothing sounds that the pool does not show (Georg,
     // 2026-09-15).
     let drone = Arc::new(source::startup_drone(sample_rate));
@@ -2359,6 +2381,9 @@ pub fn run() {
             fx_add,
             fx_remove,
             fx_move,
+            generators,
+            add_generator,
+            remove_generator,
             reset_sound,
             patches,
             new_patch,

@@ -141,6 +141,17 @@ export const setParam = (id: string, value: number) =>
     ? invoke<void>('set_arrangement_param', { id, value })
     : invoke<void>('set_param', { id, value });
 
+/**
+ * The generators the current patch holds, by node id, in table order. A
+ * generator is in the patch while its node is; its switch only mutes it, so
+ * presence never comes from `<id>.on`. Polled, like the values.
+ */
+export const listGenerators = () => invoke<string[]>('generators');
+/** Adds a generator to the current patch, switched on. One step of Undo. */
+export const addGenerator = (kind: string) => invoke<boolean>('add_generator', { kind });
+/** Takes a generator out of the current patch. Undo brings it back as it was. */
+export const removeGenerator = (kind: string) => invoke<boolean>('remove_generator', { kind });
+
 /** Which level's chain a palette command acts on. */
 export type ChainLevel = 'patch' | 'arrangement';
 

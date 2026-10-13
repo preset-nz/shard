@@ -157,9 +157,17 @@ the arrangement, under `arrangement.`.
   copy k, so the same tree always compiles to the same ids.
 - An empty chain is a bit-exact passthrough. An effect not in the chain costs
   nothing.
-- Filter, ladder, envelope and output are fixed nodes, not palette items. A
-  new fixed node is missing from every saved file, so add it to the fixture
-  and `evals/agent/references/` when it lands.
+- Filter, ladder, envelope, tape and output are a patch's sections, not
+  palette items: one each at most, never removed. **No section is
+  predefined** (Georg, 2026-10-14): a new patch holds only its material, and
+  a write to a row of a section the patch lacks makes it in the same undo
+  step (`object_model::home`, `ShardEdit::section`). An absent section reads
+  as its defaults, so a new kind needs no edit to any saved file.
+- **A generator is in the patch while its node is.** Add makes the node,
+  switched on; Remove deletes it (undo brings it back with its settings); its
+  switch only mutes it. An absent generator is off whatever its switch's
+  default. The webview learns which there are from Rust (`generators`), never
+  from `<g>.on`.
 - To add a kind: `guidance/projects/shard/docs/adding-an-effect.md`.
 
 The tests `every_switchable_node_leads_with_its_level` and

@@ -323,15 +323,30 @@ fn check_a_shard_file() {
     println!("wrote {}", dest.display());
 }
 
-/// The rows of epics 36 and 48 on an opened file, not a fresh session:
-/// every row can be set and comes back after a save and a reopen. A fixed
-/// node added to `PATCH_NODES` is missing from every file saved before it,
-/// and its rows are refused there, so the fixture and the eval references
-/// gain the node when it lands (the ladder, 2026-10-12; noise, 2026-10-14).
+/// A write to a section the opened file lacks makes it (Georg, 2026-10-14:
+/// "writing into a file needs to create the nodes it needs"). The fixture
+/// has no ladder and no noise: their rows set, save and come back after a
+/// reopen, and the first write's one undo step takes the node away again.
 #[test]
-fn the_filter_rows_set_and_save_on_an_opened_file() {
+fn a_write_to_a_section_the_opened_file_lacks_makes_it() {
     let l = load();
     let s = &l.rig.session;
+    let has = |kind: &str| {
+        s.read(|d| {
+            crate::object_model::patch_node(d.tree(), None)
+                .and_then(|p| p.child(kind))
+                .is_some()
+        })
+    };
+    assert!(!has("ladder") && !has("noise"), "the fixture lacks both");
+
+    s.set_param("noise.color", -0.5).expect("noise.color");
+    assert!(has("noise"), "the write made the noise");
+    assert_eq!(s.history().0.as_deref(), Some("Set Colour"));
+    s.undo().unwrap();
+    assert!(!has("noise"), "one undo step takes both away");
+    assert_eq!(l.rig.bank.get_by_id("noise.color"), Some(0.0));
+
     let rows = [
         ("filter.slope", 1.0),
         ("filter.tracking", 2.0),

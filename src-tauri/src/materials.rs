@@ -119,9 +119,10 @@ pub struct Pool {
 }
 
 impl Pool {
-    /// A new document's pool: the built-in drone, wired into both generators,
-    /// so what plays at launch is listed like any other material. The seed of
-    /// a new session (`object_model`).
+    /// A new document's pool: the built-in drone, so what plays at launch is
+    /// listed like any other material. The seed of a new session
+    /// (`object_model`) wires it into its patch's material; a generator made
+    /// later that reads a material reads it too (`ShardEdit::section`).
     pub fn with_drone() -> Self {
         Self {
             materials: vec![MaterialRecord {

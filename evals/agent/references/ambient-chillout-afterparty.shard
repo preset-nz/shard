@@ -449,11 +449,6 @@
       }
     },
     {
-      "path": "/patches/patch/ladder",
-      "id": "01M4ZQ36F1TER0000000000002",
-      "type": "ladder"
-    },
-    {
       "path": "/patches/patch/material",
       "id": "01M48E19QD03F1X2SVZXWTQ7SE",
       "type": "material",
@@ -466,11 +461,6 @@
           "path": "/materials/Built-in-drone"
         }
       }
-    },
-    {
-      "path": "/patches/patch/noise",
-      "id": "01M4ZQ48N0SE00000000000002",
-      "type": "noise"
     },
     {
       "path": "/patches/patch/reverb",

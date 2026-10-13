@@ -24,6 +24,13 @@ fn id(doc: &Document<Shard>, path: &str) -> NodeId {
         .id()
 }
 
+/// The first patch's section `kind`, made in an edit of its own: a new
+/// patch holds only its material.
+fn section(doc: &mut Document<Shard>, kind: &str) -> NodeId {
+    let patch = id(doc, "/patches/patch");
+    doc.edit("Section", |tx| tx.section(patch, kind)).unwrap().0
+}
+
 fn bits(values: &[f32]) -> Vec<u32> {
     values.iter().map(|v| v.to_bits()).collect()
 }
@@ -53,7 +60,7 @@ fn a_new_session_compiles_to_todays_banks_bit_for_bit() {
 }
 
 #[test]
-fn a_new_session_reads_the_drone_in_both_generators() {
+fn a_new_session_reads_the_drone_in_its_material() {
     let plan = new_session().projection().clone();
     let today = Pool::with_drone();
     assert_eq!(plan.pool.materials.len(), 1);
@@ -77,7 +84,8 @@ fn a_new_session_reads_the_drone_in_both_generators() {
         )
     );
     assert_eq!(plan.pool.wires.material, Some(ours.id));
-    assert_eq!(plan.pool.wires.grain, Some(ours.id));
+    assert_eq!(plan.pool.wires.grain, None, "a new patch has no cloud");
+    assert_eq!(plan.generators, ["material"]);
 }
 
 /// The effect chain compiles to the bank today's palette code writes for the
@@ -227,7 +235,7 @@ fn a_tracker_round_trips_through_the_tree() {
 fn links_compile_to_the_records_that_build_a_mod_set_today() {
     let mut doc = new_session();
     let patch = id(&doc, "/patches/patch");
-    let grain = id(&doc, "/patches/patch/grain");
+    let grain = section(&mut doc, "grain");
     let ((lfo, env), _) = doc
         .edit("Modulate", |tx| {
             let lfo = tx.add_lfo(patch)?;
@@ -281,7 +289,7 @@ fn links_compile_to_the_records_that_build_a_mod_set_today() {
 fn a_node_keeps_its_runtime_id_and_a_new_one_never_reuses_one() {
     let mut doc = new_session();
     let patch = id(&doc, "/patches/patch");
-    let grain = id(&doc, "/patches/patch/grain");
+    let grain = section(&mut doc, "grain");
     let (lfo, _) = doc.edit("Add LFO", |tx| tx.add_lfo(patch)).unwrap();
     let before = doc.projection().id_of(lfo).unwrap();
 
@@ -315,7 +323,7 @@ fn compiling_the_same_tree_twice_gives_the_same_plan() {
 #[test]
 fn undo_recompiles() {
     let mut doc = new_session();
-    let grain = id(&doc, "/patches/patch/grain");
+    let grain = section(&mut doc, "grain");
     let before = doc.projection().clone();
     doc.edit("Set", |tx| {
         tx.set_value(grain, "grain.size", Value::Float(80.0))
@@ -332,7 +340,7 @@ fn undo_recompiles() {
 #[test]
 fn writing_a_plan_leaves_a_held_brake_held() {
     let mut doc = new_session();
-    let grain = id(&doc, "/patches/patch/grain");
+    let grain = section(&mut doc, "grain");
     let bank = ParamBank::new();
     let arr = ParamBank::for_table(arrangement::params());
     assert!(arr.set_by_id("arrangement.tape.brake", 1.0));
@@ -425,7 +433,7 @@ fn new_patches_go_at_the_end_of_the_order_and_count_on() {
 }
 
 #[test]
-fn a_new_patch_is_at_its_defaults_with_the_drone_in_both_generators() {
+fn a_new_patch_is_at_its_defaults_with_the_drone_in_its_material() {
     let mut doc = new_session();
     let (second, _) = doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
     let mut plan = doc.projection().clone();
@@ -437,7 +445,7 @@ fn a_new_patch_is_at_its_defaults_with_the_drone_in_both_generators() {
         plan.pool.wires, first,
         "the drone, as the first patch has it"
     );
-    assert!(plan.pool.wires.material.is_some() && plan.pool.wires.grain.is_some());
+    assert!(plan.pool.wires.material.is_some() && plan.pool.wires.grain.is_none());
 }
 
 #[test]
@@ -445,8 +453,8 @@ fn the_plan_plays_the_patch_the_track_names_and_the_first_without_one() {
     let mut doc = new_session();
     let first = id(&doc, "/patches/patch");
     let (second, _) = doc.edit("New Patch", |tx| tx.new_patch()).unwrap();
-    let grain = doc.tree().get(second).unwrap().child("grain").unwrap().id();
     doc.edit("Set", |tx| {
+        let grain = tx.section(second, "grain")?;
         tx.set_value(grain, "grain.size", Value::Float(80.0))
     })
     .unwrap();

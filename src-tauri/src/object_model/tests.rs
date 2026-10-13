@@ -18,6 +18,13 @@ fn id(doc: &Document<Shard>, path: &str) -> NodeId {
         .id()
 }
 
+/// The first patch's section `kind`, made in an edit of its own: a new
+/// patch holds only its material.
+fn section(doc: &mut Document<Shard>, kind: &str) -> NodeId {
+    let patch = id(doc, "/patches/patch");
+    doc.edit("Section", |tx| tx.section(patch, kind)).unwrap().0
+}
+
 /// A value as the bank holds it.
 fn as_f32(v: &Value) -> f32 {
     match v {
@@ -26,17 +33,6 @@ fn as_f32(v: &Value) -> f32 {
         Value::Float(x) => *x as f32,
         other => panic!("not a parameter value: {other:?}"),
     }
-}
-
-/// Where a patch parameter lives in a session, and its value there.
-fn patch_value(doc: &Document<Shard>, id: &str) -> Option<f32> {
-    let node = key_prefix(id);
-    let at = if node == "patch" {
-        "/patches/patch".to_string()
-    } else {
-        format!("/patches/patch/{node}")
-    };
-    doc.tree().at(at.as_str())?.value(id).map(|v| as_f32(&v))
 }
 
 fn arrangement_value(doc: &Document<Shard>, id: &str) -> Option<f32> {
@@ -56,17 +52,15 @@ fn a_new_session_holds_what_a_new_session_holds_today() {
     let doc = new_session();
     let tree = doc.tree();
 
-    for name in PATCH_NODES {
-        assert!(
-            tree.at(format!("/patches/patch/{name}").as_str()).is_some(),
-            "the patch has its {name}"
-        );
-    }
+    // Only what it was written: its material. Every other section is made
+    // by the first write that needs it.
     let patch = tree.at("/patches/patch").unwrap();
+    let held: Vec<&str> = patch.children().map(|n| n.name()).collect();
+    assert_eq!(held, ["material"], "a new patch holds only its material");
     assert!(patch.order(CHAIN).is_empty(), "a new patch runs no effects");
     assert!(patch.order(MODULATORS).is_empty());
 
-    // The drone, wired into both generators, as `Pool::with_drone`.
+    // The drone, wired into the material, as `Pool::with_drone`.
     let drone = tree
         .at("/materials")
         .unwrap()
@@ -78,14 +72,15 @@ fn a_new_session_holds_what_a_new_session_holds_today() {
         Some(Value::Text(DRONE_NAME.into()))
     );
     assert_eq!(drone.value("sample.path"), Some(Value::Text(String::new())));
-    for g in READS_MATERIAL {
-        let generator = patch.child(g).unwrap();
-        assert_eq!(
-            generator.resolve(&format!("{g}.source")).map(|n| n.id()),
-            Some(drone.id()),
-            "{g} reads the drone"
-        );
-    }
+    assert_eq!(
+        patch
+            .child("material")
+            .unwrap()
+            .resolve("material.source")
+            .map(|n| n.id()),
+        Some(drone.id()),
+        "the material reads the drone"
+    );
 
     let a = tree.at("/arrangements/arrangement").unwrap();
     for name in ["filter", "amp"] {
@@ -106,17 +101,31 @@ fn a_new_session_holds_what_a_new_session_holds_today() {
     assert!(!doc.is_unsaved(), "a new session is not edited");
 }
 
-/// Every patch row a person edits has a home in the tree, at the table's
-/// default. Slice B's projection relies on this to write the same bank.
+/// Every patch row a person edits has a home in the tree, made by the write
+/// when its section is absent, and an absent section compiles to the
+/// table's defaults, but for a generator, which is off.
 #[test]
-fn every_patch_parameter_has_a_home_at_its_default() {
+fn every_patch_parameter_has_a_home_and_absence_reads_as_its_default() {
     let doc = new_session();
-    for def in PARAMS.iter() {
+    let plan = doc.projection();
+    for (i, def) in PARAMS.iter().enumerate() {
         if fx::parse_row(def.id).is_some() || fx::is_order_row(def.id) {
             continue;
         }
-        let at = patch_value(&doc, def.id);
-        assert_eq!(at, Some(def.default), "{}", def.id);
+        assert!(
+            home(doc.tree(), None, def.id).is_some(),
+            "{} has a home",
+            def.id
+        );
+        let prefix = key_prefix(def.id);
+        let absent_generator = GENERATORS.contains(&prefix)
+            && def.id == format!("{prefix}.on")
+            && doc
+                .tree()
+                .at(format!("/patches/patch/{prefix}").as_str())
+                .is_none();
+        let want = if absent_generator { 0.0 } else { def.default };
+        assert_eq!(plan.patch[i], want, "{}", def.id);
     }
 }
 
@@ -278,11 +287,8 @@ fn fixed_nodes_stay() {
     let mut doc = new_session();
     // A patch itself is added and removed whole (epic 10); keeping the last
     // one is the Delete command's.
-    for path in [
-        "/patches/patch/filter",
-        "/patches/patch/grain",
-        "/arrangements/arrangement/amp",
-    ] {
+    section(&mut doc, "filter");
+    for path in ["/patches/patch/filter", "/arrangements/arrangement/amp"] {
         let node = id(&doc, path);
         assert!(
             doc.edit("Remove", |tx| tx.remove(node)).is_err(),
@@ -295,6 +301,15 @@ fn fixed_nodes_stay() {
             .is_err(),
         "one filter per patch"
     );
+    // A generator is in the patch while its node is: Remove deletes it, and
+    // there is one of each at most.
+    let grain = section(&mut doc, "grain");
+    assert!(
+        doc.edit("Add", |tx| tx.add(patch, "grain", "grain-2"))
+            .is_err(),
+        "one grain per patch"
+    );
+    assert!(doc.edit("Remove", |tx| tx.remove(grain)).is_ok());
 }
 
 #[test]
@@ -364,7 +379,7 @@ fn a_track_is_a_length_a_track_can_have() {
 fn links_follow_the_rules_the_engine_has() {
     let mut doc = new_session();
     let patch = id(&doc, "/patches/patch");
-    let grain = id(&doc, "/patches/patch/grain");
+    let grain = section(&mut doc, "grain");
     let (lfo, _) = doc.edit("Add LFO", |tx| tx.add_lfo(patch)).unwrap();
     let (env, _) = doc.edit("Add", |tx| tx.add_mod_env(patch)).unwrap();
 
@@ -440,7 +455,7 @@ fn a_session_saves_and_opens_as_rhizome_text() {
     let mut doc = new_session();
     let patch = id(&doc, "/patches/patch");
     let (lfo, _) = doc.edit("Add LFO", |tx| tx.add_lfo(patch)).unwrap();
-    let grain = id(&doc, "/patches/patch/grain");
+    let grain = section(&mut doc, "grain");
     doc.edit("Link", |tx| tx.link(grain, "grain.size", lfo, 0.0, 0.5))
         .unwrap();
     doc.edit("Add", |tx| tx.add_effect(patch, Fx::Reverb))

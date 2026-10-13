@@ -12,9 +12,11 @@ import type { NodeInfo } from '@/scope';
  * of a type (Georg, 2026-09-27: *"add generator of type"*).
  *
  * One of each type for now, because the parameter table has one set of rows
- * per generator. Adding switches that generator on and removing switches it
- * off, so a generator that is off is not in the patch. Several of one type
- * waits for the node API's instances.
+ * per generator. A generator is in the patch while its node is (Georg,
+ * 2026-10-14): adding makes the node, switched on, and removing deletes it,
+ * so undo brings it back with its settings. Its switch only mutes it, and a
+ * generator switched off stays listed. Several of one type waits for the node
+ * API's instances.
  */
 export function GeneratorTree({
   generators,
@@ -24,8 +26,8 @@ export function GeneratorTree({
   onRemove,
   nested = false,
 }: {
-  /** Every generator type, in work-area order, and whether it is in the patch. */
-  generators: Array<{ node: NodeInfo; on: boolean }>;
+  /** Every generator type, in work-area order, and whether the patch holds it. */
+  generators: Array<{ node: NodeInfo; present: boolean }>;
   selected: string | null;
   onSelect: (id: string | null) => void;
   onAdd: (id: string) => void;
@@ -36,7 +38,7 @@ export function GeneratorTree({
    */
   nested?: boolean;
 }) {
-  const present = generators.filter((g) => g.on);
+  const present = generators.filter((g) => g.present);
   return (
     <div className={nested ? 'ml-4 border-l border-border py-1' : 'py-2'}>
       <div className="flex items-center pr-2 pl-3 pb-1">
@@ -52,7 +54,7 @@ export function GeneratorTree({
           choices={generators.map((g) => ({
             kind: g.node.id,
             label: g.node.label,
-            disabled: g.on ? 'in the patch' : undefined,
+            disabled: g.present ? 'in the patch' : undefined,
           }))}
           onAdd={onAdd}
         />

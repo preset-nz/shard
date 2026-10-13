@@ -718,11 +718,6 @@
       }
     },
     {
-      "path": "/patches/patch/ladder",
-      "id": "01M4ZQ36F1TER0000000000003",
-      "type": "ladder"
-    },
-    {
       "path": "/patches/patch/material",
       "id": "01M48E19P9T590KGZT7016SWJK",
       "type": "material",
@@ -768,11 +763,6 @@
         },
         "mod-env.label": "Filter snap"
       }
-    },
-    {
-      "path": "/patches/patch/noise",
-      "id": "01M4ZQ48N0SE00000000000003",
-      "type": "noise"
     },
     {
       "path": "/patches/patch/tape",

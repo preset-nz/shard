@@ -16,6 +16,7 @@ import {
   ARRANGEMENT_PREFIX,
   addDrone,
   addEnvelope,
+  addGenerator,
   addGlobalLfo,
   addLfo,
   addMaterial,
@@ -54,6 +55,7 @@ import {
   lfoLimits,
   linkNew,
   linkParam,
+  listGenerators,
   listPatches,
   MAX_DRUMS_TRACKS,
   MAX_MELODY_TRACKS,
@@ -82,6 +84,7 @@ import {
   recordStart,
   recordStop,
   removeEnvelope,
+  removeGenerator,
   removeLfo,
   removeMaterial,
   removeRegion,
@@ -117,7 +120,7 @@ import { Inspector } from '@/components/Inspector';
 import { MaterialTree } from '@/components/MaterialTree';
 import { Meter } from '@/components/Meter';
 import { ModulatorTree } from '@/components/ModulatorTree';
-import { isNodeOn, NodeCard } from '@/components/NodeCard';
+import { NodeCard } from '@/components/NodeCard';
 import type { ParamRowContext } from '@/components/ParamRow';
 import { PatchPreview } from '@/components/PatchPreview';
 import { SceneView } from '@/components/SceneView';
@@ -181,6 +184,11 @@ const PLAY_MODES: [PlayMode, string, string][] = [
 ];
 
 /** Seconds as m:ss. */
+/** Whether two lists hold the same strings in the same order. */
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
+}
+
 function formatElapsed(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
@@ -266,6 +274,8 @@ export default function App() {
   const startMode = useRef(mode);
   /** The session's patches, in order, as the scene view lists them. */
   const [patches, setPatches] = useState<PatchInfo[]>([]);
+  // The generators the current patch holds, polled with the values.
+  const [present, setPresent] = useState<string[]>([]);
   /**
    * The track the tracker shows and edits, by place. Rust keeps the same
    * index, brought within the tracks there are, so both clamp alike.
@@ -378,15 +388,17 @@ export default function App() {
     const tick = async () => {
       if (!alive) return;
       try {
-        const [m, v, fresh, h, mm, a] = await Promise.all([
+        const [m, v, fresh, h, mm, a, g] = await Promise.all([
           readMeters(),
           getParams(),
           grainLog(),
           getHeard(),
           readMappings(),
           getArrangement(),
+          listGenerators(),
         ]);
         if (!alive) return;
+        setPresent((prev) => (sameList(prev, g) ? prev : g));
         setMeter(m);
         setMidi(mm);
         // Learning answers once, through the poll. Say it once.
@@ -1311,11 +1323,12 @@ export default function App() {
   for (const link of Object.values(mod.links)) {
     linkedCounts.set(link.source, (linkedCounts.get(link.source) ?? 0) + 1);
   }
-  // Every generator type and whether it is in the patch: on means present.
+  // Every generator type and whether the patch holds it: Rust says, from the
+  // nodes. A generator switched off is still in the patch, drawn off.
   const generators = NODES.filter(
     (n) => n.layer === 'patch' && n.lane === 'generate' && !n.setting,
-  ).map((node) => ({ node, on: defs ? isNodeOn(defs, values, node) : true }));
-  const absent = new Set(generators.filter((g) => !g.on).map((g) => g.node.id));
+  ).map((node) => ({ node, present: present.includes(node.id) }));
+  const absent = new Set(generators.filter((g) => !g.present).map((g) => g.node.id));
   // The process lane's effects, in the order the chain runs them, and what
   // can still be added to it: a kind has two copies, and a chain holds sixteen.
   const chain = fxChain(values, level);
@@ -1518,12 +1531,18 @@ export default function App() {
                     setMode('soundscape');
                   }}
                   onAdd={(id) => {
-                    void setParam(`${id}.on`, 1).catch((e) => setError(String(e)));
+                    void addGenerator(id)
+                      .then(listGenerators)
+                      .then(setPresent)
+                      .catch((e) => setError(String(e)));
                     select({ kind: 'node', id });
                     setMode('soundscape');
                   }}
                   onRemove={(node) => {
-                    void setParam(`${node.id}.on`, 0).catch((e) => setError(String(e)));
+                    void removeGenerator(node.id)
+                      .then(listGenerators)
+                      .then(setPresent)
+                      .catch((e) => setError(String(e)));
                     const now = useSelection.getState().selection;
                     if (now?.kind === 'node' && now.id === node.id) clear();
                   }}
@@ -1947,11 +1966,12 @@ export default function App() {
                         />
                       ))}
                     {[
-                      // The chain first, in its order; then the fixed nodes.
+                      // The chain first, in its order; then the sections, drawn
+                      // at their defaults until a write makes them.
                       ...(lane.id === 'process' ? chain : []),
                       ...(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
                         .filter((n: NodeInfo) => n.lane === lane.id && !n.fx)
-                        // A generator that is off is not in the patch; the tree adds it.
+                        // A generator the patch lacks has no card; the tree adds it.
                         .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id)),
                     ].map((node) => (
                       <NodeCard

@@ -87,7 +87,7 @@ use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
 use shard_dsp::kit::{KitParams, KitPattern};
-use shard_dsp::params::PARAMS;
+use shard_dsp::params::{GENERATORS, PARAMS};
 use shard_dsp::steps::StepBank;
 use shard_dsp::{
     Alone, Duck, DuckBank, Generator, Globals, KitBank, Mix, ModSet, ParamBank, ReadingBank,
@@ -98,7 +98,8 @@ use crate::mapping::MapRef;
 use crate::materials::{self, Pool, Wires, DRONE_NAME};
 use crate::modulation::{self, Modulation, Refused};
 use crate::object_model::{
-    self as om, arrangement_node, instance_of, locate, patch_node, to_value, Plan, Shard, ShardEdit,
+    self as om, arrangement_node, home, instance_of, locate, patch_node, to_value, Home, Plan,
+    Shard, ShardEdit,
 };
 use crate::source::{self, Loaded};
 use crate::tracker::{self, Slot, Track, Tracker};
@@ -500,6 +501,16 @@ fn name_of(id: &str) -> &'static str {
         .map_or("value", |p| p.name)
 }
 
+/// A generator's name as the patch view shows it, for an undo label: "Add
+/// Granular". The plain sample is "Sample" there, not its switch's
+/// "Material".
+fn generator_label(kind: &str) -> &'static str {
+    match kind {
+        "material" => "Sample",
+        _ => name_of(&format!("{kind}.on")),
+    }
+}
+
 impl Session {
     /// A new session at its defaults, handed to the engine whole.
     pub fn new(feeds: Feeds, drone: Arc<Loaded>, sample_rate: f32) -> Result<Self, String> {
@@ -809,18 +820,24 @@ impl Session {
 
     /// Sets a patch or arrangement parameter by id. A drag is one undo step,
     /// "Set Cutoff". Brake and reverse are played: they reach the
-    /// arrangement's bank and never the document.
+    /// arrangement's bank and never the document. A patch section the patch
+    /// lacks is made by the write, in the same step; a value the absent
+    /// section already reads (its default, a generator off) makes nothing.
     pub fn set_param(&self, id: &str, value: f32) -> Result<(), String> {
         if om::PLAYED.contains(&id) {
             self.feeds.arrangement.set_by_id(id, value);
             return Ok(());
         }
         let found = self.read(|d| {
-            let (node, key) = locate(d.tree(), self.current(), id)?;
-            let spec = d.tree().get(node)?.node_type()?.spec(&key)?.clone();
-            Some((node, key, to_value(&spec, value)?))
+            let (home, key) = home(d.tree(), self.current(), id)?;
+            let kind = match &home {
+                Home::Node(n) => d.tree().get(*n)?.type_name().to_string(),
+                Home::Section { kind, .. } => kind.clone(),
+            };
+            let spec = d.tree().registry().node_type(&kind)?.spec(&key)?.clone();
+            Some((home, key, to_value(&spec, value)?))
         });
-        let Some((node, key, want)) = found else {
+        let Some((home, key, want)) = found else {
             // An effect no node plays: a knob still mapped to it moves
             // nothing, as it did when only the bank heard it.
             if fx::parse_row(id).is_some() {
@@ -828,11 +845,65 @@ impl Session {
             }
             return Err(format!("unknown parameter: {id}"));
         };
+        if home.reads_already(&key, &want) {
+            return Ok(());
+        }
         let label = format!("Set {}", name_of(id));
         self.edit(&label, Some(&format!("param:{id}")), |tx| {
+            let node = home.node(tx)?;
             tx.put(node, &key, want)
         })?;
         Ok(())
+    }
+
+    // Generators.
+
+    /// The generators the current patch holds, in table order.
+    pub fn generators(&self) -> Vec<&'static str> {
+        lock(&self.sent).plan.generators.clone()
+    }
+
+    fn generator_kind(generator: &str) -> Result<&'static str, String> {
+        GENERATORS
+            .iter()
+            .find(|g| **g == generator)
+            .copied()
+            .ok_or_else(|| format!("there is no generator called {generator}"))
+    }
+
+    /// Adds a generator to the current patch, switched on: one undo step,
+    /// "Add Granular". One that reads a material reads the built-in drone.
+    /// False, and no step, when the patch already has it.
+    pub fn add_generator(&self, generator: &str) -> Result<bool, String> {
+        let kind = Self::generator_kind(generator)?;
+        let patch = self.owner("patch")?;
+        let on = format!("{kind}.on");
+        let (_, changed) = self.edit(&format!("Add {}", generator_label(kind)), None, |tx| {
+            if tx.at(patch).and_then(|p| p.child(kind)).is_some() {
+                return Ok(());
+            }
+            let node = tx.section(patch, kind)?;
+            tx.put(node, &on, Value::Bool(true))
+        })?;
+        Ok(changed)
+    }
+
+    /// Takes a generator out of the current patch: its node goes, one undo
+    /// step, "Remove Granular", and undo brings it back with its settings.
+    /// Switching it off is `set_param`'s, and keeps it.
+    pub fn remove_generator(&self, generator: &str) -> Result<bool, String> {
+        let kind = Self::generator_kind(generator)?;
+        let patch = self.owner("patch")?;
+        let (_, changed) =
+            self.edit(
+                &format!("Remove {}", generator_label(kind)),
+                None,
+                |tx| match tx.at(patch).and_then(|p| p.child(kind)).map(|n| n.id()) {
+                    Some(node) => tx.remove(node),
+                    None => Ok(()),
+                },
+            )?;
+        Ok(changed)
     }
 
     /// Every patch value back to its default and the chain emptied, as one
@@ -1512,12 +1583,13 @@ impl Session {
             ));
         }
         let (target, key) = self
-            .read(|d| locate(d.tree(), self.current(), id))
+            .read(|d| home(d.tree(), self.current(), id))
             .ok_or_else(|| format!("there is no parameter called {id}"))?;
         let source = self
             .read(|d| d.projection().node_of(source))
             .ok_or_else(|| format!("there is no LFO or envelope {source} to link to"))?;
         self.edit("Link a parameter", Some(&format!("link:{id}")), |tx| {
+            let target = target.node(tx)?;
             unlink(tx, target, &key)?;
             tx.link(target, &key, source, lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0))
         })?;
@@ -1534,7 +1606,7 @@ impl Session {
             ));
         }
         let (target, key) = self
-            .read(|d| locate(d.tree(), self.current(), id))
+            .read(|d| home(d.tree(), self.current(), id))
             .ok_or_else(|| format!("there is no parameter called {id}"))?;
         let (label, add): (_, fn(&mut Edit<'_>, NodeId) -> rhizome_core::Result<NodeId>) =
             match kind {
@@ -1546,6 +1618,7 @@ impl Session {
         let patch = self.owner("patch")?;
         self.edit(label, None, |tx| {
             let source = add(tx, patch)?;
+            let target = target.node(tx)?;
             unlink(tx, target, &key)?;
             tx.link(target, &key, source, lo.clamp(0.0, 1.0), hi.clamp(0.0, 1.0))
         })?;
@@ -1563,59 +1636,113 @@ impl Session {
     // Presets.
 
     /// The node a preset names, such as `grain`, `amp`, `patch` or
-    /// `fx.3.chorus`: patch only.
-    fn preset_node(&self, node: &str) -> Result<NodeId, String> {
+    /// `fx.3.chorus`: patch only. A section the patch lacks is
+    /// `Home::Section`, made by saving or applying a preset to it.
+    fn preset_node(&self, node: &str) -> Result<Home, String> {
         self.read(|d| {
             let current = self.current();
             let patch = patch_node(d.tree(), current)?;
             if node == om::PATCH {
-                return Some(patch.id());
+                return Some(Home::Node(patch.id()));
             }
             if node.starts_with("fx.") {
-                return locate(d.tree(), current, &format!("{node}.on")).map(|(n, _)| n);
+                return locate(d.tree(), current, &format!("{node}.on"))
+                    .map(|(n, _)| Home::Node(n));
             }
-            patch.child(node).map(|n| n.id())
+            match patch.child(node) {
+                Some(n) => Some(Home::Node(n.id())),
+                None => om::PATCH_NODES.contains(&node).then(|| Home::Section {
+                    patch: patch.id(),
+                    kind: node.to_string(),
+                }),
+            }
         })
         .ok_or_else(|| format!("there is no {node} to keep presets for"))
     }
 
+    /// Runs a preset verb on `home`'s node. A section the patch lacks is made
+    /// first, under a gesture named `label`, so the making and the verb are
+    /// one undo step.
+    fn on_preset_node<T>(
+        &self,
+        home: &Home,
+        label: &str,
+        f: impl FnOnce(&mut Document<Shard>, NodeId) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut doc = lock(&self.doc);
+        let out = match home {
+            Home::Node(n) => f(&mut doc, *n),
+            Home::Section { .. } => {
+                self.end_gesture(&mut doc);
+                let g = doc.begin(label).map_err(err)?;
+                let out = doc
+                    .within(g, |tx| home.node(tx))
+                    .map_err(err)
+                    .and_then(|(n, _)| f(&mut doc, n));
+                if out.is_ok() {
+                    doc.end(g).map_err(err)?;
+                } else {
+                    let _ = doc.cancel(g);
+                }
+                self.sync(&doc, false);
+                out
+            }
+        };
+        drop(doc);
+        self.changed();
+        out
+    }
+
     pub fn preset_names(&self, node: &str) -> Vec<String> {
-        let Ok(n) = self.preset_node(node) else {
+        let Ok(home) = self.preset_node(node) else {
             return Vec::new();
         };
-        self.read(|d| d.preset_names(n).unwrap_or_default())
-            .into_iter()
-            .filter_map(|p| match p {
-                PresetRef::User(label) => Some(label),
-                PresetRef::Catalogue(_) => None,
-            })
-            .collect()
+        self.read(|d| {
+            // Presets are kept per kind: a section the patch lacks offers
+            // what another patch's of its kind does.
+            let n = match &home {
+                Home::Node(n) => Some(*n),
+                Home::Section { kind, .. } => om::patches(d.tree())
+                    .into_iter()
+                    .find_map(|p| p.child(kind))
+                    .map(|n| n.id()),
+            };
+            n.and_then(|n| d.preset_names(n).ok()).unwrap_or_default()
+        })
+        .into_iter()
+        .filter_map(|p| match p {
+            PresetRef::User(label) => Some(label),
+            PresetRef::Catalogue(_) => None,
+        })
+        .collect()
     }
 
     pub fn save_preset(&self, node: &str, name: &str) -> Result<(), String> {
-        let n = self.preset_node(node)?;
-        lock(&self.doc).save_preset(n, name).map_err(err)?;
-        self.changed();
-        Ok(())
+        let home = self.preset_node(node)?;
+        self.on_preset_node(&home, "Save Preset", |doc, n| {
+            doc.save_preset(n, name).map(|_| ()).map_err(err)
+        })
     }
 
     pub fn update_preset(&self, node: &str, name: &str) -> Result<(), String> {
-        let n = self.preset_node(node)?;
-        lock(&self.doc).update_preset(n, name).map_err(err)?;
-        self.changed();
-        Ok(())
+        let home = self.preset_node(node)?;
+        self.on_preset_node(&home, "Update Preset", |doc, n| {
+            doc.update_preset(n, name).map(|_| ()).map_err(err)
+        })
     }
 
     /// Applies a preset: the node's values and links, never its switch.
     pub fn apply_preset(&self, node: &str, name: &str) -> Result<ApplyReport, String> {
-        let n = self.preset_node(node)?;
-        let mut doc = lock(&self.doc);
-        let (report, commit) = doc
-            .apply_preset(n, &PresetRef::User(name.to_string()))
-            .map_err(err)?;
-        if commit.is_some() {
-            self.sync(&doc, false);
-        }
+        let home = self.preset_node(node)?;
+        let report = self.on_preset_node(&home, "Apply Preset", |doc, n| {
+            let (report, commit) = doc
+                .apply_preset(n, &PresetRef::User(name.to_string()))
+                .map_err(err)?;
+            if commit.is_some() {
+                self.sync(doc, false);
+            }
+            Ok(report)
+        })?;
         let prefix = format!("{node}.");
         let refused = lock(&self.sent)
             .plan
@@ -1624,10 +1751,6 @@ impl Session {
             .into_iter()
             .filter(|r| r.id.starts_with(&prefix))
             .collect();
-        drop(doc);
-        if commit.is_some() {
-            self.changed();
-        }
         Ok(ApplyReport {
             applied: report.applied,
             unknown: report.skipped,
@@ -1766,16 +1889,21 @@ impl Session {
         let patch = self.owner("patch")?;
         let key = format!("{generator}.source");
         self.edit("Wire material", None, |tx| {
-            let Some(g) = tx
+            let g = tx
                 .at(patch)
                 .and_then(|p| p.child(generator))
-                .map(|n| n.id())
-            else {
-                return Ok(());
-            };
-            match sample {
-                Some(s) => tx.set_ref(g, key.as_str(), Ref::here(s)),
-                None => tx.clear_ref(g, key.as_str()),
+                .map(|n| n.id());
+            match (g, sample) {
+                // Unwiring a generator the patch lacks changes nothing.
+                (None, None) => Ok(()),
+                (g, Some(s)) => {
+                    let g = match g {
+                        Some(g) => g,
+                        None => tx.section(patch, generator)?,
+                    };
+                    tx.set_ref(g, key.as_str(), Ref::here(s))
+                }
+                (Some(g), None) => tx.clear_ref(g, key.as_str()),
             }
         })?;
         Ok(())
@@ -2027,8 +2155,8 @@ impl Session {
         sent.plan.current.and_then(|n| sent.plan.id_of(n))
     }
 
-    /// New Patch: a patch at its defaults, "Patch N", the drone in both
-    /// generators that read a material and an empty chain, at the end of the
+    /// New Patch: a patch at its defaults, "Patch N", holding only its
+    /// material, which reads the drone, and an empty chain, at the end of the
     /// order. One undo step, and it becomes the current patch, selected, so
     /// it is auditioned.
     pub fn new_patch(&self) -> Result<u64, String> {

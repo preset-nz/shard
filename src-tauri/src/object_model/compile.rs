@@ -56,6 +56,9 @@ pub struct Plan {
     pub track_patches: Vec<Option<NodeId>>,
     /// The current patch's values, indexed as `PARAMS`.
     pub patch: Vec<f32>,
+    /// The generators the current patch holds (`GENERATORS`), in table
+    /// order: the ones the patch view lists and draws.
+    pub generators: Vec<&'static str>,
     /// The arrangement's values, indexed as `arrangement::params()`.
     pub arrangement: Vec<f32>,
     /// The current patch's LFOs, envelopes and links.
@@ -76,6 +79,8 @@ pub struct Plan {
 pub struct PatchPlan {
     /// Indexed as `PARAMS`.
     pub values: Vec<f32>,
+    /// The generators it holds, in table order.
+    pub generators: Vec<&'static str>,
     pub modulation: Modulation,
     pub wires: Wires,
 }
@@ -86,6 +91,7 @@ impl Default for Plan {
             current: None,
             track_patches: Vec::new(),
             patch: PARAMS.iter().map(|p| p.default).collect(),
+            generators: Vec::new(),
             arrangement: arrangement::params().iter().map(|p| p.default).collect(),
             modulation: Modulation::default(),
             globals: Vec::new(),
@@ -105,6 +111,7 @@ impl Plan {
             return false;
         };
         self.patch.clone_from(&p.values);
+        self.generators.clone_from(&p.generators);
         self.modulation = p.modulation.clone();
         self.pool.wires = p.wires;
         self.current = Some(patch);
@@ -341,6 +348,7 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
     // The patch the first track plays, or the defaults with no patch at all.
     plan.patch.clear();
     plan.patch.extend(PARAMS.iter().map(|p| p.default));
+    plan.generators.clear();
     plan.modulation = Modulation::default();
     plan.current = None;
     if let Some(p) = track_patch(tree) {
@@ -383,6 +391,16 @@ fn compile_patch(p: Node<'_>, ids: &mut Ids<'_>) -> PatchPlan {
         },
         &mut values,
     );
+    // A generator is in the patch while its node is: one it lacks is off,
+    // whatever its switch's default.
+    let mut generators = Vec::new();
+    for &g in GENERATORS {
+        if p.child(g).is_some() {
+            generators.push(g);
+        } else if let Some(i) = shard_dsp::params::index_of(&format!("{g}.on")) {
+            values[i] = 0.0;
+        }
+    }
     let mut wires = Wires::default();
     for g in READS_MATERIAL {
         let wired = p
@@ -396,6 +414,7 @@ fn compile_patch(p: Node<'_>, ids: &mut Ids<'_>) -> PatchPlan {
     }
     PatchPlan {
         values,
+        generators,
         modulation: modulation(p, &chain, ids),
         wires,
     }
@@ -616,11 +635,47 @@ pub fn arrangement_node(tree: &Tree) -> Option<Node<'_>> {
         .and_then(|c| c.children().find(|n| n.type_name() == ARRANGEMENT))
 }
 
-/// Where a parameter id lives: the node and its key. Patch ids (on the patch
-/// `patch_node` finds from `current`) and `arrangement.` ids alike. `None`
-/// for an order row, a played row, an effect instance no node plays, or an
-/// id the tree has no home for.
-pub fn locate(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(NodeId, String)> {
+/// Where a write to a parameter lands.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Home {
+    /// A node the tree holds.
+    Node(NodeId),
+    /// A section `patch` lacks, made by the write (`ShardEdit::section`).
+    Section { patch: NodeId, kind: String },
+}
+
+impl Home {
+    /// The node to write, making the section first when it is absent: in
+    /// the write's own edit, so one undo step takes both away.
+    pub fn node(&self, tx: &mut rhizome_core::Edit<'_>) -> rhizome_core::Result<NodeId> {
+        match self {
+            Home::Node(n) => Ok(*n),
+            Home::Section { patch, kind } => tx.section(*patch, kind),
+        }
+    }
+
+    /// Whether `value` for `key` is what the absent section already reads
+    /// (its default, or off for a generator's switch), so writing it would
+    /// make a node and change nothing heard.
+    pub fn reads_already(&self, key: &str, value: &Value) -> bool {
+        let Home::Section { kind, .. } = self else {
+            return false;
+        };
+        let absent = if GENERATORS.contains(&kind.as_str()) && key == format!("{kind}.on") {
+            Some(0.0)
+        } else {
+            PARAMS.iter().find(|p| p.id == key).map(|p| p.default)
+        };
+        absent.is_some() && as_f32(value) == absent
+    }
+}
+
+/// Where a write to parameter `id` lands: the node and its key. Patch ids
+/// (on the patch `patch_node` finds from `current`) and `arrangement.` ids
+/// alike. A patch section the patch lacks is `Home::Section`, made by the
+/// write. `None` for an order row, a played row, an effect instance no node
+/// plays, or an id the tree has no home for.
+pub fn home(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(Home, String)> {
     let (owner, bare) = match id.strip_prefix(arrangement::PREFIX) {
         Some(bare) => (arrangement_node(tree)?, bare),
         None => (patch_node(tree, current)?, id),
@@ -630,15 +685,36 @@ pub fn locate(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(NodeId,
     }
     if let Some((n, template)) = fx::parse_row(id) {
         let node = Chain::of(Some(owner)).by_instance[n]?;
-        return Some((node.id(), template.to_string()));
+        return Some((Home::Node(node.id()), template.to_string()));
     }
     let prefix = key_prefix(bare);
-    let node = match (owner.type_name(), prefix) {
-        (PATCH, PATCH) => owner,
-        _ => owner.child(prefix)?,
+    let home = match (owner.type_name(), prefix) {
+        (PATCH, PATCH) => Home::Node(owner.id()),
+        (_, prefix) => match owner.child(prefix) {
+            Some(node) => Home::Node(node.id()),
+            None if owner.type_name() == PATCH && PATCH_NODES.contains(&prefix) => Home::Section {
+                patch: owner.id(),
+                kind: prefix.to_string(),
+            },
+            None => return None,
+        },
     };
-    node.node_type()?.spec(bare)?;
-    Some((node.id(), bare.to_string()))
+    let kind = match &home {
+        Home::Node(n) => tree.get(*n)?.type_name(),
+        Home::Section { kind, .. } => kind.as_str(),
+    };
+    tree.registry().node_type(kind)?.spec(bare)?;
+    Some((home, bare.to_string()))
+}
+
+/// Where a parameter id lives now: the node and its key, as `home` finds it,
+/// and `None` for a section the patch lacks. For reads; a write goes through
+/// `home`, which makes the section.
+pub fn locate(tree: &Tree, current: Option<NodeId>, id: &str) -> Option<(NodeId, String)> {
+    match home(tree, current, id)? {
+        (Home::Node(n), key) => Some((n, key)),
+        (Home::Section { .. }, _) => None,
+    }
 }
 
 /// The pool instance an effect node plays, from its place in its chain.
