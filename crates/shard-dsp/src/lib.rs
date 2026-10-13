@@ -60,7 +60,7 @@ pub use delay::{Delay, DelayParams};
 pub use drive::{Drive, DriveParams, DriveType};
 pub use duck::{Duck, DuckBank, Ducker, Key};
 pub use echo::{Echo, EchoParams};
-pub use engine::{Engine, KITS, VOICES};
+pub use engine::{Engine, Tap, KITS, TAP_FRAMES, VOICES};
 pub use envelope::EnvParams;
 pub use filter::{Filter, FilterParams, FilterSlope, FilterType};
 pub use flanger::{Flanger, FlangerParams};

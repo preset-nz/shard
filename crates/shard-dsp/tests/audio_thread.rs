@@ -15,7 +15,7 @@ use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
     adsr_curve, Engine, EnvSpec, Generator, Globals, GrainSpawn, LfoSpec, Mix, ModSet, ParamBank,
-    Reading, Shape, StepParams, Taper, PARAMS, VOICES,
+    Reading, Shape, StepParams, Tap, Taper, KITS, PARAMS, VOICES,
 };
 
 #[global_allocator]
@@ -1115,4 +1115,31 @@ fn ducking_never_touches_the_allocator() {
         }
     });
     assert_eq!(caught, 0, "ducking touched the allocator {caught} time(s)");
+}
+
+#[test]
+fn tapping_never_touches_the_allocator() {
+    // Every tap, switched between at block boundaries, playing and stopped.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    e.set_kit_active(0, true);
+    let bank = ParamBank::new();
+    let mut out = vec![0.0f32; 2048];
+    let taps = [
+        None,
+        Some(Tap::Master),
+        Some(Tap::Voice(0)),
+        Some(Tap::Voice(VOICES - 1)),
+        Some(Tap::Kit(0)),
+        Some(Tap::Kit(KITS - 1)),
+    ];
+    let ((), caught) = no_alloc(|| {
+        for block in 0..600 {
+            e.set_playing((block / 100) % 2 == 0);
+            e.set_tap(taps[block % taps.len()]);
+            e.process_block(&mut out, &bank);
+            black_box(e.tapped());
+        }
+    });
+    assert_eq!(caught, 0, "tapping touched the allocator {caught} time(s)");
 }

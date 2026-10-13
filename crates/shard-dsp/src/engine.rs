@@ -301,6 +301,30 @@ pub struct Engine {
     limiter: Limiter,
     sample_rate: f32,
     peak: f32,
+    /// Where a take is being recorded from, if anywhere (epic 44).
+    tap: Option<Tap>,
+    /// The tapped stereo frames of the last block, interleaved. Sized once,
+    /// here, so tapping never allocates.
+    tap_buf: Vec<f32>,
+    /// How many floats of `tap_buf` the last block filled.
+    tap_len: usize,
+}
+
+/// The longest block, in frames, whose tap is kept. A longer block is tapped
+/// up to this and no further; the app's callbacks stay well under it.
+pub const TAP_FRAMES: usize = 8192;
+
+/// Where a take is recorded from (epic 44, story 1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Tap {
+    /// The final frame: after the arrangement's chain, the limiter and the
+    /// clip. What the device hears.
+    Master,
+    /// Voice `i`'s frame before its fader, gate, dip and Key only gate.
+    Voice(usize),
+    /// Kit `k`'s frame on the tape, before its fader, gate, dip and Key only
+    /// gate, mono into both sides.
+    Kit(usize),
 }
 
 impl Engine {
@@ -349,7 +373,26 @@ impl Engine {
             limiter: Limiter::new(sample_rate),
             sample_rate,
             peak: 0.0,
+            tap: None,
+            tap_buf: vec![0.0; TAP_FRAMES * 2],
+            tap_len: 0,
         }
+    }
+
+    /// Record from `tap`, or from nothing (`None`, which costs nothing). Takes
+    /// hold from the next block. A voice or kit that is not live, or one out
+    /// of range, taps silence.
+    pub fn set_tap(&mut self, tap: Option<Tap>) {
+        self.tap = tap;
+        if tap.is_none() {
+            self.tap_len = 0;
+        }
+    }
+
+    /// The tapped stereo frames of the last block, interleaved: empty while
+    /// the tap is off.
+    pub fn tapped(&self) -> &[f32] {
+        &self.tap_buf[..self.tap_len]
     }
 
     // The voices. `i` is below `VOICES`; anything else is a programming
@@ -848,11 +891,21 @@ impl Engine {
     /// Render interleaved stereo into `out`, which must have an even length.
     /// Voice `i` reads `banks[i]`; an idle voice's bank is not read at all.
     pub fn process_voices(&mut self, out: &mut [f32], banks: &[&ParamBank; VOICES]) {
+        let tap = self.tap;
+        let tap_frames = (out.len() / 2).min(TAP_FRAMES);
+        self.tap_len = if tap.is_some() { tap_frames * 2 } else { 0 };
         if !self.playing {
             if self.voices[0].auditioning() {
                 self.voices[0].render_audition(out, banks[0], &mut self.peak);
             } else {
                 out.fill(0.0);
+            }
+            // What is heard is the audition or silence; a master tap has it,
+            // a voice or kit has nothing playing.
+            if tap == Some(Tap::Master) {
+                self.tap_buf[..self.tap_len].copy_from_slice(&out[..self.tap_len]);
+            } else {
+                self.tap_buf[..self.tap_len].fill(0.0);
             }
             return;
         }
@@ -921,7 +974,9 @@ impl Engine {
         self.arr_fx.prepare(&arr.fx);
         let swing = self.transport.swing();
 
-        for frame in out.chunks_mut(2) {
+        for (fi, frame) in out.chunks_mut(2).enumerate() {
+            // This frame's tapped pair, written at the end of it.
+            let mut tapped = (0.0f32, 0.0f32);
             let was = self.reel.speed.value();
             let speed = self.reel.speed.process(speed_target);
             let tape = Tape { speed, was };
@@ -944,6 +999,9 @@ impl Engine {
             for &i in live {
                 voiced[i] = self.voices[i].frame(tape, &beat, swing);
                 fired[i] = self.voices[i].fired();
+            }
+            if let Some(Tap::Voice(t)) = tap {
+                tapped = voiced.get(t).copied().unwrap_or((0.0, 0.0));
             }
             // The kits, on the same clock: each reads how far the steps have
             // run, so it stays on their grid at any length of its own. Its
@@ -1012,8 +1070,11 @@ impl Engine {
                 let d = &mut self.drums[k];
                 let level = d.level(arr.patch_alone);
                 let heard = self.audible[c] && (!closing || self.wanted_audible[c]);
-                kit += d.kit.process_at(speed.abs())
-                    * tape_gain(speed)
+                let raw = d.kit.process_at(speed.abs()) * tape_gain(speed);
+                if tap == Some(Tap::Kit(k)) {
+                    tapped = (raw, raw);
+                }
+                kit += raw
                     * d.gain.process(level)
                     * self.gates[c].process(heard)
                     * self.duckers[c].process()
@@ -1030,6 +1091,14 @@ impl Engine {
             let r = r.clamp(-1.0, 1.0);
 
             self.peak = self.peak.max(l.abs()).max(r.abs());
+
+            if tap == Some(Tap::Master) {
+                tapped = (l, r);
+            }
+            if fi < tap_frames && tap.is_some() {
+                self.tap_buf[fi * 2] = tapped.0;
+                self.tap_buf[fi * 2 + 1] = tapped.1;
+            }
 
             if let [lo, ro] = frame {
                 *lo = l;
@@ -4518,5 +4587,102 @@ mod tests {
             ducked < steady * 1.5 + 0.005,
             "ducking jumped by {ducked} against a steady {steady}"
         );
+    }
+
+    // The tap (epic 44, story 1).
+
+    /// A voice and a kit both playing, rendered in 256-frame blocks with the
+    /// given tap and faders; returns what was heard and what was tapped.
+    fn tapped_run(
+        tap: Option<Tap>,
+        voice_gain: f32,
+        kit_gain: f32,
+        voice_mix: Mix,
+    ) -> (Vec<f32>, Vec<f32>) {
+        let mut e = Engine::new(48_000.0, 64);
+        e.set_voice_source(0, tone(48_000));
+        e.set_voice_active(0, true);
+        e.set_voice_gain(0, voice_gain);
+        e.place_voice_mix(0, voice_mix);
+        e.set_kit(
+            0,
+            KitPattern::default(),
+            KitParams {
+                on: true,
+                ..KitParams::default()
+            },
+        );
+        e.set_kit_gain(0, kit_gain);
+        e.set_steps(StepParams {
+            on: true,
+            ..Default::default()
+        });
+        e.set_tap(tap);
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        let mut out = vec![0.0; 512];
+        let (mut heard, mut tapped) = (Vec::new(), Vec::new());
+        for _ in 0..200 {
+            e.process_block(&mut out, &bank);
+            heard.extend_from_slice(&out);
+            tapped.extend_from_slice(e.tapped());
+        }
+        (heard, tapped)
+    }
+
+    #[test]
+    fn the_master_tap_equals_the_output_bit_for_bit() {
+        let (heard, tapped) = tapped_run(Some(Tap::Master), 1.0, 1.0, Mix::default());
+        assert!(heard.iter().any(|s| s.abs() > 0.05), "nothing was heard");
+        assert!(heard == tapped);
+    }
+
+    #[test]
+    fn the_tap_off_leaves_the_output_bit_identical_and_tapped_empty() {
+        let (off, none) = tapped_run(None, 1.0, 1.0, Mix::default());
+        assert!(none.is_empty());
+        for tap in [Tap::Master, Tap::Voice(0), Tap::Kit(0)] {
+            let (on, _) = tapped_run(Some(tap), 1.0, 1.0, Mix::default());
+            assert!(on == off, "{tap:?} changed the output");
+        }
+    }
+
+    #[test]
+    fn a_voice_tap_is_before_its_fader_and_its_mute() {
+        let (_, open) = tapped_run(Some(Tap::Voice(0)), 1.0, 1.0, Mix::default());
+        assert!(open.iter().any(|s| s.abs() > 0.05), "the voice is silent");
+        let (heard, closed) = tapped_run(Some(Tap::Voice(0)), 0.0, 1.0, Mix::default());
+        assert!(closed == open, "the fader reached the tap");
+        let muted = Mix {
+            mute: true,
+            ..Mix::default()
+        };
+        let (_, silenced) = tapped_run(Some(Tap::Voice(0)), 1.0, 1.0, muted);
+        assert!(silenced == open, "mute reached the tap");
+        // And the fader was really down: the output is only the kit's.
+        let (kit_only, _) = tapped_run(None, 0.0, 1.0, Mix::default());
+        assert!(heard == kit_only);
+    }
+
+    #[test]
+    fn a_kit_tap_is_before_its_fader() {
+        let (_, open) = tapped_run(Some(Tap::Kit(0)), 1.0, 1.0, Mix::default());
+        assert!(open.iter().any(|s| s.abs() > 0.01), "the kit is silent");
+        let (_, down) = tapped_run(Some(Tap::Kit(0)), 1.0, 0.0, Mix::default());
+        assert!(down == open, "the fader reached the tap");
+        assert!(
+            open.chunks(2).all(|f| f[0] == f[1]),
+            "the kit is mono into both sides"
+        );
+    }
+
+    #[test]
+    fn a_tap_on_something_not_live_yields_silence() {
+        let (_, idle_voice) = tapped_run(Some(Tap::Voice(VOICES - 1)), 1.0, 1.0, Mix::default());
+        assert!(!idle_voice.is_empty() && idle_voice.iter().all(|s| *s == 0.0));
+        let (_, out_of_range) = tapped_run(Some(Tap::Voice(VOICES + 5)), 1.0, 1.0, Mix::default());
+        assert!(out_of_range.iter().all(|s| *s == 0.0));
+        let (_, idle_kit) = tapped_run(Some(Tap::Kit(KITS - 1)), 1.0, 1.0, Mix::default());
+        assert!(idle_kit.iter().all(|s| *s == 0.0));
     }
 }
