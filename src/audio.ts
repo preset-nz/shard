@@ -17,6 +17,8 @@ export type Taper = 'linear' | 'exponential' | 'bipolar' | 'stepped';
 export interface ParamInfo {
   id: string;
   name: string;
+  /** One sentence for the row's tooltip. */
+  description: string;
   min: number;
   max: number;
   default: number;

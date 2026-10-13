@@ -63,6 +63,7 @@ const ROWS: &[Row] = &[
     Row::Own(ParamDef {
         id: "arrangement.amp.limit",
         name: "Limit",
+        description: "A limiter on the whole mix that catches peaks before they clip; off leaves only the hard clip.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -73,6 +74,7 @@ const ROWS: &[Row] = &[
     Row::Own(ParamDef {
         id: "arrangement.amp.ceiling",
         name: "Ceiling",
+        description: "The level the limiter holds the mix under.",
         min: 0.5,
         max: 1.0,
         default: 0.95,
@@ -89,6 +91,7 @@ const ROWS: &[Row] = &[
     Row::Own(ParamDef {
         id: "arrangement.tape.brake",
         name: "Brake",
+        description: "Slows the tape of everything towards a stop while held; part way, it runs slow and flat.",
         min: 0.0,
         max: 1.0,
         // Continuous, not a switch, even though the button only sends 0 and 1.
@@ -107,6 +110,7 @@ const ROWS: &[Row] = &[
     Row::Own(ParamDef {
         id: "arrangement.tape.reverse",
         name: "Reverse",
+        description: "Plays the tape of everything backwards while held.",
         min: 0.0,
         max: 1.0,
         default: 0.0,

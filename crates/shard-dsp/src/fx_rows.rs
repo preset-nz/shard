@@ -12,6 +12,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "drive.on",
         name: "Drive",
+        description: "Bends the sound out of shape with a curve, then darkens it with a tone filter, from warm overdrive to harsh fold.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -22,6 +23,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "drive.mix",
         name: "Mix",
+        description: "How much driven sound is blended with the clean.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -32,6 +34,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "drive.amount",
         name: "Amount",
+        description: "How hard the sound is pushed into the curve: gentle warmth at the bottom, heavy distortion at the top.",
         min: 0.0,
         max: 48.0,
         default: 24.0,
@@ -42,6 +45,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "drive.tone",
         name: "Tone",
+        description: "Where the highs are rolled off after the curve, to tame fizz.",
         min: 200.0,
         max: 20_000.0,
         default: 8_000.0,
@@ -52,6 +56,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "drive.type",
         name: "Type",
+        description: "The shape of the curve: Overdrive is soft, Distortion is harder, Fuzz is ragged, and Fold wraps the wave back on itself.",
         min: 0.0,
         max: 3.0,
         default: 0.0,
@@ -65,6 +70,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "crush.on",
         name: "Crush",
+        description: "Degrades the sound by throwing away resolution and sample rate, for gritty lo-fi digital crunch.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -77,6 +83,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "crush.mix",
         name: "Mix",
+        description: "How much crushed sound is blended with the clean.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -87,6 +94,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "crush.bits",
         name: "Bits",
+        description: "How many bits of resolution are kept: fewer is noisier and more broken up.",
         min: 1.0,
         max: 16.0,
         default: 16.0,
@@ -99,6 +107,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "crush.rate",
         name: "Rate",
+        description: "The sample rate the sound is reduced to; lower adds aliasing and a dull, metallic grain.",
         min: 200.0,
         max: 48_000.0,
         default: 48_000.0,
@@ -112,6 +121,7 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "ring.on",
         name: "Ring modulation",
+        description: "Multiplies the sound by a tone, adding metallic, bell-like frequencies that do not follow the original harmonics.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -122,6 +132,7 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "ring.mix",
         name: "Mix",
+        description: "How much ring-modulated sound is blended with the original.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -132,6 +143,7 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "ring.freq",
         name: "Frequency",
+        description: "The pitch of the tone the sound is multiplied by: low values wobble, high values clang.",
         min: 1.0,
         max: 5000.0,
         default: 140.0,
@@ -154,6 +166,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.on",
         name: "Chorus",
+        description: "Mixes in gently detuned, swept copies of the sound to widen and thicken it.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -164,6 +177,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.mix",
         name: "Mix",
+        description: "How much of the copies is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -174,6 +188,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.type",
         name: "Type",
+        description: "The voicing: Chorus is plain, Ensemble is wider like a string machine, and Choir holds copies sharp and flat for voices.",
         min: 0.0,
         max: 2.0,
         default: 0.0,
@@ -184,6 +199,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.rate",
         name: "Rate",
+        description: "How fast the copies sweep.",
         min: 0.05,
         max: crate::chorus::MAX_RATE_HZ,
         default: 0.6,
@@ -194,6 +210,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.depth",
         name: "Depth",
+        description: "How far the copies sweep: more is a deeper wobble and a stronger detune.",
         min: 0.0,
         max: 1.0,
         default: 0.5,
@@ -206,6 +223,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.voices",
         name: "Voices",
+        description: "How many copies are mixed in: a few beat against each other, many blur into a wall.",
         min: 1.0,
         max: crate::chorus::MAX_VOICES as f32,
         default: 4.0,
@@ -218,6 +236,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.spread",
         name: "Spread",
+        description: "Moves the copies closer together or further apart, from half to twice their usual distance.",
         min: crate::chorus::SPREAD_MIN,
         max: crate::chorus::SPREAD_MAX,
         default: 1.0,
@@ -228,6 +247,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.lowcut",
         name: "Low cut",
+        description: "Keeps the lows out of the copies so the bass stays solid.",
         min: crate::chorus::LOW_CUT_MIN_HZ,
         max: crate::chorus::LOW_CUT_MAX_HZ,
         default: 240.0,
@@ -238,6 +258,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "chorus.eq",
         name: "EQ",
+        description: "Tilts the copies darker or brighter without touching the original sound.",
         min: -crate::chorus::EQ_RANGE_DB,
         max: crate::chorus::EQ_RANGE_DB,
         default: 0.0,
@@ -253,6 +274,8 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "overtone.on",
         name: "Overtone",
+        description:
+            "Adds layers made from the sound itself: an octave down, an octave up and a fifth up.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -263,6 +286,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "overtone.mix",
         name: "Mix",
+        description: "How much of the added layers is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -273,6 +297,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "overtone.sub",
         name: "Sub",
+        description: "How loud the layer an octave down is.",
         min: 0.0,
         max: 1.0,
         default: 0.5,
@@ -283,6 +308,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "overtone.octave",
         name: "Octave",
+        description: "How loud the layer an octave up is.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -293,6 +319,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "overtone.fifth",
         name: "Fifth",
+        description: "How loud the layer a fifth up is.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -303,6 +330,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "overtone.tone",
         name: "Tone",
+        description: "Where the highs of the layers are rolled off.",
         min: crate::overtone::TONE_MIN_HZ,
         max: crate::overtone::TONE_MAX_HZ,
         default: 5000.0,
@@ -317,6 +345,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "flanger.on",
         name: "Flanger",
+        description: "A very short swept delay mixed with the dry sound, so notches sweep through it with a jet-like whoosh.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -327,6 +356,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "flanger.mix",
         name: "Mix",
+        description: "How much flanged sound is blended with the original.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -337,6 +367,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "flanger.manual",
         name: "Manual",
+        description: "The delay the sweep centres on: short is bright and thin, longer is deeper and hollower.",
         min: crate::flanger::MANUAL_MIN_MS,
         max: crate::flanger::MANUAL_MAX_MS,
         default: 1.5,
@@ -347,6 +378,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "flanger.rate",
         name: "Rate",
+        description: "How fast the sweep moves.",
         min: crate::flanger::MIN_RATE_HZ,
         max: crate::flanger::MAX_RATE_HZ,
         default: 0.25,
@@ -357,6 +389,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "flanger.depth",
         name: "Depth",
+        description: "How far the sweep travels around its centre.",
         min: 0.0,
         max: 1.0,
         default: 0.7,
@@ -367,6 +400,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "flanger.feedback",
         name: "Feedback",
+        description: "Sends the output back in: negative gives a hollow comb, positive a ringing one.",
         min: -crate::flanger::MAX_FEEDBACK,
         max: crate::flanger::MAX_FEEDBACK,
         default: 0.5,
@@ -381,6 +415,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.on",
         name: "Wear",
+        description: "Tape that has been looked after badly: pitch wobble, lurching, level dropouts and a dulled top end.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -391,6 +426,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.mix",
         name: "Mix",
+        description: "How much worn sound is blended with the clean.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -401,6 +437,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.wow",
         name: "Wow",
+        description: "Slow pitch bends, like a warped reel.",
         min: 0.0,
         max: 1.0,
         default: 0.4,
@@ -411,6 +448,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.flutter",
         name: "Flutter",
+        description: "A fast, small tremble in the pitch.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -421,6 +459,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.unstable",
         name: "Unstable",
+        description: "Lurches the pitch along a chaotic path that never repeats.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -431,6 +470,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.dropouts",
         name: "Dropouts",
+        description: "How often and how deeply the level dips, as if the tape lost contact.",
         min: 0.0,
         max: 1.0,
         default: 0.2,
@@ -441,6 +481,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "wear.dull",
         name: "Dull",
+        description: "Closes a low-pass that follows the level, so quiet parts go muffled.",
         min: 0.0,
         max: 1.0,
         default: 0.4,
@@ -457,6 +498,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "delay.on",
         name: "Delay",
+        description: "Clean, faithful repeats of the sound, darkened only by Tone.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -467,6 +509,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "delay.mix",
         name: "Mix",
+        description: "How much of the repeats is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -477,6 +520,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "delay.time",
         name: "Time",
+        description: "The gap between repeats; moving it bends the pitch.",
         min: crate::delay::DELAY_MIN_MS,
         max: crate::delay::DELAY_MAX_MS,
         default: 350.0,
@@ -487,6 +531,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "delay.feedback",
         name: "Feedback",
+        description: "How long the repeats keep going: higher feeds each back into the next for a longer trail.",
         min: 0.0,
         max: crate::delay::FEEDBACK_MAX,
         default: 0.4,
@@ -497,6 +542,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "delay.tone",
         name: "Tone",
+        description: "How dark the repeats get; lower closes the highs a little more on every pass.",
         min: crate::delay::TONE_MIN_HZ,
         max: crate::delay::TONE_MAX_HZ,
         default: 8000.0,
@@ -507,6 +553,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "delay.pingpong",
         name: "Ping-pong",
+        description: "Sends each repeat to the opposite side from the last.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -521,6 +568,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.on",
         name: "Echo",
+        description: "The worn counterpart of the delay: each repeat comes back darker, dirtier and slightly wandering, like a loop of tape.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -531,6 +579,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.mix",
         name: "Mix",
+        description: "How much of the echoes is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -541,6 +590,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.time",
         name: "Time",
+        description: "The gap between echoes.",
         min: crate::echo::ECHO_MIN_MS,
         max: crate::echo::ECHO_MAX_MS,
         default: 300.0,
@@ -551,6 +601,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.feedback",
         name: "Feedback",
+        description: "How long the echoes keep going: higher feeds each back into the next for a longer trail.",
         min: 0.0,
         max: crate::echo::MAX_FEEDBACK,
         default: 0.45,
@@ -561,6 +612,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.tone",
         name: "Tone",
+        description: "How dark the echoes get; lower closes the highs a little more on every pass.",
         min: crate::echo::TONE_MIN_HZ,
         max: crate::echo::TONE_MAX_HZ,
         default: 3500.0,
@@ -571,6 +623,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.wobble",
         name: "Wobble",
+        description: "How much the pitch of the echoes wanders.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -581,6 +634,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "echo.grit",
         name: "Grit",
+        description: "How much saturation each echo picks up.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -595,6 +649,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.on",
         name: "Rise",
+        description: "Repeats that each climb in pitch from the last, so the trail rises like a siren.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -605,6 +660,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.mix",
         name: "Mix",
+        description: "How much of the rising repeats is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -615,6 +671,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.time",
         name: "Time",
+        description: "The gap between repeats.",
         min: crate::rise::RISE_MIN_MS,
         max: crate::rise::RISE_MAX_MS,
         default: 380.0,
@@ -625,6 +682,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.feedback",
         name: "Feedback",
+        description: "How many climbing repeats you hear: higher feeds each back into the next for a longer climb.",
         min: 0.0,
         max: crate::rise::MAX_FEEDBACK,
         default: 0.6,
@@ -635,6 +693,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.shift",
         name: "Shift",
+        description: "How many semitones each repeat moves from the one before; negative makes the trail sink.",
         min: -crate::rise::MAX_SHIFT_ST,
         max: crate::rise::MAX_SHIFT_ST,
         default: 7.0,
@@ -645,6 +704,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.wobble",
         name: "Wobble",
+        description: "Wanders the shift for an unsteady climb.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -655,6 +715,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "rise.tone",
         name: "Tone",
+        description: "Rolls off the highs so the climbing repeats do not turn to glass.",
         min: crate::rise::TONE_MIN_HZ,
         max: crate::rise::TONE_MAX_HZ,
         default: 6000.0,
@@ -669,6 +730,8 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.on",
         name: "Reverb",
+        description:
+            "A simulated space around the sound, from a small room to a long hall or plate tail.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -679,6 +742,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.mix",
         name: "Mix",
+        description: "How much of the space is blended with the dry sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -689,6 +753,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.type",
         name: "Type",
+        description: "The kind of space: Room, Hall or Plate.",
         min: 0.0,
         max: 2.0,
         default: 0.0,
@@ -699,6 +764,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.decay",
         name: "Decay",
+        description: "How long the tail lasts.",
         min: crate::reverb::MIN_DECAY_S,
         max: crate::reverb::MAX_DECAY_S,
         default: 2.5,
@@ -709,6 +775,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.size",
         name: "Size",
+        description: "How big the space feels.",
         min: 0.0,
         max: 1.0,
         default: 0.5,
@@ -719,6 +786,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.tone",
         name: "Tone",
+        description: "How quickly the highs die in the tail; lower is darker.",
         min: crate::reverb::MIN_TONE_HZ,
         max: crate::reverb::MAX_TONE_HZ,
         default: 6000.0,
@@ -729,6 +797,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "reverb.predelay",
         name: "Pre-delay",
+        description: "The gap before the tail starts, which keeps the dry sound clear of it.",
         min: 0.0,
         max: crate::reverb::MAX_PREDELAY_MS,
         default: 12.0,
@@ -743,6 +812,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "repeat.on",
         name: "Repeat",
+        description: "Grabs the last slice of sound and loops it, for stutters and freezes.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -753,6 +823,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "repeat.mix",
         name: "Mix",
+        description: "How much of the loop is blended with the incoming sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -765,6 +836,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "repeat.hold",
         name: "Hold",
+        description: "Above halfway, grabs the last slice and loops it; each new rise grabs afresh, so an LFO on it stutters.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -775,6 +847,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "repeat.length",
         name: "Length",
+        description: "How long the grabbed slice is.",
         min: crate::repeat::LENGTH_MIN_MS,
         max: crate::repeat::LENGTH_MAX_MS,
         default: 125.0,
@@ -785,6 +858,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "repeat.speed",
         name: "Speed",
+        description: "How fast the loop plays, in semitones, with its pitch moving along.",
         min: -crate::repeat::MAX_SPEED_ST,
         max: crate::repeat::MAX_SPEED_ST,
         default: 0.0,
@@ -795,6 +869,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "repeat.reverse",
         name: "Reverse",
+        description: "Plays the loop backwards.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -809,6 +884,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "freqshift.on",
         name: "Shifter",
+        description: "Moves every frequency by the same number of hertz, so the sound turns inharmonic: clangs, spirals and detuned shimmer.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -819,6 +895,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "freqshift.mix",
         name: "Mix",
+        description: "How much shifted sound is blended with the original.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -829,6 +906,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "freqshift.shift",
         name: "Shift",
+        description: "How far every frequency moves, in hertz; negative moves them down.",
         min: -crate::freqshift::SHIFT_MAX_HZ,
         max: crate::freqshift::SHIFT_MAX_HZ,
         default: 0.0,
@@ -839,6 +917,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "freqshift.feedback",
         name: "Feedback",
+        description: "Sends the shifted sound round again, for a rising or falling spiral.",
         min: 0.0,
         max: crate::freqshift::FEEDBACK_MAX,
         default: 0.0,
@@ -849,6 +928,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "freqshift.spread",
         name: "Spread",
+        description: "Shifts the left and right sides in opposite directions, for width.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -863,6 +943,8 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "peaks.on",
         name: "Peaks",
+        description:
+            "Two narrow boosted bands that ring like resonators on noise and whistle when swept.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -873,6 +955,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "peaks.mix",
         name: "Mix",
+        description: "How much of the boosted bands is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -883,6 +966,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "peaks.low",
         name: "Low",
+        description: "The centre of the lower band.",
         min: crate::peaks::FREQ_MIN_HZ,
         max: crate::peaks::FREQ_MAX_HZ,
         default: 400.0,
@@ -893,6 +977,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "peaks.high",
         name: "High",
+        description: "The centre of the upper band.",
         min: crate::peaks::FREQ_MIN_HZ,
         max: crate::peaks::FREQ_MAX_HZ,
         default: 2_400.0,
@@ -903,6 +988,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "peaks.boost",
         name: "Boost",
+        description: "How far both bands are lifted, in decibels.",
         min: 0.0,
         max: crate::peaks::BOOST_MAX_DB,
         default: 18.0,
@@ -913,6 +999,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "peaks.width",
         name: "Width",
+        description: "How wide the bands are, from narrow and whistling to broad.",
         min: 0.0,
         max: 1.0,
         default: 0.2,
@@ -927,6 +1014,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "shaper.on",
         name: "Transient",
+        description: "Pushes the attack and the tail of a sound up or down, by how fast it changes rather than how loud it is.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -937,6 +1025,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "shaper.mix",
         name: "Mix",
+        description: "How much shaped sound is blended with the original.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -947,6 +1036,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "shaper.attack",
         name: "Attack",
+        description: "Positive sharpens the onset, negative softens it.",
         min: -1.0,
         max: 1.0,
         default: 0.0,
@@ -957,6 +1047,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "shaper.sustain",
         name: "Sustain",
+        description: "Positive lifts the tail, negative dries it up.",
         min: -1.0,
         max: 1.0,
         default: 0.0,
@@ -967,6 +1058,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "shaper.speed",
         name: "Speed",
+        description: "How long counts as the attack, from snappy to slow.",
         min: crate::shaper::SPEED_MIN_MS,
         max: crate::shaper::SPEED_MAX_MS,
         default: 10.0,
@@ -983,6 +1075,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "bands.on",
         name: "Band Delay",
+        description: "Splits the sound into low, mid and high and gives each band its own echo, at times that fall into a harmonic series.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -993,6 +1086,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "bands.mix",
         name: "Mix",
+        description: "How much of the echoes is blended with the original sound.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -1003,6 +1097,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "bands.time",
         name: "Time",
+        description: "The echo time of the low band, which the others are measured from; moving it bends the pitch.",
         min: crate::bands::TIME_MIN_MS,
         max: crate::bands::TIME_MAX_MS,
         default: 375.0,
@@ -1013,6 +1108,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "bands.harmonic",
         name: "Harmonic",
+        description: "How far apart the bands' times sit: all the same at zero, a half and a third of the low band's at full.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -1023,6 +1119,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "bands.feedback",
         name: "Feedback",
+        description: "How long each band's echoes keep going.",
         min: 0.0,
         max: crate::bands::FEEDBACK_MAX,
         default: 0.4,
@@ -1033,6 +1130,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
     ParamDef {
         id: "bands.split",
         name: "Split",
+        description: "Where the low band meets the mid; the mid meets the high three octaves above.",
         min: crate::bands::SPLIT_MIN_HZ,
         max: crate::bands::SPLIT_MAX_HZ,
         default: 800.0,

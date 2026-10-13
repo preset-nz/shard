@@ -221,6 +221,7 @@ pub(crate) fn rows() -> &'static [ParamDef] {
             out.push(ParamDef {
                 id: leak(order_id(p)),
                 name: leak(format!("Position {}", p + 1)),
+                description: "Which effect sits at this place in the chain; the chain plays from the first position on.",
                 min: 0.0,
                 max: INSTANCES as f32,
                 default: 0.0,

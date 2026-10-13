@@ -47,6 +47,9 @@ pub enum Unit {
 pub struct ParamDef {
     pub id: &'static str,
     pub name: &'static str,
+    /// One sentence for the user, shown as the row's tooltip. A switch row
+    /// (`<node>.on`) describes the node itself.
+    pub description: &'static str,
     pub min: f32,
     pub max: f32,
     pub default: f32,
@@ -121,6 +124,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "patch.length",
         name: "Length",
+        description: "How long a note lasts: Loop runs for ever, Sample plays one pass of the sample, and Hold lasts as long as Hold says.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -133,6 +137,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "patch.hold",
         name: "Hold",
+        description: "How long a note is held before it is released, when Length is set to Hold.",
         min: 10.0,
         max: 10_000.0,
         default: 400.0,
@@ -147,6 +152,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "material.on",
         name: "Material",
+        description: "The loaded sample played as it is, ahead of the effects; the other generators sound alongside it.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -157,6 +163,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "material.gain",
         name: "Gain",
+        description: "How loud the sample is going into the effects, from silence to double.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -171,6 +178,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "material.scrub",
         name: "Scrub",
+        description: "Swaps normal playback for a head that glides to Position, so you can drag through the sample like a record.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -181,6 +189,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "material.position",
         name: "Position",
+        description: "Where in the sample the scrub head sits, from the start at the left to the end at the right.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -202,6 +211,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.on",
         name: "Granular",
+        description: "Cuts the sample into tiny grains and scatters them into a cloud, anywhere from a shimmer to a stuttering texture.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -215,6 +225,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.gain",
         name: "Gain",
+        description: "How loud the grain cloud is, from silence to double.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -225,6 +236,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.position",
         name: "Position",
+        description: "Where in the sample the grains are taken from, from the start to the end.",
         min: 0.0,
         max: 1.0,
         default: 0.25,
@@ -235,6 +247,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.jitter",
         name: "Jitter",
+        description: "How far each grain strays from Position at random: none keeps them together, more smears the cloud across the sample.",
         min: 0.0,
         max: 1.0,
         default: 0.05,
@@ -245,6 +258,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.size",
         name: "Size",
+        description: "How long each grain is: short grains buzz and blur, long ones keep the sample recognisable.",
         min: 5.0,
         max: 500.0,
         default: 180.0,
@@ -255,6 +269,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.density",
         name: "Density",
+        description: "How many grains start each second: sparse grains are heard one by one, dense ones fuse into a continuous sound.",
         min: 0.5,
         max: 200.0,
         default: 60.0,
@@ -265,6 +280,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.pitch",
         name: "Pitch",
+        description: "Shifts every grain up or down in pitch, in semitones.",
         min: -24.0,
         max: 24.0,
         default: 0.0,
@@ -275,6 +291,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.spread",
         name: "Pitch spread",
+        description: "Gives each grain a random pitch within this many semitones, from a plain cloud to a detuned swarm.",
         min: 0.0,
         max: 24.0,
         default: 0.0,
@@ -285,6 +302,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.pan",
         name: "Pan spread",
+        description: "How widely the grains scatter between left and right; none keeps every grain in the centre.",
         min: 0.0,
         max: 1.0,
         default: 0.6,
@@ -295,6 +313,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.reverse",
         name: "Reverse",
+        description: "The share of grains that play backwards.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -305,6 +324,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "grain.window",
         name: "Window",
+        description: "The fade shape of each grain: Hann is smooth, Triangle is slightly brighter, Expodec clicks like a percussive hit, and Rexpodec swells then cuts off.",
         min: 0.0,
         max: 3.0,
         default: 0.0,
@@ -318,6 +338,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.on",
         name: "FM",
+        description: "A two-operator FM voice: a pitched tone that one oscillator bends with another, from soft bell to harsh metal.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -328,6 +349,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.gain",
         name: "Gain",
+        description: "How loud the FM tone is, from silence to double.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -338,6 +360,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.freq",
         name: "Frequency",
+        description: "The pitch of the FM tone; a step's pitch moves it.",
         min: 20.0,
         max: 2000.0,
         default: 110.0,
@@ -349,6 +372,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.ratio",
         name: "Ratio",
+        description: "How the second oscillator's pitch relates to the first: whole numbers sound harmonic, anything else turns clangy and bell-like.",
         min: 0.25,
         max: 16.0,
         default: 2.0,
@@ -359,6 +383,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.index",
         name: "Index",
+        description: "How hard one oscillator bends the other: low is a soft tone, high is bright and buzzy.",
         min: 0.0,
         max: 10.0,
         default: 1.5,
@@ -369,6 +394,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.feedback",
         name: "Feedback",
+        description: "Feeds the modulating oscillator back into itself, thickening the tone to a rasp and, at the top, towards noise.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -381,6 +407,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.drift",
         name: "Drift",
+        description: "Lets each oscillator wander slightly off its pitch, from clinically exact at zero to loosely analogue.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -392,6 +419,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "fm.type",
         name: "Type",
+        description: "How the oscillators bend each other: Phase holds its pitch at any Index, Linear drifts in pitch once Feedback is up, and Exponential goes sharp as Index rises, as an analogue VCO does.",
         min: 0.0,
         max: 2.0,
         default: 0.0,
@@ -404,6 +432,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.on",
         name: "Noise",
+        description: "A continuous noise generator, from low rumble to bright hiss, with an optional pitched band for wind and whistles.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -414,6 +443,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.gain",
         name: "Gain",
+        description: "How loud the noise is, from silence to double.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -427,6 +457,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.color",
         name: "Colour",
+        description: "The kind of noise: brown rumble at the far left, then pink, white at the centre, blue, and violet hiss at the far right.",
         min: -1.0,
         max: 1.0,
         default: 0.0,
@@ -440,6 +471,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.band",
         name: "Band",
+        description: "How much of the noise is squeezed into a narrow band at Frequency, for wind, whistles and pitched hiss; zero leaves the plain noise.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -451,6 +483,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.freq",
         name: "Frequency",
+        description: "The centre of the noise band; a step's pitch moves it.",
         min: 20.0,
         max: 8000.0,
         default: 440.0,
@@ -462,6 +495,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.width",
         name: "Width",
+        description: "How wide the noise band is, from a thin whistle to a broad blow two octaves wide.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -475,6 +509,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "noise.run",
         name: "Run",
+        description: "Whether the noise follows the notes (Notes) or sounds for as long as the transport plays, past the envelope (Free).",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -488,6 +523,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "dust.on",
         name: "Dust",
+        description: "Sparse random clicks, from the odd tick to a dense crackle, like dust on a record.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -498,6 +534,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "dust.gain",
         name: "Gain",
+        description: "How loud the clicks are, from silence to double.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -509,6 +546,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "dust.density",
         name: "Density",
+        description: "How many clicks fall each second on average, from a sparse tick to a dense crackle; where they land is random.",
         min: 0.1,
         max: 2000.0,
         default: 8.0,
@@ -520,6 +558,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "dust.tone",
         name: "Tone",
+        description: "How bright each click is, from dark thuds to bright ticks.",
         min: 0.0,
         max: 1.0,
         default: 0.5,
@@ -531,6 +570,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "dust.decay",
         name: "Decay",
+        description: "How long each click lasts, from a needle tick to a short pop.",
         min: 0.1,
         max: 50.0,
         default: 1.0,
@@ -542,6 +582,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "dust.spread",
         name: "Spread",
+        description: "How widely the clicks scatter across the stereo field; none puts every click in the centre.",
         min: 0.0,
         max: 1.0,
         default: 0.5,
@@ -552,6 +593,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "env.on",
         name: "Envelope",
+        description: "Shapes how each note swells in and dies away; at its neutral setting it passes the sound untouched.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -564,6 +606,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "env.mix",
         name: "Mix",
+        description: "How much of the shaped sound replaces the unshaped one; zero leaves the sound untouched.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -574,6 +617,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "env.attack",
         name: "Attack",
+        description: "How long the sound takes to rise from silence to full level.",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -584,6 +628,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "env.decay",
         name: "Decay",
+        description: "How long the sound takes to fall from full level to Sustain.",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -594,6 +639,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "env.sustain",
         name: "Sustain",
+        description: "The level held after the decay, until the note is released.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -604,6 +650,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "env.release",
         name: "Release",
+        description: "How long the sound takes to fade to silence once the note ends.",
         min: 0.0,
         max: 4000.0,
         default: 0.0,
@@ -621,6 +668,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "tape.time",
         name: "Time",
+        description: "How quickly the tape slows or speeds up for a brake or reverse: short is a snap, long is a slow wind.",
         min: 20.0,
         max: 3000.0,
         default: 400.0,
@@ -631,6 +679,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "tape.flick",
         name: "Flick",
+        description: "How long a quick tap on reverse plays backwards; hold it longer and the reverse lasts until you let go.",
         // The shortest reverse a tap can produce. Hold the gate longer than
         // this and it behaves as a plain hold, releasing the moment you do.
         min: 50.0,
@@ -646,6 +695,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.on",
         name: "Filter",
+        description: "A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -656,6 +706,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.mix",
         name: "Mix",
+        description: "How much filtered sound is blended with the unfiltered; full is all filtered.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -666,6 +717,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.cutoff",
         name: "Cutoff",
+        description: "The frequency where the filter starts to cut.",
         min: 20.0,
         max: 20_000.0,
         default: 2_000.0,
@@ -676,6 +728,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.resonance",
         name: "Resonance",
+        description: "Emphasis around the cutoff: a gentle bump at low settings, a ringing whistle at high ones.",
         min: 0.0,
         max: 1.0,
         default: 0.2,
@@ -686,6 +739,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.type",
         name: "Type",
+        description: "Which part of the sound is kept: Low-pass lets the lows through, High-pass the highs, Band-pass a band around the cutoff.",
         min: 0.0,
         max: 2.0,
         default: 0.0,
@@ -698,6 +752,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.slope",
         name: "Slope",
+        description: "How steeply the filter cuts past the cutoff: 12 dB is gentle, 24 dB is steep.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -710,6 +765,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "filter.tracking",
         name: "Tracking",
+        description: "How far the cutoff follows each step's pitch: off, half, or a full octave for every octave.",
         min: 0.0,
         max: 2.0,
         default: 0.0,
@@ -722,6 +778,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "ladder.on",
         name: "Ladder",
+        description: "A driven four-pole low-pass after the patch filter, modelled on the Moog ladder: growls when pushed, whistles at full resonance.",
         min: 0.0,
         max: 1.0,
         default: 0.0,
@@ -732,6 +789,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "ladder.mix",
         name: "Mix",
+        description: "How much of the ladder's sound is blended with what goes into it; full is all ladder.",
         min: 0.0,
         max: 1.0,
         default: 1.0,
@@ -742,6 +800,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "ladder.drive",
         name: "Drive",
+        description: "Pushes the signal into the filter so it gets dirtier rather than louder.",
         min: 0.0,
         max: 1.0,
         default: 0.3,
@@ -752,6 +811,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "ladder.cutoff",
         name: "Cutoff",
+        description: "The frequency above which the ladder cuts, at a steep 24 dB per octave.",
         min: 20.0,
         max: 20_000.0,
         default: 2_000.0,
@@ -762,6 +822,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "ladder.resonance",
         name: "Resonance",
+        description: "Emphasis at the cutoff: it growls as it rises and whistles on its own at full.",
         min: 0.0,
         max: 1.0,
         default: 0.2,
@@ -774,6 +835,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "ladder.tracking",
         name: "Tracking",
+        description: "How far the ladder's cutoff follows each step's pitch: off, half, or full, separate from the filter's own.",
         min: 0.0,
         max: 2.0,
         default: 0.0,
@@ -785,6 +847,7 @@ const BASE: &[ParamDef] = &[
     ParamDef {
         id: "amp.gain",
         name: "Gain",
+        description: "The master level, after every generator and effect; 100% leaves the sound as it is.",
         min: 0.0,
         max: 2.0,
         default: 1.0,
@@ -1112,5 +1175,47 @@ mod tests {
         let v = bank.get_by_id("grain.size").unwrap();
         let d = &PARAMS[index_of("grain.size").unwrap()];
         assert!((v - (d.min * d.max).sqrt()).abs() < 1.0);
+    }
+
+    fn assert_described(p: &ParamDef) {
+        let d = p.description;
+        assert!(!d.is_empty(), "{} has no description", p.id);
+        assert!(
+            d.ends_with('.'),
+            "{}'s description must end with a full stop",
+            p.id
+        );
+        assert_eq!(
+            d.matches(". ").count(),
+            0,
+            "{}'s description is more than one sentence",
+            p.id
+        );
+        let first = d
+            .split_whitespace()
+            .next()
+            .unwrap()
+            .trim_matches(|c: char| !c.is_alphanumeric());
+        let name_first = p.name.split_whitespace().next().unwrap();
+        assert!(
+            !first.eq_ignore_ascii_case(name_first),
+            "{}'s description opens with its own name",
+            p.id
+        );
+    }
+
+    #[test]
+    fn every_row_and_template_has_a_description() {
+        for p in PARAMS.iter() {
+            assert_described(p);
+        }
+        for (kind, _) in crate::fx::POOL.iter() {
+            for row in kind.rows() {
+                assert_described(row);
+            }
+        }
+        for p in crate::arrangement::params() {
+            assert_described(p);
+        }
     }
 }

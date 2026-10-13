@@ -143,7 +143,7 @@ export function ParamRow({ field, value, onChange, ctx }: FieldRendererProps) {
 
   return (
     <ContextMenu>
-      <ContextMenuTrigger render={<div className="space-y-1" />}>
+      <ContextMenuTrigger render={<div className="space-y-1" title={def.description} />}>
         <div className="flex items-baseline gap-2">
           <span className="flex-1 truncate text-xs">{f.label ?? def.name}</span>
           {learning && (

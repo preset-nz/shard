@@ -167,6 +167,7 @@ export function EnvelopeEditor({
   const stage = (id: string, label: string): ParamInfo => ({
     id: `envelope.${id}`,
     name: label,
+    description: `How much of the note the ${label.toLowerCase()} stage takes.`,
     min: 0,
     max: 1,
     default: 0.1,
@@ -178,6 +179,7 @@ export function EnvelopeEditor({
   const sustain: ParamInfo = {
     id: 'envelope.sustain',
     name: 'Sustain',
+    description: 'The level held after the decay, until the note ends.',
     min: 0,
     max: 1,
     default: 0.2,

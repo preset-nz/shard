@@ -140,6 +140,8 @@ pub struct Audio {
 pub struct ParamInfo {
     pub id: &'static str,
     pub name: &'static str,
+    /// One sentence for the row's tooltip.
+    pub description: &'static str,
     pub min: f32,
     pub max: f32,
     pub default: f32,
@@ -322,6 +324,7 @@ fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
         .map(|p| ParamInfo {
             id: p.id,
             name: p.name,
+            description: p.description,
             min: p.min,
             max: p.max,
             default: p.default,

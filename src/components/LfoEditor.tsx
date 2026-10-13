@@ -67,6 +67,7 @@ export function LfoEditor({
   const rate: ParamInfo = {
     id: 'lfo.rate',
     name: 'Rate',
+    description: 'How fast the LFO cycles.',
     min: limits.min_rate,
     max: limits.max_rate,
     default: 0.1,
@@ -78,6 +79,7 @@ export function LfoEditor({
   const phase: ParamInfo = {
     id: 'lfo.phase',
     name: 'Phase',
+    description: 'Where in its cycle the LFO starts.',
     min: 0,
     max: 1,
     default: 0,

@@ -111,8 +111,10 @@ export function NodeHeader({
   className?: string;
 }) {
   const sw = switchIdOf(defs, node);
+  // A node's switch row describes the node itself.
+  const summary = sw ? defs.find((d) => d.id === sw)?.description : undefined;
   return (
-    <div className={`flex items-center gap-2 ${className}`}>
+    <div className={`flex items-center gap-2 ${className}`} title={summary}>
       {onSelect ? (
         <button
           type="button"
