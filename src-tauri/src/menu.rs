@@ -21,6 +21,43 @@ pub const FX_ADD_PREFIX: &str = "fx-add:";
 pub const TRACK_ADD_MELODY: &str = "track.add:melody";
 pub const TRACK_ADD_DRUMS: &str = "track.add:drums";
 
+/// File > Record Take (epic 44). The title reads `STOP_TITLE` while a take runs.
+pub const RECORD_TAKE: &str = "file-record-take";
+const RECORD_TITLE: &str = "Record Take";
+const STOP_TITLE: &str = "Stop Recording";
+
+/// The menu item with this id, searched through every submenu.
+fn find_item<R: tauri::Runtime>(
+    items: Vec<tauri::menu::MenuItemKind<R>>,
+    id: &str,
+) -> Option<tauri::menu::MenuItem<R>> {
+    use tauri::menu::MenuItemKind;
+    for kind in items {
+        match kind {
+            MenuItemKind::MenuItem(i) if i.id().as_ref() == id => return Some(i),
+            MenuItemKind::Submenu(s) => {
+                if let Some(found) = s.items().ok().and_then(|inner| find_item(inner, id)) {
+                    return Some(found);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Retitles File > Record Take as the webview starts and stops a take. A
+/// synchronous command, so it runs on the main thread where the setter must.
+#[tauri::command]
+pub fn set_record_menu<R: tauri::Runtime>(app: tauri::AppHandle<R>, active: bool) {
+    let Some(items) = app.menu().and_then(|m| m.items().ok()) else {
+        return;
+    };
+    if let Some(item) = find_item(items, RECORD_TAKE) {
+        let _ = item.set_text(if active { STOP_TITLE } else { RECORD_TITLE });
+    }
+}
+
 /// The app's name, as the App menu and About show it.
 pub const APP_NAME: &str = "Shard";
 
@@ -37,6 +74,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("edit.duplicate", "CmdOrCtrl+D"),
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
     ("file-add-material", "CmdOrCtrl+Shift+I"),
+    ("file-record-take", "CmdOrCtrl+R"),
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
     ("view-inspector", "CmdOrCtrl+I"),
@@ -96,6 +134,7 @@ pub fn commands() -> Vec<Command> {
         file("file-new-patch", "New Patch", 1),
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Import…", 1),
+        file(RECORD_TAKE, RECORD_TITLE, 1),
         // The menu standard's Edit-level commands, ids reserved there (and
         // Rename beside them), on the selection. Delete has no key in the menu: a bare Backspace there
         // would be taken from every text field. The scene view's patch row

@@ -561,6 +561,29 @@ export const patchPreview = () => invoke<PatchPreview>('patch_preview');
 /** Start or stop. Stopping clears the grain pool, so stop means stop. */
 export const setPlaying = (playing: boolean) => invoke<void>('set_playing', { playing });
 
+/** What a take is recorded from: the master, or a track by its place in the order. */
+export type RecordSource = 'master' | number;
+/** What `recording` reports (epic 44). */
+export interface RecordingState {
+  active: boolean;
+  source: RecordSource | null;
+  elapsed_seconds: number;
+  /** Frames the disk could not keep up with. */
+  dropped: number;
+}
+/** A finished take. It is in the materials list by the time this returns. */
+export interface TakeInfo {
+  path: string;
+  seconds: number;
+  dropped: number;
+}
+export const recordStart = (source: RecordSource) =>
+  invoke<RecordingState>('record_start', { source });
+export const recordStop = () => invoke<TakeInfo>('record_stop');
+export const recording = () => invoke<RecordingState>('recording');
+/** Retitle File > Record Take: "Stop Recording" while a take runs. */
+export const setRecordMenu = (active: boolean) => invoke<void>('set_record_menu', { active });
+
 /** One sixteenth of a track. */
 export interface Step {
   /** Whether it triggers the patch. */

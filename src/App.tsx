@@ -68,10 +68,15 @@ import {
   type PatchPreview as PatchPreviewData,
   paramDefs,
   patchPreview,
+  type RecordingState,
+  type RecordSource,
   mappings as readMappings,
   materials as readMaterials,
   meters as readMeters,
   modulation as readModulation,
+  recording as readRecording,
+  recordStart,
+  recordStop,
   removeEnvelope,
   removeLfo,
   removeMaterial,
@@ -86,6 +91,7 @@ import {
   setEnvelope as setModEnvelope,
   setParam,
   setPlaying,
+  setRecordMenu,
   setTrackDuck,
   setTracker,
   setTrackPatch,
@@ -111,6 +117,13 @@ import { SceneView } from '@/components/SceneView';
 import { SettingsDialog } from '@/components/SettingsDialog';
 import { StepStrip } from '@/components/StepStrip';
 import { TrackFader } from '@/components/TrackFader';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { Waveform } from '@/components/Waveform';
 import { usePersistedState } from '@/lib/persisted';
 import {
@@ -148,6 +161,12 @@ const GRAIN_SCROLLBACK = 200;
  * plays loops on its own over them. Remembered across launches as UI state.
  */
 type Mode = 'tracker' | 'soundscape';
+
+/** Seconds as m:ss. */
+function formatElapsed(seconds: number): string {
+  const whole = Math.max(0, Math.floor(seconds));
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
 
 export default function App() {
   const [defs, setDefs] = useState<ParamInfo[] | null>(null);
@@ -721,6 +740,72 @@ export default function App() {
     await setPlaying(!meter.playing);
   }, [meter.playing]);
 
+  // Record a take (epic 44). The source is the window's own state, like the
+  // selection: not an edit, not undoable, not saved. A take is independent of
+  // the transport; the backend adds the finished WAV to the pool.
+  const [recSource, setRecSource] = useState<RecordSource>('master');
+  const [rec, setRec] = useState<RecordingState | null>(null);
+  const recActive = rec?.active ?? false;
+  const recActiveRef = useRef(false);
+  recActiveRef.current = recActive;
+  const recSourceRef = useRef<RecordSource>('master');
+  recSourceRef.current = recSource;
+  const recBusy = useRef(false);
+  const toggleRecord = useCallback(async () => {
+    if (recBusy.current) return;
+    recBusy.current = true;
+    try {
+      if (recActiveRef.current) {
+        const take = await recordStop();
+        setRec(null);
+        setPool(await readMaterials());
+        setNote(
+          take.dropped > 0
+            ? `Added the take, but the disk fell behind and dropped ${take.dropped} frames.`
+            : 'Added the take to Materials.',
+        );
+        setError(null);
+      } else {
+        setRec(await recordStart(recSourceRef.current));
+        setError(null);
+      }
+    } catch (e) {
+      setError(String(e));
+      try {
+        setRec(await readRecording());
+      } catch {
+        setRec(null);
+      }
+    } finally {
+      recBusy.current = false;
+    }
+  }, []);
+  // The elapsed time and dropped count come from the recorder, a few times a
+  // second while a take runs. Once on load too, in case one is already going.
+  useEffect(() => {
+    void readRecording()
+      .then((r) => setRec(r.active ? r : null))
+      .catch(() => {});
+  }, []);
+  useEffect(() => {
+    if (!recActive) return;
+    const timer = window.setInterval(() => {
+      void readRecording()
+        .then((r) => setRec(r.active ? r : null))
+        .catch(() => {});
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [recActive]);
+  // File > Record Take reads Stop Recording while a take runs.
+  useEffect(() => {
+    void setRecordMenu(recActive).catch(() => {});
+  }, [recActive]);
+  // A removed track can't be the source: fall back to the master.
+  const trackCount = tracker?.tracks.length ?? 0;
+  useEffect(() => {
+    if (recSource !== 'master' && recSource >= trackCount) setRecSource('master');
+  }, [recSource, trackCount]);
+
   // Space for play/stop, the way every other audio tool does it. Ignored while
   // a control has focus, so arrow keys on a slider still work.
   useEffect(() => {
@@ -974,6 +1059,9 @@ export default function App() {
       case 'file-add-material':
         void pickFiles();
         break;
+      case 'file-record-take':
+        void toggleRecord();
+        break;
       case 'file-new-patch':
         newPatchRow();
         break;
@@ -1141,6 +1229,57 @@ export default function App() {
           >
             {meter.playing ? 'Stop' : 'Play'}
           </button>
+
+          <button
+            type="button"
+            title="Record a take from the source beside it. It joins Materials when you stop. (Cmd+R)"
+            onClick={() => void toggleRecord()}
+            className={`rounded px-3 py-1 text-xs font-medium ${
+              recActive ? 'bg-destructive text-white' : 'border border-border hover:bg-accent'
+            }`}
+          >
+            {recActive ? 'Stop Recording' : 'Record'}
+          </button>
+          <Select
+            items={{
+              master: 'Master',
+              ...Object.fromEntries(
+                (tracker?.tracks ?? []).map((_, i) => [
+                  String(i),
+                  trackName(tracker?.tracks ?? [], i),
+                ]),
+              ),
+            }}
+            value={recSource === 'master' ? 'master' : String(recSource)}
+            disabled={recActive}
+            onValueChange={(v) => setRecSource(v === 'master' ? 'master' : Number(v))}
+          >
+            <SelectTrigger
+              size="sm"
+              aria-label="Record source"
+              title="What to record: the master, or one track before its fader"
+              className="h-6 w-24 px-1.5 text-xs"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="master" className="text-xs">
+                Master
+              </SelectItem>
+              {(tracker?.tracks ?? []).map((_, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
+                <SelectItem key={i} value={String(i)} className="text-xs">
+                  {trackName(tracker?.tracks ?? [], i)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          {rec?.active && (
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {formatElapsed(rec.elapsed_seconds)}
+              {rec.dropped > 0 ? ` · ${rec.dropped} dropped` : ''}
+            </span>
+          )}
 
           <button
             type="button"

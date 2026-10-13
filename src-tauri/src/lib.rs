@@ -2199,6 +2199,7 @@ pub fn run() {
             toggle_track_solo,
             record_start,
             record_stop,
+            menu::set_record_menu,
             recording,
             set_track_patch,
             set_track_duck,
