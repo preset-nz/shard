@@ -27,7 +27,7 @@ sha256 = "f3a33563a6f00ac348fee5597eb34274d3b9f469dfa19d3184da0913ad78a9d1"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "949169c328b166bd8d1fb89c06048eccd8f871f68f764ddf2f5e03e664979004"
+sha256 = "f073027fed1cafa3639e83b76f58e71bee3f65610e14689011a733d05d02198c"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
@@ -7676,7 +7676,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "source-map-js"
-version = "1.2.1"
+version = "1.2.2"
 source = "registry"
 declared = "BSD-3-Clause"
 scope = "shipped"
