@@ -106,11 +106,13 @@ pub struct Audio {
     steps: Arc<[AtomicU32; VOICES]>,
     /// Each kit's step, the same way. Each loop has its own length.
     kit_steps: Arc<[AtomicU32; KITS]>,
-    /// Every grain the cloud has spawned, drained by the UI at poll rate.
-    grain_log: Arc<GrainLog>,
-    /// One grain waiting to be auditioned. Handed across the same way a sample
-    /// swap is: the audio thread takes it at a block boundary, never blocking.
-    audition: Arc<Mutex<Option<GrainSpawn>>>,
+    /// Every grain each voice's cloud has spawned, by voice, drained by the
+    /// UI at poll rate. The patch view reads the shown voice's.
+    grain_logs: Vec<Arc<GrainLog>>,
+    /// One grain waiting to be auditioned, with the voice whose log it came
+    /// from. Handed across the same way a sample swap is: the audio thread
+    /// takes it at a block boundary, never blocking.
+    audition: Arc<Mutex<Option<(usize, GrainSpawn)>>>,
     /// True while a single grain is being played on its own.
     auditioning: Arc<AtomicBool>,
     /// Whether the reel is actually running backwards, which outlives the
@@ -401,8 +403,19 @@ fn meters(state: tauri::State<'_, Audio>) -> Meters {
 /// scrollback and decides what to show.
 #[tauri::command]
 fn grain_log(state: tauri::State<'_, Audio>) -> Vec<GrainInfo> {
+    // Every log is drained each poll, so showing another patch starts from
+    // now rather than dumping that voice's backlog.
+    let shown = state.voices.shown();
     let mut spawns = Vec::new();
-    state.grain_log.drain(&mut spawns);
+    let mut discard = Vec::new();
+    for (i, log) in state.grain_logs.iter().enumerate() {
+        log.drain(if Some(i) == shown {
+            &mut spawns
+        } else {
+            &mut discard
+        });
+        discard.clear();
+    }
     spawns
         .into_iter()
         .map(|g| GrainInfo {
@@ -433,14 +446,18 @@ fn audition_grain(
     if state.playing.load(Ordering::Relaxed) {
         return Err("stop playback first — one grain cannot be heard inside the cloud".into());
     }
-    *state.audition.lock().expect("audition poisoned") = Some(GrainSpawn {
-        position,
-        rate,
-        len,
-        pan,
-        window,
-        seq: 0,
-    });
+    let voice = state.voices.shown().unwrap_or(0);
+    *state.audition.lock().expect("audition poisoned") = Some((
+        voice,
+        GrainSpawn {
+            position,
+            rate,
+            len,
+            pan,
+            window,
+            seq: 0,
+        },
+    ));
     Ok(())
 }
 
@@ -1979,7 +1996,7 @@ fn build_audio() -> Result<Audio, String> {
     let kit_steps: Arc<[AtomicU32; KITS]> = Arc::new(std::array::from_fn(|_| AtomicU32::new(0)));
     let playhead = Arc::new(AtomicU32::new(0));
     let play_request = Arc::new(AtomicBool::new(false));
-    let audition: Arc<Mutex<Option<GrainSpawn>>> = Arc::new(Mutex::new(None));
+    let audition: Arc<Mutex<Option<(usize, GrainSpawn)>>> = Arc::new(Mutex::new(None));
     let auditioning = Arc::new(AtomicBool::new(false));
     let reversing = Arc::new(AtomicBool::new(false));
     let timer = Arc::new(BlockTimer::new());
@@ -2010,13 +2027,15 @@ fn build_audio() -> Result<Audio, String> {
 
     // The log is created by the engine, which only exists inside the audio
     // thread, so its handle comes back out alongside the sample rate.
-    let (tx, rx) =
-        std::sync::mpsc::channel::<Result<(f32, Arc<GrainLog>, Arc<recorder::Recorder>), String>>();
+    // What the audio thread hands back once its stream runs: the device's
+    // rate, each voice's grain log and the take recorder.
+    type Started = (f32, Vec<Arc<GrainLog>>, Arc<recorder::Recorder>);
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Started, String>>();
 
     std::thread::Builder::new()
         .name("shard-audio".into())
         .spawn(move || {
-            let built = (|| -> Result<(cpal::Stream, f32, Arc<GrainLog>, Arc<recorder::Recorder>), String> {
+            let built = (|| -> Result<(cpal::Stream, Started), String> {
                 let host = cpal::default_host();
                 let device = host
                     .default_output_device()
@@ -2032,7 +2051,7 @@ fn build_audio() -> Result<Audio, String> {
                 let mut engine = Engine::new(sample_rate, LIVE_MAX_GRAINS);
                 engine.set_voice_active(0, false);
                 engine.set_kit_active(0, false);
-                let log = engine.grain_log();
+                let log = engine.grain_logs();
                 let recorder = Arc::new(recorder::Recorder::new(sample_rate));
                 let audio_recorder = Arc::clone(&recorder);
                 let mut tap_applied = 0u32;
@@ -2071,8 +2090,8 @@ fn build_audio() -> Result<Audio, String> {
                                 // A missed block just means the grain sounds one
                                 // buffer later, which nobody can perceive.
                                 if let Ok(mut pending) = audio_audition.try_lock() {
-                                    if let Some(g) = pending.take() {
-                                        engine.audition(&g);
+                                    if let Some((voice, g)) = pending.take() {
+                                        engine.audition_on(voice, &g);
                                     }
                                 }
 
@@ -2178,12 +2197,12 @@ fn build_audio() -> Result<Audio, String> {
                 stream
                     .play()
                     .map_err(|e| format!("could not start the stream: {e}"))?;
-                Ok((stream, sample_rate, log, recorder))
+                Ok((stream, (sample_rate, log, recorder)))
             })();
 
             match built {
-                Ok((stream, sample_rate, log, recorder)) => {
-                    let _ = tx.send(Ok((sample_rate, log, recorder)));
+                Ok((stream, started)) => {
+                    let _ = tx.send(Ok(started));
                     // Park forever. The stream must outlive this scope or the
                     // device stops, and this thread exists only to hold it.
                     let _held = stream;
@@ -2198,7 +2217,7 @@ fn build_audio() -> Result<Audio, String> {
         })
         .map_err(|e| format!("could not start the audio thread: {e}"))?;
 
-    let (sample_rate, grain_log, recorder) = rx
+    let (sample_rate, grain_logs, recorder) = rx
         .recv()
         .map_err(|_| "the audio thread died during startup".to_string())??;
 
@@ -2228,7 +2247,7 @@ fn build_audio() -> Result<Audio, String> {
         playing,
         steps,
         kit_steps,
-        grain_log,
+        grain_logs,
         audition,
         auditioning,
         reversing,

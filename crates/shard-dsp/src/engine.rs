@@ -741,6 +741,12 @@ impl Engine {
         self.voices[0].grain_log()
     }
 
+    /// Every voice's spawn log, by voice. The patch view draws the one whose
+    /// voice plays the patch it shows, which is voice 0 only by chance.
+    pub fn grain_logs(&self) -> Vec<Arc<GrainLog>> {
+        self.voices.iter().map(|v| v.grain_log()).collect()
+    }
+
     /// Play one logged grain on its own, on voice 0.
     ///
     /// Only while stopped, which is the point — a grain auditioned into a live
@@ -753,11 +759,21 @@ impl Engine {
         if self.playing {
             return false;
         }
-        self.voices[0].audition(spawn)
+        self.audition_on(0, spawn)
     }
 
+    /// `audition` on voice `i`, the voice whose log the grain came from: it
+    /// reads that voice's material. False if there is no voice `i`.
+    pub fn audition_on(&mut self, i: usize, spawn: &GrainSpawn) -> bool {
+        if self.playing {
+            return false;
+        }
+        self.voices.get_mut(i).is_some_and(|v| v.audition(spawn))
+    }
+
+    /// Whether any voice is playing an auditioned grain.
     pub fn auditioning(&self) -> bool {
-        self.voices[0].auditioning()
+        self.voices.iter().any(|v| v.auditioning())
     }
 
     /// Whether the tape is running backwards, which is not the same as whether
@@ -2330,6 +2346,36 @@ mod tests {
                 g.position
             );
         }
+    }
+
+    #[test]
+    fn each_voice_logs_its_own_grains() {
+        // A patch plays on its track's voice, or alone on the last one, so
+        // the view must be able to read a voice other than 0. Georg scrubbed
+        // a cloud on another voice and saw no grains at all.
+        let mut e = Engine::new(48_000.0, 128);
+        e.set_voice_source(1, tone(48_000));
+        e.set_voice_active(0, false);
+        e.set_voice_active(1, true);
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        set(&bank, "grain.gain", 1.0);
+        set(&bank, "grain.on", 1.0);
+
+        let logs = e.grain_logs();
+        assert_eq!(logs.len(), VOICES);
+        let mut out = vec![0.0; 512];
+        for _ in 0..400 {
+            e.process_block(&mut out, &bank);
+        }
+
+        let drained = |i: usize| {
+            let mut spawns = Vec::new();
+            logs[i].drain(&mut spawns);
+            spawns.len()
+        };
+        assert!(drained(1) > 0, "voice 1 played a cloud and logged nothing");
+        assert_eq!(drained(0), 0, "an idle voice 0 logged grains");
     }
 
     #[test]
