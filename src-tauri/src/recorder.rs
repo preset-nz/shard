@@ -20,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
+use shard_dsp::arm::Arm;
 use shard_dsp::{Engine, Tap, KITS, VOICES};
 
 /// Floats the ring holds: a power of two, 2^20, which is 10.9 s of stereo at
@@ -255,6 +256,9 @@ pub struct TakeInfo {
 pub struct RecordingState {
     pub active: bool,
     pub source: Option<Source>,
+    /// Armed and still waiting for the first sound: `active`, but nothing is
+    /// being written yet and the elapsed time is zero.
+    pub armed: bool,
     pub elapsed_seconds: f64,
     pub dropped: u64,
 }
@@ -262,6 +266,8 @@ pub struct RecordingState {
 struct Running {
     path: PathBuf,
     source: Source,
+    /// Started armed: a stop with nothing recorded writes no file.
+    armed: bool,
     stop: Arc<AtomicBool>,
     writer: JoinHandle<Result<(), String>>,
 }
@@ -272,6 +278,10 @@ pub struct Recorder {
     want: AtomicU32,
     /// The tap the callback last applied, the same way: the stop handshake.
     seen: AtomicU32,
+    /// Armed and not yet triggered: the callback holds blocks back (in the
+    /// pre-roll) instead of pushing them. Set by the command thread before
+    /// the tap is, cleared by the callback on the first sound.
+    waiting: AtomicBool,
     sample_rate: u32,
     running: Mutex<Option<Running>>,
 }
@@ -306,6 +316,7 @@ impl Recorder {
             ring: Arc::new(Ring::new(floats)),
             want: AtomicU32::new(0),
             seen: AtomicU32::new(0),
+            waiting: AtomicBool::new(false),
             sample_rate: sample_rate.round() as u32,
             running: Mutex::new(None),
         }
@@ -324,8 +335,24 @@ impl Recorder {
     }
 
     /// Audio thread, after the block is rendered: push what was tapped.
-    pub fn after_render(&self, engine: &Engine, applied: u32) {
-        if applied != 0 {
+    ///
+    /// Detection for an armed take runs here, on the audio thread, at the tap:
+    /// `Arm::feed` is a peak compare and a copy into a ring it owns, sized at
+    /// construction. On the first sound it hands over the pre-roll and the
+    /// rest of the block, which go into the same ring as a live take; the
+    /// writer thread never knows the difference. `arm` is the callback's own,
+    /// so nothing here is shared or locked.
+    pub fn after_render(&self, engine: &Engine, applied: u32, arm: &mut Arm) {
+        if applied == 0 {
+            // Tap off: the next arming starts with an empty pre-roll.
+            arm.reset();
+            return;
+        }
+        if self.waiting.load(Ordering::Acquire) {
+            if arm.feed(engine.tapped(), |s| self.ring.push(s)) {
+                self.waiting.store(false, Ordering::Release);
+            }
+        } else {
             self.ring.push(engine.tapped());
         }
     }
@@ -340,6 +367,35 @@ impl Recorder {
         track: Option<&str>,
         meta: TakeMeta,
         now: SystemTime,
+    ) -> Result<PathBuf, String> {
+        self.begin(dir, tap, source, track, meta, now, false)
+    }
+
+    /// Like `start`, but the take opens at the first sound over the arming
+    /// threshold, with a little of what led up to it. Stopping before that
+    /// writes no file.
+    pub fn arm(
+        &self,
+        dir: &Path,
+        tap: Tap,
+        source: Source,
+        track: Option<&str>,
+        meta: TakeMeta,
+        now: SystemTime,
+    ) -> Result<PathBuf, String> {
+        self.begin(dir, tap, source, track, meta, now, true)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn begin(
+        &self,
+        dir: &Path,
+        tap: Tap,
+        source: Source,
+        track: Option<&str>,
+        meta: TakeMeta,
+        now: SystemTime,
+        armed: bool,
     ) -> Result<PathBuf, String> {
         let mut running = lock(&self.running);
         if running.is_some() {
@@ -369,9 +425,11 @@ impl Recorder {
         *running = Some(Running {
             path: path.clone(),
             source,
+            armed,
             stop,
             writer,
         });
+        self.waiting.store(armed, Ordering::Release);
         self.want.store(encode(Some(tap)), Ordering::Release);
         Ok(path)
     }
@@ -379,11 +437,20 @@ impl Recorder {
     /// End the take: stop the tap, let the writer drain the ring and finalise
     /// the WAV. Blocks the command thread (never the callback) for as long as
     /// the disk takes.
+    #[cfg(test)]
     pub fn stop(&self) -> Result<TakeInfo, String> {
+        self.stop_or_disarm()?
+            .ok_or_else(|| "nothing was recorded".to_string())
+    }
+
+    /// End the take, or disarm: `None` when it was armed and no sound ever
+    /// came, in which case the file is removed and nothing is added.
+    pub fn stop_or_disarm(&self) -> Result<Option<TakeInfo>, String> {
         let Some(run) = lock(&self.running).take() else {
             return Err("not recording".into());
         };
         self.want.store(0, Ordering::Release);
+        self.waiting.store(false, Ordering::Release);
         // Wait for the callback to take the tap off, so nothing is pushed
         // after the writer is told to finish. A stream that is not running
         // (a test) never answers; stop waiting after half a second.
@@ -397,11 +464,15 @@ impl Recorder {
             .join()
             .map_err(|_| "the take writer panicked".to_string())??;
         let frames = self.ring.pushed();
-        Ok(TakeInfo {
+        if run.armed && frames == 0 && self.ring.dropped() == 0 {
+            let _ = std::fs::remove_file(&run.path);
+            return Ok(None);
+        }
+        Ok(Some(TakeInfo {
             path: run.path.to_string_lossy().into_owned(),
             seconds: frames as f64 / f64::from(self.sample_rate),
             dropped: self.ring.dropped(),
-        })
+        }))
     }
 
     pub fn state(&self) -> RecordingState {
@@ -411,6 +482,7 @@ impl Recorder {
             Some(r) => RecordingState {
                 active: true,
                 source: Some(r.source),
+                armed: self.waiting.load(Ordering::Acquire),
                 elapsed_seconds: (self.ring.pushed() + dropped) as f64
                     / f64::from(self.sample_rate),
                 dropped,
@@ -418,6 +490,7 @@ impl Recorder {
             None => RecordingState {
                 active: false,
                 source: None,
+                armed: false,
                 elapsed_seconds: 0.0,
                 dropped: 0,
             },
@@ -696,11 +769,12 @@ mod tests {
         )
         .unwrap();
         let (mut applied, mut heard) = (0, Vec::new());
+        let mut arm = Arm::new(48_000.0);
         let mut out = vec![0.0f32; 512];
         for _ in 0..100 {
             rec.before_render(&mut engine, &mut applied);
             engine.process_block(&mut out, &bank);
-            rec.after_render(&engine, applied);
+            rec.after_render(&engine, applied, &mut arm);
             heard.extend_from_slice(&out);
         }
         // Stop from this thread would wait for the "callback" to answer; run
@@ -710,7 +784,7 @@ mod tests {
             while !t.is_finished() {
                 rec.before_render(&mut engine, &mut applied);
                 engine.process_block(&mut out, &bank);
-                rec.after_render(&engine, applied);
+                rec.after_render(&engine, applied, &mut arm);
                 if applied == 0 {
                     break;
                 }
@@ -729,6 +803,222 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A stand-in for the stream: an engine tapped at the master, blocks of 64
+    /// frames, silent until `play_at` blocks in, then a tone.
+    struct Fake {
+        engine: Engine,
+        arm: Arm,
+        applied: u32,
+        bank: shard_dsp::ParamBank,
+        out: Vec<f32>,
+        heard: Vec<f32>,
+        block: usize,
+    }
+
+    impl Fake {
+        fn new() -> Self {
+            let mut engine = Engine::new(48_000.0, 64);
+            engine.set_source(
+                (0..96_000)
+                    .map(|i| (core::f32::consts::TAU * 220.0 * i as f32 / 48_000.0).sin())
+                    .collect(),
+            );
+            Self {
+                engine,
+                arm: Arm::new(48_000.0),
+                applied: 0,
+                bank: shard_dsp::ParamBank::new(),
+                out: vec![0.0; 128],
+                heard: Vec::new(),
+                block: 0,
+            }
+        }
+
+        fn run(&mut self, rec: &Recorder, blocks: usize, play_at: Option<usize>) {
+            for _ in 0..blocks {
+                if Some(self.block) == play_at {
+                    self.engine.set_playing(true);
+                }
+                rec.before_render(&mut self.engine, &mut self.applied);
+                self.engine.process_block(&mut self.out, &self.bank);
+                rec.after_render(&self.engine, self.applied, &mut self.arm);
+                self.heard.extend_from_slice(&self.out);
+                self.block += 1;
+            }
+        }
+
+        /// Stop from another thread while this one keeps the callback going.
+        fn stop(&mut self, rec: &Recorder) -> Result<Option<TakeInfo>, String> {
+            std::thread::scope(|s| {
+                let t = s.spawn(|| rec.stop_or_disarm());
+                while !t.is_finished() {
+                    self.run(rec, 1, None);
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                t.join().unwrap()
+            })
+        }
+    }
+
+    fn files_in(dir: &Path) -> usize {
+        std::fs::read_dir(dir).map_or(0, |d| d.count())
+    }
+
+    #[test]
+    fn armed_over_silence_writes_nothing() {
+        let dir = scratch_dir("armed-silence");
+        let rec = Recorder::new(48_000.0);
+        let mut fake = Fake::new();
+        rec.arm(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        fake.run(&rec, 500, None);
+        let state = rec.state();
+        assert!(state.active && state.armed);
+        assert_eq!(state.elapsed_seconds, 0.0);
+        assert!(fake.heard.iter().all(|s| *s == 0.0), "the fake is silent");
+        assert!(fake.stop(&rec).unwrap().is_none(), "nothing to add");
+        assert_eq!(files_in(&dir), 0, "no file is left behind");
+        assert!(!rec.state().active);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn armed_then_a_sound_opens_the_take_twenty_milliseconds_early() {
+        let dir = scratch_dir("armed-sound");
+        let rec = Recorder::new(48_000.0);
+        let mut fake = Fake::new();
+        rec.arm(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        // Silence for 40 blocks (5120 frames), then the tone.
+        fake.run(&rec, 40, None);
+        assert!(rec.state().armed);
+        fake.run(&rec, 60, Some(40));
+        assert!(!rec.state().armed, "the sound started the take");
+        let thr = 10f32.powf(-50.0 / 20.0);
+        let n = fake
+            .heard
+            .chunks_exact(2)
+            .position(|f| f[0].abs() >= thr || f[1].abs() >= thr)
+            .expect("the tone is heard");
+        let pre = fake.arm.preroll_frames();
+        assert_eq!(pre, 960, "20 ms at 48 kHz");
+        assert!(n > pre, "the sound starts well into the run (frame {n})");
+        let heard_before_stop = fake.heard.len();
+        let info = fake.stop(&rec).unwrap().expect("a take");
+        let (_, back) = read(Path::new(&info.path));
+        let expect = &fake.heard[(n - pre) * 2..heard_before_stop];
+        assert!(back.len() >= expect.len());
+        assert!(
+            back[..expect.len()] == *expect,
+            "the take is the output from 20 ms before the first sound"
+        );
+        assert!(
+            back[..pre * 2].iter().all(|s| s.abs() < thr),
+            "the pre-roll is the lead-in"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn disarming_before_a_sound_writes_nothing_and_a_second_arm_starts_clean() {
+        let dir = scratch_dir("disarm");
+        let rec = Recorder::new(48_000.0);
+        let mut fake = Fake::new();
+        rec.arm(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        fake.run(&rec, 50, None);
+        assert!(fake.stop(&rec).unwrap().is_none());
+        assert_eq!(files_in(&dir), 0);
+        // Sound happens while nothing is armed, then arming again: the tail
+        // of that sound is not in the new take's pre-roll.
+        fake.run(&rec, 1, Some(fake.block));
+        fake.run(&rec, 30, None);
+        fake.engine.set_playing(false);
+        fake.run(&rec, 400, None);
+        rec.arm(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        fake.run(&rec, 50, None);
+        assert!(rec.state().armed, "silence does not trigger it");
+        assert!(fake.stop(&rec).unwrap().is_none());
+        assert_eq!(files_in(&dir), 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn plain_record_still_captures_from_the_first_frame() {
+        let dir = scratch_dir("plain");
+        let rec = Recorder::new(48_000.0);
+        let mut fake = Fake::new();
+        rec.start(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
+        assert!(!rec.state().armed);
+        fake.run(&rec, 50, None);
+        let info = fake.stop(&rec).unwrap().expect("a take, even of silence");
+        let (_, back) = read(Path::new(&info.path));
+        assert!(back.len() >= 50 * 128);
+        assert!(back[..50 * 128] == fake.heard[..50 * 128]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn arming_and_triggering_never_touch_the_allocator() {
+        let rec = Recorder::new(48_000.0);
+        let mut fake = Fake::new();
+        // The same hand-off `arm` makes, minus the file.
+        rec.waiting.store(true, Ordering::Release);
+        rec.want.store(encode(Some(Tap::Master)), Ordering::Release);
+        let ((), caught) = no_alloc(|| {
+            for block in 0..200 {
+                if block == 100 {
+                    fake.engine.set_playing(true);
+                }
+                rec.before_render(&mut fake.engine, &mut fake.applied);
+                fake.engine.process_block(&mut fake.out, &fake.bank);
+                rec.after_render(&fake.engine, fake.applied, &mut fake.arm);
+            }
+        });
+        assert!(
+            !rec.waiting.load(Ordering::Acquire),
+            "the sound triggered it"
+        );
+        assert_eq!(caught, 0, "arming or triggering touched the allocator");
+    }
+
     #[test]
     fn the_callbacks_side_never_touches_the_allocator() {
         let rec = Recorder::new(48_000.0);
@@ -736,6 +1026,7 @@ mod tests {
         let bank = shard_dsp::ParamBank::new();
         let mut out = vec![0.0f32; 1024];
         let mut applied = 0;
+        let mut arm = Arm::new(48_000.0);
         let ((), caught) = no_alloc(|| {
             for block in 0..200 {
                 rec.want.store(
@@ -744,7 +1035,7 @@ mod tests {
                 );
                 rec.before_render(&mut engine, &mut applied);
                 engine.process_block(&mut out, &bank);
-                rec.after_render(&engine, applied);
+                rec.after_render(&engine, applied, &mut arm);
             }
         });
         assert_eq!(caught, 0);

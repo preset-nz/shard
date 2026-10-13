@@ -624,6 +624,8 @@ export type RecordSource = 'master' | number;
 export interface RecordingState {
   active: boolean;
   source: RecordSource | null;
+  /** Armed and still waiting for the first sound: nothing is being written. */
+  armed: boolean;
   elapsed_seconds: number;
   /** Frames the disk could not keep up with. */
   dropped: number;
@@ -634,12 +636,15 @@ export interface TakeInfo {
   seconds: number;
   dropped: number;
 }
-export const recordStart = (source: RecordSource) =>
-  invoke<RecordingState>('record_start', { source });
-export const recordStop = () => invoke<TakeInfo>('record_stop');
+/** `armed` waits for the first sound over -50 dBFS and opens the take there. */
+export const recordStart = (source: RecordSource, armed = false) =>
+  invoke<RecordingState>('record_start', { source, armed });
+/** Null when it was armed and no sound came: nothing was written. */
+export const recordStop = () => invoke<TakeInfo | null>('record_stop');
 export const recording = () => invoke<RecordingState>('recording');
-/** Retitle File > Record Take: "Stop Recording" while a take runs. */
-export const setRecordMenu = (active: boolean) => invoke<void>('set_record_menu', { active });
+/** Retitle File > Record Take and Arm Take: Stop Recording while a take runs, Disarm Take while armed. */
+export const setRecordMenu = (active: boolean, armed: boolean) =>
+  invoke<void>('set_record_menu', { active, armed });
 
 /** One sixteenth of a track. */
 export interface Step {

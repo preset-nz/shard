@@ -11,6 +11,7 @@ use std::hint::black_box;
 use std::sync::Mutex;
 
 use preset_math::Basis;
+use shard_dsp::arm::Arm;
 use shard_dsp::arrangement;
 use shard_dsp::rt::{no_alloc, GuardedAlloc};
 use shard_dsp::{
@@ -1231,6 +1232,43 @@ fn tapping_never_touches_the_allocator() {
         }
     });
     assert_eq!(caught, 0, "tapping touched the allocator {caught} time(s)");
+}
+
+#[test]
+fn an_armed_take_never_touches_the_allocator() {
+    // Waiting over silence, then the sound arrives: the detector copies into
+    // its ring while it waits and hands slices over on the trigger. Armed
+    // again afterwards, as a second take would.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    e.set_tap(Some(Tap::Master));
+    let bank = ParamBank::new();
+    let mut arm = Arm::new(SR);
+    let mut out = vec![0.0f32; 1024];
+    let mut sink = vec![0.0f32; 1 << 16];
+    let ((), caught) = no_alloc(|| {
+        for round in 0..3 {
+            arm.reset();
+            e.set_playing(false);
+            let mut triggered = false;
+            for block in 0..200 {
+                if block == 100 {
+                    e.set_playing(true);
+                }
+                e.process_block(&mut out, &bank);
+                if !triggered {
+                    let mut at = 0;
+                    triggered = arm.feed(e.tapped(), |s| {
+                        sink[at..at + s.len()].copy_from_slice(s);
+                        at += s.len();
+                    });
+                    black_box(at);
+                }
+            }
+            assert!(triggered, "round {round} never triggered");
+        }
+    });
+    assert_eq!(caught, 0, "arming touched the allocator {caught} time(s)");
 }
 
 #[test]

@@ -25,6 +25,10 @@ pub const TRACK_ADD_DRUMS: &str = "track.add:drums";
 pub const RECORD_TAKE: &str = "file-record-take";
 const RECORD_TITLE: &str = "Record Take";
 const STOP_TITLE: &str = "Stop Recording";
+/// File > Arm Take (epic 44, triage #12): Record that waits for the first sound.
+pub const ARM_TAKE: &str = "file-arm-take";
+const ARM_TITLE: &str = "Arm Take";
+const DISARM_TITLE: &str = "Disarm Take";
 
 /// The menu item with this id, searched through every submenu.
 fn find_item<R: tauri::Runtime>(
@@ -49,12 +53,28 @@ fn find_item<R: tauri::Runtime>(
 /// Retitles File > Record Take as the webview starts and stops a take. A
 /// synchronous command, so it runs on the main thread where the setter must.
 #[tauri::command]
-pub fn set_record_menu<R: tauri::Runtime>(app: tauri::AppHandle<R>, active: bool) {
+pub fn set_record_menu<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    active: bool,
+    armed: Option<bool>,
+) {
+    let armed = armed.unwrap_or(false);
     let Some(items) = app.menu().and_then(|m| m.items().ok()) else {
         return;
     };
-    if let Some(item) = find_item(items, RECORD_TAKE) {
-        let _ = item.set_text(if active { STOP_TITLE } else { RECORD_TITLE });
+    if let Some(item) = find_item(items.clone(), RECORD_TAKE) {
+        let title = match (active, armed) {
+            (false, _) => RECORD_TITLE,
+            (true, true) => DISARM_TITLE,
+            (true, false) => STOP_TITLE,
+        };
+        let _ = item.set_text(title);
+    }
+    // Arm Take is the same toggle: it disarms while armed, and has nothing to
+    // do during a live take (Stop Recording is the Record item's).
+    if let Some(item) = find_item(items, ARM_TAKE) {
+        let _ = item.set_text(if armed { DISARM_TITLE } else { ARM_TITLE });
+        let _ = item.set_enabled(!active || armed);
     }
 }
 
@@ -75,6 +95,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
     ("file-add-material", "CmdOrCtrl+Shift+I"),
     ("file-record-take", "CmdOrCtrl+R"),
+    (ARM_TAKE, "CmdOrCtrl+Alt+R"),
     ("file-extract-region", "CmdOrCtrl+E"),
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
@@ -140,6 +161,7 @@ pub fn commands() -> Vec<Command> {
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Import…", 1),
         file(RECORD_TAKE, RECORD_TITLE, 1),
+        file(ARM_TAKE, ARM_TITLE, 1),
         // Regions in the patch view's waveform (row 49): Extract writes the
         // selected one to a new WAV in Materials; Detect marks the material's
         // transients. Shift+Cmd+E is the menu standard's Export.

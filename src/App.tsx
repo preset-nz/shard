@@ -883,18 +883,24 @@ export default function App() {
   const [recSource, setRecSource] = useState<RecordSource>('master');
   const [rec, setRec] = useState<RecordingState | null>(null);
   const recActive = rec?.active ?? false;
+  const recArmed = rec?.active === true && rec.armed;
   const recActiveRef = useRef(false);
   recActiveRef.current = recActive;
   const recSourceRef = useRef<RecordSource>('master');
   recSourceRef.current = recSource;
   const recBusy = useRef(false);
-  const toggleRecord = useCallback(async () => {
+  const toggleRecord = useCallback(async (armed = false) => {
     if (recBusy.current) return;
     recBusy.current = true;
     try {
       if (recActiveRef.current) {
         const take = await recordStop();
         setRec(null);
+        if (!take) {
+          setNote('Disarmed. No sound came, so nothing was recorded.');
+          setError(null);
+          return;
+        }
         setPool(await readMaterials());
         setNote(
           take.dropped > 0
@@ -903,7 +909,7 @@ export default function App() {
         );
         setError(null);
       } else {
-        setRec(await recordStart(recSourceRef.current));
+        setRec(await recordStart(recSourceRef.current, armed));
         setError(null);
       }
     } catch (e) {
@@ -935,8 +941,8 @@ export default function App() {
   }, [recActive]);
   // File > Record Take reads Stop Recording while a take runs.
   useEffect(() => {
-    void setRecordMenu(recActive).catch(() => {});
-  }, [recActive]);
+    void setRecordMenu(recActive, recArmed).catch(() => {});
+  }, [recActive, recArmed]);
   // A removed track can't be the source: fall back to the master.
   const trackCount = tracker?.tracks.length ?? 0;
   useEffect(() => {
@@ -1237,6 +1243,9 @@ export default function App() {
       case 'file-record-take':
         void toggleRecord();
         break;
+      case 'file-arm-take':
+        void toggleRecord(true);
+        break;
       case 'file-extract-region':
         if (shownRecord?.path && selectedRegion !== null) {
           void extractSelected(shownRecord.id, selectedRegion);
@@ -1442,13 +1451,21 @@ export default function App() {
 
           <button
             type="button"
-            title="Record a take from the source beside it. It joins Materials when you stop. (Cmd+R)"
-            onClick={() => void toggleRecord()}
+            title={
+              recArmed
+                ? 'Armed: the take starts at the first sound. Press to disarm. (Opt+Cmd+R)'
+                : 'Record a take from the source beside it. It joins Materials when you stop. Option-click arms it instead: it waits for the first sound. (Cmd+R, arm Opt+Cmd+R)'
+            }
+            onClick={(e) => void toggleRecord(e.altKey)}
             className={`rounded px-3 py-1 text-xs font-medium ${
-              recActive ? 'bg-destructive text-white' : 'border border-border hover:bg-accent'
+              recArmed
+                ? 'border border-destructive text-destructive'
+                : recActive
+                  ? 'bg-destructive text-white'
+                  : 'border border-border hover:bg-accent'
             }`}
           >
-            {recActive ? 'Stop Recording' : 'Record'}
+            {recArmed ? 'Armed' : recActive ? 'Stop Recording' : 'Record'}
           </button>
           <Select
             items={{
@@ -1486,8 +1503,11 @@ export default function App() {
           </Select>
           {rec?.active && (
             <span className="text-xs tabular-nums text-muted-foreground">
-              {formatElapsed(rec.elapsed_seconds)}
-              {rec.dropped > 0 ? ` · ${rec.dropped} dropped` : ''}
+              {rec.armed
+                ? 'waiting for sound'
+                : `${formatElapsed(rec.elapsed_seconds)}${
+                    rec.dropped > 0 ? ` · ${rec.dropped} dropped` : ''
+                  }`}
             </span>
           )}
 

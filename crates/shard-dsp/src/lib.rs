@@ -15,6 +15,7 @@
 //! allocator, and `tests/audio_thread.rs` runs every audio-thread call inside
 //! it.
 
+pub mod arm;
 pub mod arrangement;
 pub mod bands;
 pub mod chain;

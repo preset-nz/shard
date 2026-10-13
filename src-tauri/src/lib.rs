@@ -903,12 +903,14 @@ fn toggle_track_mute(
 }
 
 /// Starts a take from the master or from a track's place (epic 44). Not an
-/// edit: the source is session state, like mute.
+/// edit: the source is session state, like mute. `armed` waits for the first
+/// sound over the threshold and opens the take there.
 #[tauri::command]
 fn record_start(
     app: tauri::AppHandle,
     state: tauri::State<'_, Audio>,
     source: recorder::Source,
+    armed: Option<bool>,
 ) -> Result<recorder::RecordingState, String> {
     let mut patch = None;
     let (tap, track) = match source {
@@ -949,7 +951,13 @@ fn record_start(
         track: track.clone(),
         source: if track.is_some() { "track" } else { "master" },
     };
-    state.recorder.start(
+    let begin = if armed.unwrap_or(false) {
+        recorder::Recorder::arm
+    } else {
+        recorder::Recorder::start
+    };
+    begin(
+        &state.recorder,
         &recorder::materials_dir()?,
         tap,
         source,
@@ -961,12 +969,15 @@ fn record_start(
 }
 
 /// Ends the take, finishes the WAV and adds it to the materials as one undo
-/// step, "Add Take".
+/// step, "Add Take". Stopping an armed take no sound ever started writes
+/// nothing and answers `None`.
 #[tauri::command]
-fn record_stop(state: tauri::State<'_, Audio>) -> Result<recorder::TakeInfo, String> {
-    let take = state.recorder.stop()?;
+fn record_stop(state: tauri::State<'_, Audio>) -> Result<Option<recorder::TakeInfo>, String> {
+    let Some(take) = state.recorder.stop_or_disarm()? else {
+        return Ok(None);
+    };
     state.session.add_take(&take.path)?;
-    Ok(take)
+    Ok(Some(take))
 }
 
 /// Whether a take is being recorded, from what, for how long, and how many
@@ -2098,6 +2109,7 @@ fn build_audio() -> Result<Audio, String> {
                 let recorder = Arc::new(recorder::Recorder::new(sample_rate));
                 let audio_recorder = Arc::clone(&recorder);
                 let mut tap_applied = 0u32;
+                let mut arm = shard_dsp::arm::Arm::new(sample_rate);
                 let mut scratch = vec![0.0f32; 8192];
                 let mut held = Held::new();
 
@@ -2153,7 +2165,7 @@ fn build_audio() -> Result<Audio, String> {
                                     &audio_heard,
                                     &mut scratch[..needed],
                                 );
-                                audio_recorder.after_render(&engine, tap_applied);
+                                audio_recorder.after_render(&engine, tap_applied, &mut arm);
 
                                 // Once, the engine stops the transport itself
                                 // when the pass has played out. Withdraw the
