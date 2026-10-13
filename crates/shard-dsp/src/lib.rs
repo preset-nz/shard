@@ -38,6 +38,7 @@ pub mod limiter;
 pub mod mix;
 pub mod modulation;
 pub mod note;
+pub mod onset;
 pub mod overtone;
 pub mod params;
 pub mod player;
