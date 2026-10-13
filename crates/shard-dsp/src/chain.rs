@@ -40,6 +40,7 @@ use crate::repeat::{Repeat, RepeatParams};
 use crate::reverb::{Reverb, ReverbParams, ReverbType};
 use crate::ringmod::{RingMod, RingModParams};
 use crate::rise::{Rise, RiseParams};
+use crate::shaper::{Shaper, ShaperParams};
 use crate::smooth::{OnePole, Ramp};
 use crate::wear::{Wear, WearParams};
 
@@ -123,6 +124,7 @@ pub(crate) enum FxParams {
     Repeat(RepeatParams),
     FreqShift(FreqShiftParams),
     Peaks(PeaksParams),
+    Shaper(ShaperParams),
 }
 
 /// The rows of each kind that `read_fx` takes, after `on` and `mix`, in the
@@ -145,6 +147,7 @@ pub(crate) fn read_order(kind: Kind) -> &'static [&'static str] {
         Kind::Repeat => &["hold", "length", "speed", "reverse"],
         Kind::FreqShift => &["shift", "feedback", "spread"],
         Kind::Peaks => &["low", "high", "boost", "width"],
+        Kind::Shaper => &["attack", "sustain", "speed"],
     }
 }
 
@@ -255,6 +258,12 @@ fn read_fx(
             width: v(5),
             mix,
         }),
+        Kind::Shaper => FxParams::Shaper(ShaperParams {
+            attack: v(2),
+            sustain: v(3),
+            speed_ms: v(4),
+            mix,
+        }),
     }
 }
 
@@ -331,6 +340,7 @@ enum Proc {
     Repeat(Repeat),
     FreqShift(FreqShift),
     Peaks(Peaks),
+    Shaper(Shaper),
 }
 
 impl Proc {
@@ -351,6 +361,7 @@ impl Proc {
             Kind::Repeat => Proc::Repeat(Repeat::new(sr)),
             Kind::FreqShift => Proc::FreqShift(FreqShift::new(sr)),
             Kind::Peaks => Proc::Peaks(Peaks::new(sr)),
+            Kind::Shaper => Proc::Shaper(Shaper::new(sr)),
         }
     }
 
@@ -370,6 +381,7 @@ impl Proc {
             Proc::Repeat(x) => x.reset(),
             Proc::FreqShift(x) => x.reset(),
             Proc::Peaks(x) => x.reset(),
+            Proc::Shaper(x) => x.reset(),
         }
     }
 }
@@ -730,6 +742,14 @@ impl Chain {
                     l,
                     r,
                     &PeaksParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
+                (Proc::Shaper(x), FxParams::Shaper(q)) => x.process(
+                    l,
+                    r,
+                    &ShaperParams {
                         mix: q.mix * level,
                         ..*q
                     },

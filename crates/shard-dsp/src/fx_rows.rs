@@ -921,3 +921,57 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         smooth_ms: 20.0,
     },
 ];
+
+pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
+    // Transient: Attack and Sustain push the onset and the tail up or down, by how fast the sound changes and not how loud it is. Speed is how long counts as the attack. At Attack 0 and Sustain 0 it passes the sound untouched.
+    ParamDef {
+        id: "shaper.on",
+        name: "Transient",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "shaper.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "shaper.attack",
+        name: "Attack",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "shaper.sustain",
+        name: "Sustain",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "shaper.speed",
+        name: "Speed",
+        min: crate::shaper::SPEED_MIN_MS,
+        max: crate::shaper::SPEED_MAX_MS,
+        default: 10.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
+        smooth_ms: 20.0,
+    },
+];
