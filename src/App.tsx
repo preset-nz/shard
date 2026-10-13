@@ -912,8 +912,9 @@ export default function App() {
     if (recSource !== 'master' && recSource >= trackCount) setRecSource('master');
   }, [recSource, trackCount]);
 
-  // Space for play/stop, the way every other audio tool does it. Ignored while
-  // a control has focus, so arrow keys on a slider still work.
+  // The keyboard fallbacks: undo, view switches, held tape keys, and Space for
+  // play/stop, the way every other audio tool does it. Other keys are ignored
+  // while a control has focus, so arrow keys on a slider still work.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // A text field keeps its own undo; everything else steps the document.
@@ -983,17 +984,36 @@ export default function App() {
         e.preventDefault();
         return;
       }
-      if (e.code !== 'Space') return;
-      e.preventDefault();
-      void togglePlay();
     };
     const onKeyUp = (e: KeyboardEvent) => {
       if (e.code === 'KeyB') setBrake(false);
       if (e.code === 'KeyR') setReverse(false);
     };
+    // Space is play and stop wherever focus is, except where it types a
+    // space (Georg, 2026-10-13). Caught on the way down, so a focused
+    // button, dropdown or slider never sees it: a button clicks on Space's
+    // keyup, so that is swallowed too.
+    const typesSpace = (t: EventTarget | null) => {
+      if (!(t instanceof HTMLElement)) return false;
+      if (t.isContentEditable || t.tagName === 'TEXTAREA') return true;
+      if (t.tagName !== 'INPUT') return false;
+      const type = (t as HTMLInputElement).type;
+      return !/^(checkbox|radio|range|button|submit|reset|color|file)$/.test(type);
+    };
+    const onSpace = (e: KeyboardEvent) => {
+      if (e.code !== 'Space' || e.metaKey || e.ctrlKey || e.altKey) return;
+      if (typesSpace(e.target)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.type === 'keydown' && !e.repeat) void togglePlay();
+    };
+    window.addEventListener('keydown', onSpace, true);
+    window.addEventListener('keyup', onSpace, true);
     window.addEventListener('keydown', onKey);
     window.addEventListener('keyup', onKeyUp);
     return () => {
+      window.removeEventListener('keydown', onSpace, true);
+      window.removeEventListener('keyup', onSpace, true);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
