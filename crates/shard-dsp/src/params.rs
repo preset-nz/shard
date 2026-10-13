@@ -164,6 +164,30 @@ const BASE: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
+    // Scrubbing (roadmap row 45), a mode of the plain sample: with it on, the
+    // sample plays no passes and its head chases Position instead. The head
+    // moves through a smoother in the voice (`scrub.rs`), so these two rows
+    // are read raw. Octave, steps and Length do not apply while it is on.
+    ParamDef {
+        id: "material.scrub",
+        name: "Scrub",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "material.position",
+        name: "Position",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 0.0,
+    },
     // No octave or trim here: those belong to each material, and reach the
     // engine as a `sources::Reading` per generator (Georg, 2026-09-15).
     // Section switches, one per effect. Stepped, and never smoothed here: the

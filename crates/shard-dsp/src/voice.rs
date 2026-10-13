@@ -29,6 +29,7 @@ use crate::modulation::{Globals, ModSet};
 use crate::note::{Alone, Length};
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
+use crate::scrub::Scrub;
 use crate::smooth::{OnePole, Ramp};
 use crate::sources::{Generator, Reading};
 use crate::steps::{Beat, StepClock, StepParams, Transport};
@@ -51,6 +52,8 @@ struct Slots {
     grain_gain: usize,
     material_on: usize,
     material_gain: usize,
+    scrub: usize,
+    scrub_position: usize,
     grain_on: usize,
     env_on: usize,
     env_mix: usize,
@@ -99,6 +102,8 @@ impl Slots {
             grain_gain: at("grain.gain"),
             material_on: at("material.on"),
             material_gain: at("material.gain"),
+            scrub: at("material.scrub"),
+            scrub_position: at("material.position"),
             grain_on: at("grain.on"),
             env_on: at("env.on"),
             env_mix: at("env.mix"),
@@ -150,6 +155,8 @@ struct Fades {
     /// player's: this opens while one sounds and closes between them.
     fm_gate: Ramp,
     env: Ramp,
+    /// Scrub's switch: the plain sample's passes fade out as the head fades in.
+    scrub: Ramp,
 }
 
 impl Fades {
@@ -172,6 +179,7 @@ impl Fades {
                 r
             },
             env: ramp(slots.env_on),
+            scrub: ramp(slots.scrub),
         }
     }
 }
@@ -236,6 +244,9 @@ struct Block {
     grain_on_target: f32,
     fm_on_target: f32,
     material_on_target: f32,
+    /// Whether the plain sample is scrubbed, and where its head is asked to be.
+    scrub_target: f32,
+    scrub_position: f32,
     env_on_target: f32,
     steps_off: bool,
     /// Alone, one pass: nothing loops, nothing is retriggered, and the
@@ -278,6 +289,7 @@ pub(crate) struct Voice {
     player_reading: Reading,
     grain_reading: Reading,
     player: Player,
+    scrub: Scrub,
     granular: Granular,
     /// The third generator, which reads no material.
     fm: Fm,
@@ -432,6 +444,8 @@ impl Voice {
             grain_on_target: 0.0,
             fm_on_target: 0.0,
             material_on_target: 0.0,
+            scrub_target: 0.0,
+            scrub_position: 0.0,
             env_on_target: 0.0,
             steps_off: true,
             once: false,
@@ -463,6 +477,7 @@ impl Voice {
             player_reading: Reading::default(),
             grain_reading: Reading::default(),
             player: Player::new(sample_rate),
+            scrub: Scrub::new(sample_rate),
             granular,
             fm: Fm::seeded(sample_rate, salt),
             log,
@@ -805,6 +820,14 @@ impl Voice {
         let grain_on_target = gate(self.slots.grain_on);
         let fm_on_target = gate(self.slots.fm_on);
         let material_on_target = gate(self.slots.material_on);
+        let scrub_target = gate(self.slots.scrub);
+        let scrub_position = read(&self.mods, bank, self.slots.scrub_position).clamp(0.0, 1.0);
+        // Nobody hears the head while Scrub is off, so it waits on the
+        // position, and switching on starts from there rather than sweeping
+        // in from wherever it was left.
+        if scrub_target == 0.0 && self.fades.scrub.value() == 0.0 {
+            self.scrub.snap(scrub_position);
+        }
         let env_on_target = gate(self.slots.env_on);
         // Whether this voice follows the steps: its own switch, as the
         // tracker last handed it in, and the transport running them.
@@ -824,6 +847,8 @@ impl Voice {
             s.material_gain.reset(material_gain_target);
             s.fm_gain.reset(fm_gain_target);
             self.fades.material.set(material_on_target);
+            self.fades.scrub.set(scrub_target);
+            self.scrub.snap(scrub_position);
             self.fades.grain.set(grain_on_target);
             self.fades.fm.set(fm_on_target);
             self.fades.env.set(env_on_target);
@@ -961,6 +986,8 @@ impl Voice {
             grain_on_target,
             fm_on_target,
             material_on_target,
+            scrub_target,
+            scrub_position,
             env_on_target,
             steps_off,
             once,
@@ -1092,6 +1119,15 @@ impl Voice {
                 * fade;
             self.tail_left -= 1.0;
         }
+        // Scrub takes the sample over from its passes: they fade out as the
+        // head fades in. Octave does not reach it, the hand is the speed.
+        // Off never gets here once the fade has landed, which keeps the
+        // sample bit-exact with a build that has no Scrub.
+        let scrub_open = self.fades.scrub.process(b.scrub_target);
+        if scrub_open > 0.0 {
+            let heard = self.scrub.process(source, b.scrub_position);
+            dry = dry * (1.0 - scrub_open) + heard * scrub_open;
+        }
         // With nothing wired, the pass was only the clock, and what it
         // read was the cloud's material.
         let material = if b.player_wired {
@@ -1221,7 +1257,12 @@ impl Voice {
         self.trimmed_play_position = if b.player_wired {
             let len = b.hi - b.lo;
             let span = self.player_source.len().max(1) as f32;
-            (b.lo as f32 + self.player.position(len) * len as f32) / span
+            let at = if self.fades.scrub.value() > 0.0 {
+                self.scrub.position()
+            } else {
+                self.player.position(len)
+            };
+            (b.lo as f32 + at * len as f32) / span
         } else {
             0.0
         };

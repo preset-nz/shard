@@ -1171,3 +1171,31 @@ fn the_patch_alone_never_touches_the_allocator() {
     }
     assert!(stops > 0, "Once never stopped the transport");
 }
+
+#[test]
+fn scrubbing_never_touches_the_allocator() {
+    // The head chasing a position that jumps about, switched on and off,
+    // with the trim moving under it and everything else swept.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(9_600));
+    e.set_playing(true);
+    let bank = ParamBank::new();
+    let mut out = vec![0.0f32; 1024];
+    for block in 0..900 {
+        sweep(&bank, block);
+        bank.set_by_id("material.scrub", if block % 300 < 200 { 1.0 } else { 0.0 });
+        bank.set_by_id("material.position", ((block * 31) % 17) as f32 / 16.0);
+        let ((), caught) = no_alloc(|| {
+            e.set_readings(
+                Reading {
+                    octave: 0.0,
+                    trim_start: (block % 5) as f32 * 0.1,
+                    trim_end: 1.0 - (block % 3) as f32 * 0.2,
+                },
+                Reading::default(),
+            );
+            e.process_block(&mut out, &bank);
+        });
+        assert_eq!(caught, 0, "block {block} touched the allocator");
+    }
+}

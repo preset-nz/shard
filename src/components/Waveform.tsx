@@ -42,6 +42,9 @@ export function Waveform({
   inspecting,
   onTrim,
   onPickGrain,
+  scrub = 'off',
+  scrubAt = null,
+  onScrub,
 }: {
   peaks: number[];
   /** Grain read position, as a fraction of the *trimmed window*. */
@@ -84,6 +87,16 @@ export function Waveform({
   onTrim: (which: 'start' | 'end', value: number) => void;
   /** Clicking a drawn grain picks it. Null when the click hit no grain. */
   onPickGrain: (g: GrainInfo | null) => void;
+  /**
+   * Scrubbing (roadmap row 45). Tape and Freeze turn a press or drag on the
+   * canvas into a position instead of a trim or a pick; Off leaves both as
+   * they were.
+   */
+  scrub?: 'off' | 'tape' | 'freeze';
+  /** Where the scrub row is asked to be, in whole-file terms; null hides it. */
+  scrubAt?: number | null;
+  /** The position dragged to, as a fraction of the trimmed window. */
+  onScrub?: (t: number) => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
@@ -212,6 +225,17 @@ export function Waveform({
       ctx.globalAlpha = 1;
     }
 
+    // The scrub position: where the hand asked the head to be. The playhead
+    // above is where the head is, a moment behind.
+    if (scrubAt !== null) {
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(scrubAt * w, 0);
+      ctx.lineTo(scrubAt * w, h);
+      ctx.stroke();
+    }
+
     // The grain read position, on top.
     if (showGrain) {
       ctx.strokeStyle = accent;
@@ -235,6 +259,7 @@ export function Waveform({
     selected,
     totalSamples,
     inspecting,
+    scrubAt,
   ]);
 
   // Dragging near an edge moves it. Whichever edge is closer wins, so there
@@ -242,6 +267,13 @@ export function Waveform({
   const drag = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     const t = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    if (scrub !== 'off' && onScrub) {
+      // Across the trimmed window, which is what both rows address.
+      const lo = Math.min(trimStart, trimEnd);
+      const hi = Math.max(trimStart, trimEnd);
+      onScrub(hi > lo ? Math.min(1, Math.max(0, (t - lo) / (hi - lo))) : 0);
+      return;
+    }
     const which = Math.abs(t - trimStart) <= Math.abs(t - trimEnd) ? 'start' : 'end';
     onTrim(which, t);
   };
@@ -278,7 +310,7 @@ export function Waveform({
     <canvas
       ref={ref}
       onPointerDown={(e) => {
-        if (inspecting) {
+        if (inspecting && scrub === 'off') {
           pick(e);
           return;
         }
@@ -286,10 +318,10 @@ export function Waveform({
         drag(e);
       }}
       onPointerMove={(e) => {
-        if (!inspecting && e.buttons === 1) drag(e);
+        if ((!inspecting || scrub !== 'off') && e.buttons === 1) drag(e);
       }}
       className={`h-40 w-full rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93] ${
-        inspecting ? 'cursor-crosshair' : 'cursor-ew-resize'
+        inspecting && scrub === 'off' ? 'cursor-crosshair' : 'cursor-ew-resize'
       }`}
     />
   );

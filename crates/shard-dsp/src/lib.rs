@@ -47,6 +47,7 @@ pub mod ringmod;
 pub mod rise;
 pub mod rng;
 pub mod rt;
+pub mod scrub;
 pub mod shift;
 pub mod smooth;
 pub mod sources;

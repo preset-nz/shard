@@ -238,6 +238,10 @@ export default function App() {
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
+  // How the waveform scrubs (roadmap row 45). UI state only: Tape is the
+  // Sample's Scrub row on, Freeze is the cloud's Position, Off leaves the
+  // waveform's trim as it was.
+  const [scrub, setScrub] = usePersistedState<'off' | 'tape' | 'freeze'>('shard.scrub', 'off');
   // What Play plays. UI state, remembered across launches and told to the
   // backend on launch and whenever it changes; the backend keeps it for the
   // session, outside the document.
@@ -1549,6 +1553,46 @@ export default function App() {
                       : `Nothing is wired into ${shownFor}`}
                   </span>
                 </div>
+                <div className="-mb-2 flex items-center gap-2 text-[11px]">
+                  <span className="font-semibold uppercase tracking-wider text-muted-foreground">
+                    Scrub
+                  </span>
+                  {(['off', 'tape', 'freeze'] as const).map((m) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => {
+                        setScrub(m);
+                        // Tape is the Sample scrubbing; the other two leave it
+                        // playing as it was.
+                        const want = m === 'tape' ? 1 : 0;
+                        if ((values['material.scrub'] ?? 0) !== want) {
+                          void setParam('material.scrub', want).catch((e) => setError(String(e)));
+                        }
+                      }}
+                      className={`rounded px-1.5 py-0.5 capitalize ${
+                        scrub === m
+                          ? 'bg-primary text-primary-foreground'
+                          : 'text-muted-foreground hover:text-foreground'
+                      }`}
+                    >
+                      {m}
+                    </button>
+                  ))}
+                  {scrub === 'tape' && (
+                    <span className="text-muted-foreground">
+                      Drag: the sample follows your hand, pitch and all
+                    </span>
+                  )}
+                  {scrub === 'freeze' && (
+                    <span className={grainOn ? 'text-muted-foreground' : 'text-destructive'}>
+                      {grainOn
+                        ? 'Drag: the cloud holds where you are'
+                        : 'Switch Granular on to hear the freeze'}
+                    </span>
+                  )}
+                </div>
                 <div className={clockOnly ? 'opacity-40' : ''}>
                   <Waveform
                     peaks={blank ? [] : (shownWave?.peaks ?? [])}
@@ -1575,6 +1619,26 @@ export default function App() {
                           ? { ...shownRecord, trim_start: v }
                           : { ...shownRecord, trim_end: v },
                       );
+                    }}
+                    scrub={scrub}
+                    scrubAt={
+                      scrub === 'tape' && shownIsPlayer && shownRecord
+                        ? Math.min(shownRecord.trim_start, shownRecord.trim_end) +
+                          (heard['material.position'] ?? values['material.position'] ?? 0) *
+                            Math.abs(shownRecord.trim_end - shownRecord.trim_start)
+                        : null
+                    }
+                    onScrub={(t) => {
+                      if (scrub === 'tape') {
+                        if (!shownIsPlayer) return;
+                        // A press on Tape switches Scrub on, if it is off.
+                        if ((values['material.scrub'] ?? 0) < 0.5) {
+                          void setParam('material.scrub', 1).catch((e) => setError(String(e)));
+                        }
+                        void setParam('material.position', t).catch((e) => setError(String(e)));
+                      } else if (shownIsGrain) {
+                        void setParam('grain.position', t).catch((e) => setError(String(e)));
+                      }
                     }}
                     onPickGrain={(g) => {
                       if (g) void doAudition(g);
