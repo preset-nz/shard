@@ -434,6 +434,41 @@ const BASE: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 20.0,
     },
+    // A resonant band-pass of the noise at Frequency, crossfaded in at the
+    // noise's own level (see `noise.rs`): wind, whistle, a pitched hiss. Zero
+    // is the plain noise, bit for bit.
+    ParamDef {
+        id: "noise.band",
+        name: "Band",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    // The band's centre. A step's pitch moves it, as it moves fm.freq.
+    ParamDef {
+        id: "noise.freq",
+        name: "Frequency",
+        min: 20.0,
+        max: 8000.0,
+        default: 440.0,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+    // 0 a whistle (Q 80), 1 a blow two octaves wide.
+    ParamDef {
+        id: "noise.width",
+        name: "Width",
+        min: 0.0,
+        max: 1.0,
+        default: 0.3,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "env.on",
         name: "Envelope",

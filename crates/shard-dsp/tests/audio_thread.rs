@@ -611,7 +611,7 @@ fn the_ladder_never_touches_the_allocator() {
 #[test]
 fn noise_never_touches_the_allocator() {
     // Noise switches in and out under fast steps, its Colour stepping through
-    // every pair of colours and its Gain moving, beside FM on the same gate.
+    // every pair of colours, its Gain and its Band, Frequency and Width moving, beside FM on the same gate.
     let mut e = Engine::new(SR, 256);
     e.set_source(tone(48_000));
     let bank = ParamBank::new();
@@ -624,6 +624,14 @@ fn noise_never_touches_the_allocator() {
             bank.set_by_id("noise.on", (block / 7 % 4 != 0) as u8 as f32);
             bank.set_by_id("noise.color", (block % 9) as f32 / 4.0 - 1.0);
             bank.set_by_id("noise.gain", (block % 20) as f32 / 10.0);
+            // The band moves too: in and out, across the range, and from
+            // wide to a whistle, under steps that move its pitch.
+            bank.set_by_id("noise.band", (block % 11) as f32 / 10.0);
+            bank.set_by_id(
+                "noise.freq",
+                20.0 * 400.0f32.powf((block % 13) as f32 / 12.0),
+            );
+            bank.set_by_id("noise.width", (block % 7) as f32 / 6.0);
             e.set_steps(StepParams {
                 on: block % 300 < 200,
                 tempo_bpm: 240.0,

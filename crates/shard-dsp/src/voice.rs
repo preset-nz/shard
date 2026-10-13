@@ -77,6 +77,9 @@ struct Slots {
     noise_on: usize,
     noise_gain: usize,
     noise_color: usize,
+    noise_band: usize,
+    noise_freq: usize,
+    noise_width: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
     /// The patch filter's key tracking. Not in `ChainSlots`: the arrangement
@@ -130,6 +133,9 @@ impl Slots {
             noise_on: at("noise.on"),
             noise_gain: at("noise.gain"),
             noise_color: at("noise.color"),
+            noise_band: at("noise.band"),
+            noise_freq: at("noise.freq"),
+            noise_width: at("noise.width"),
             fx: ChainSlots::resolve(at),
             filter_tracking: at("filter.tracking"),
             ladder: LadderSlots::resolve(at),
@@ -839,6 +845,9 @@ impl Voice {
         let noise_gain_target = read(&self.mods, bank, self.slots.noise_gain);
         let noise_params = NoiseParams {
             color: read(&self.mods, bank, self.slots.noise_color),
+            band: read(&self.mods, bank, self.slots.noise_band),
+            freq: read(&self.mods, bank, self.slots.noise_freq),
+            width: read(&self.mods, bank, self.slots.noise_width),
         };
         // Section switches, read as gates. Each one fades its section's mix
         // rather than cutting it.
@@ -1219,7 +1228,9 @@ impl Voice {
         let noise_level = self.smooth.noise_gain.process(b.noise_gain_target) * noise_on * open;
         let (mut l, mut r) = (material + gl + fm, material + gr + fm);
         if noise_on > 0.0 {
-            let (nl, nr) = self.noise.process(&b.noise_params);
+            let (nl, nr) = self
+                .noise
+                .process(&b.noise_params, self.pass_ratio * p.speed.abs());
             l += nl * noise_level;
             r += nr * noise_level;
         }
