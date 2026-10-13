@@ -47,6 +47,7 @@ pub mod object_model;
 #[cfg(test)]
 mod patch_tests;
 mod profile;
+mod recorder;
 pub mod session;
 #[cfg(test)]
 mod session_tests;
@@ -119,6 +120,9 @@ pub struct Audio {
     /// printed once rather than thirty times a second.
     reported_allocs: AtomicU64,
     sample_rate: f32,
+    /// The take being recorded, if any (epic 44). The callback feeds it; the
+    /// commands start and stop it.
+    recorder: Arc<recorder::Recorder>,
 }
 
 /// What the UI needs to build its controls. Generated from the Rust table, so
@@ -846,6 +850,54 @@ fn toggle_track_mute(
     track: usize,
 ) -> Result<Vec<session::MixState>, String> {
     state.session.toggle_mute(track)
+}
+
+/// Starts a take from the master or from a track's place (epic 44). Not an
+/// edit: the source is session state, like mute.
+#[tauri::command]
+fn record_start(
+    state: tauri::State<'_, Audio>,
+    source: recorder::Source,
+) -> Result<recorder::RecordingState, String> {
+    let (tap, track) = match source {
+        recorder::Source::Master(_) => (shard_dsp::Tap::Master, None),
+        recorder::Source::Track(i) => {
+            let slot = *state
+                .session
+                .slots()
+                .get(i)
+                .ok_or_else(|| format!("there is no track {}", i + 1))?;
+            let tap = match slot {
+                tracker::Slot::Melody(k) => shard_dsp::Tap::Voice(k),
+                tracker::Slot::Drums(k) => shard_dsp::Tap::Kit(k),
+            };
+            (tap, Some(session::track_name(slot)))
+        }
+    };
+    state.recorder.start(
+        &recorder::materials_dir()?,
+        tap,
+        source,
+        track.as_deref(),
+        std::time::SystemTime::now(),
+    )?;
+    Ok(state.recorder.state())
+}
+
+/// Ends the take, finishes the WAV and adds it to the materials as one undo
+/// step, "Add Take".
+#[tauri::command]
+fn record_stop(state: tauri::State<'_, Audio>) -> Result<recorder::TakeInfo, String> {
+    let take = state.recorder.stop()?;
+    state.session.add_take(&take.path)?;
+    Ok(take)
+}
+
+/// Whether a take is being recorded, from what, for how long, and how many
+/// frames the disk made us drop.
+#[tauri::command]
+fn recording(state: tauri::State<'_, Audio>) -> recorder::RecordingState {
+    state.recorder.state()
 }
 
 /// Solos or unsolos a track, on the next bar while playing. Not an edit.
@@ -1820,12 +1872,13 @@ fn build_audio() -> Result<Audio, String> {
 
     // The log is created by the engine, which only exists inside the audio
     // thread, so its handle comes back out alongside the sample rate.
-    let (tx, rx) = std::sync::mpsc::channel::<Result<(f32, Arc<GrainLog>), String>>();
+    let (tx, rx) =
+        std::sync::mpsc::channel::<Result<(f32, Arc<GrainLog>, Arc<recorder::Recorder>), String>>();
 
     std::thread::Builder::new()
         .name("shard-audio".into())
         .spawn(move || {
-            let built = (|| -> Result<(cpal::Stream, f32, Arc<GrainLog>), String> {
+            let built = (|| -> Result<(cpal::Stream, f32, Arc<GrainLog>, Arc<recorder::Recorder>), String> {
                 let host = cpal::default_host();
                 let device = host
                     .default_output_device()
@@ -1842,6 +1895,9 @@ fn build_audio() -> Result<Audio, String> {
                 engine.set_voice_active(0, false);
                 engine.set_kit_active(0, false);
                 let log = engine.grain_log();
+                let recorder = Arc::new(recorder::Recorder::new(sample_rate));
+                let audio_recorder = Arc::clone(&recorder);
+                let mut tap_applied = 0u32;
                 let mut scratch = vec![0.0f32; 8192];
                 let mut held = Held::new();
 
@@ -1887,12 +1943,17 @@ fn build_audio() -> Result<Audio, String> {
                                     out.fill(0.0);
                                     return;
                                 }
+                                // The tap is set at the block boundary, and
+                                // what it caught is pushed to the ring: both
+                                // atomics, neither waits.
+                                audio_recorder.before_render(&mut engine, &mut tap_applied);
                                 render(
                                     &mut engine,
                                     &audio_voices,
                                     &audio_heard,
                                     &mut scratch[..needed],
                                 );
+                                audio_recorder.after_render(&engine, tap_applied);
 
                                 for (i, frame) in out.chunks_mut(channels).enumerate() {
                                     let l = scratch[i * 2];
@@ -1965,12 +2026,12 @@ fn build_audio() -> Result<Audio, String> {
                 stream
                     .play()
                     .map_err(|e| format!("could not start the stream: {e}"))?;
-                Ok((stream, sample_rate, log))
+                Ok((stream, sample_rate, log, recorder))
             })();
 
             match built {
-                Ok((stream, sample_rate, log)) => {
-                    let _ = tx.send(Ok((sample_rate, log)));
+                Ok((stream, sample_rate, log, recorder)) => {
+                    let _ = tx.send(Ok((sample_rate, log, recorder)));
                     // Park forever. The stream must outlive this scope or the
                     // device stops, and this thread exists only to hold it.
                     let _held = stream;
@@ -1985,7 +2046,7 @@ fn build_audio() -> Result<Audio, String> {
         })
         .map_err(|e| format!("could not start the audio thread: {e}"))?;
 
-    let (sample_rate, grain_log) = rx
+    let (sample_rate, grain_log, recorder) = rx
         .recv()
         .map_err(|_| "the audio thread died during startup".to_string())??;
 
@@ -2024,6 +2085,7 @@ fn build_audio() -> Result<Audio, String> {
         timer,
         reported_allocs: AtomicU64::new(0),
         sample_rate,
+        recorder,
     })
 }
 
@@ -2135,6 +2197,9 @@ pub fn run() {
             remove_track,
             toggle_track_mute,
             toggle_track_solo,
+            record_start,
+            record_stop,
+            recording,
             set_track_patch,
             set_track_duck,
             rename_patch,

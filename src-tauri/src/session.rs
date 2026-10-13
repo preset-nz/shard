@@ -1581,6 +1581,18 @@ impl Session {
         self.add_sample(&name, path)
     }
 
+    /// Adds a finished take (epic 44) to the pool as one step, "Add Take".
+    /// Unlike a file added by hand, nothing is wired to it: a take is
+    /// material to load deliberately.
+    pub fn add_take(&self, path: &str) -> Result<(), String> {
+        let key = Some(path.to_string());
+        self.decode(&key)?;
+        let name = lock(&self.decoded)
+            .get(&key)
+            .map_or_else(|| path.to_string(), |l| l.name.clone());
+        self.insert_sample(&name, path, "Add Take", false)
+    }
+
     /// Adds the built-in drone back, after it was removed.
     pub fn add_drone(&self) -> Result<(), String> {
         self.add_sample(DRONE_NAME, "")
@@ -1592,6 +1604,10 @@ impl Session {
         } else {
             "Add material"
         };
+        self.insert_sample(name, path, label, true)
+    }
+
+    fn insert_sample(&self, name: &str, path: &str, label: &str, wire: bool) -> Result<(), String> {
         let patch = self.owner("patch")?;
         self.edit(label, None, |tx| {
             let mut pool = Pool::default();
@@ -1608,6 +1624,9 @@ impl Session {
             let Some(&(_, sample)) = added.first() else {
                 return Ok(());
             };
+            if !wire {
+                return Ok(());
+            }
             for g in om::READS_MATERIAL {
                 let key = format!("{g}.source");
                 let generator = tx
