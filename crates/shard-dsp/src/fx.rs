@@ -19,7 +19,7 @@ use std::sync::LazyLock;
 
 use crate::fx_rows::{
     CHORUS_ROWS, CRUSH_ROWS, DELAY_ROWS, DRIVE_ROWS, ECHO_ROWS, FLANGER_ROWS, OVERTONE_ROWS,
-    REVERB_ROWS, RING_ROWS, RISE_ROWS, WEAR_ROWS,
+    REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS, WEAR_ROWS,
 };
 use crate::params::{ParamBank, ParamDef, Taper, Unit};
 
@@ -37,10 +37,11 @@ pub enum Kind {
     Echo,
     Rise,
     Reverb,
+    Repeat,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 11] = [
+    pub const ALL: [Kind; 12] = [
         Kind::Drive,
         Kind::Crush,
         Kind::Ring,
@@ -52,6 +53,7 @@ impl Kind {
         Kind::Echo,
         Kind::Rise,
         Kind::Reverb,
+        Kind::Repeat,
     ];
 
     /// The name in ids, and in the template rows: `chorus`.
@@ -68,6 +70,7 @@ impl Kind {
             Kind::Echo => "echo",
             Kind::Rise => "rise",
             Kind::Reverb => "reverb",
+            Kind::Repeat => "repeat",
         }
     }
 
@@ -89,6 +92,7 @@ impl Kind {
             Kind::Echo => ECHO_ROWS,
             Kind::Rise => RISE_ROWS,
             Kind::Reverb => REVERB_ROWS,
+            Kind::Repeat => REPEAT_ROWS,
         }
     }
 
@@ -101,14 +105,14 @@ impl Kind {
 /// How many of each kind a chain can hold at once.
 pub const COPIES: usize = 2;
 /// Every instance in the pool.
-pub const INSTANCES: usize = 22;
+pub const INSTANCES: usize = 24;
 /// How many effects a chain can run.
 pub const ORDER_LEN: usize = 16;
 
 /// The pool. **Append only.** An instance's number is its index here, and it
 /// is baked into saved patches and controller maps. The first copy of every
-/// kind comes first, then the second; a third copy or a twelfth kind goes on
-/// the end and renumbers nothing.
+/// kind comes first, then the second; a third copy or a new kind goes on the
+/// end and renumbers nothing. Repeat (row 48) was the first kind added so.
 pub const POOL: [(Kind, u8); INSTANCES] = [
     (Kind::Drive, 0),
     (Kind::Crush, 0),
@@ -132,6 +136,8 @@ pub const POOL: [(Kind, u8); INSTANCES] = [
     (Kind::Echo, 1),
     (Kind::Rise, 1),
     (Kind::Reverb, 1),
+    (Kind::Repeat, 0),
+    (Kind::Repeat, 1),
 ];
 
 pub fn kind_of(n: usize) -> Kind {
@@ -412,6 +418,9 @@ mod tests {
                 ("drive", 1),
             ]
         );
+        // Repeat came after the first twenty-two, both copies at the end.
+        assert_eq!(POOL[22], (Kind::Repeat, 0));
+        assert_eq!(POOL[23], (Kind::Repeat, 1));
     }
 
     #[test]

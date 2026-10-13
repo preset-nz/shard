@@ -737,3 +737,69 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         smooth_ms: 20.0,
     },
 ];
+
+pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
+    // Repeat: the buffer repeat. Hold above half grabs the last Length of sound and loops it; each rise grabs afresh, so an LFO on Hold stutters. Speed plays the loop faster or slower, pitch with it; Reverse plays it backwards.
+    ParamDef {
+        id: "repeat.on",
+        name: "Repeat",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "repeat.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    // A gate read through the LFOs, so not smoothed: a smoothed square
+    // would cross half late.
+    ParamDef {
+        id: "repeat.hold",
+        name: "Hold",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "repeat.length",
+        name: "Length",
+        min: crate::repeat::LENGTH_MIN_MS,
+        max: crate::repeat::LENGTH_MAX_MS,
+        default: 125.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
+        smooth_ms: 50.0,
+    },
+    ParamDef {
+        id: "repeat.speed",
+        name: "Speed",
+        min: -crate::repeat::MAX_SPEED_ST,
+        max: crate::repeat::MAX_SPEED_ST,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::Semitones,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "repeat.reverse",
+        name: "Reverse",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+];

@@ -428,7 +428,8 @@ fn adding_removing_and_reordering_effects_never_touches_the_allocator() {
     // blocks in the patch and the arrangement: filled, emptied, reversed,
     // rotated through the second copies, a pair swapped. Adding resets an
     // instance, removing fades it out, reordering ducks the chain; none of it
-    // may allocate, and the largest reset (the reverb's) happens here.
+    // may allocate, and the largest resets (the reverb's, the repeat's ring)
+    // happen here.
     use shard_dsp::fx::{self, Order, INSTANCES, ORDER_LEN};
 
     let mut e = Engine::new(SR, 256);
@@ -477,6 +478,15 @@ fn adding_removing_and_reordering_effects_never_touches_the_allocator() {
         if block % 5 == 0 {
             fx::set_order(&bank, &orders(block / 5));
             fx::set_order(&arr, &orders(block / 5 + 2));
+        }
+        // The repeats grab, loop and let go, so their loop path runs too.
+        let hold = if block % 7 < 4 { 1.0 } else { 0.0 };
+        for n in 0..INSTANCES {
+            if fx::POOL[n].0 == fx::Kind::Repeat {
+                for (b, prefix) in [(&bank, ""), (&arr, arrangement::PREFIX)] {
+                    b.set_by_id(&format!("{prefix}fx.{n}.repeat.hold"), hold);
+                }
+            }
         }
         let ((), caught) = no_alloc(|| {
             e.set_arrangement(&arr, false);

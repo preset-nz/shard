@@ -66,13 +66,16 @@ fn worst_step(blocks: usize, from: usize, script: impl Fn(usize, &ParamBank)) ->
 }
 
 /// The kinds whose output does not wander at random, so a click is a click.
-const STEADY: [Kind; 6] = [
+/// Repeat with Hold down passes the dry, so only its listening path is
+/// checked here; `repeat.rs` holds its loop to the same contract.
+const STEADY: [Kind; 7] = [
     Kind::Drive,
     Kind::Ring,
     Kind::Chorus,
     Kind::Flanger,
     Kind::Delay,
     Kind::Reverb,
+    Kind::Repeat,
 ];
 
 #[test]
@@ -201,4 +204,57 @@ fn the_arrangement_has_its_own_chain() {
         render(false),
         "the arrangement's chain is silent"
     );
+}
+
+#[test]
+fn a_square_lfo_on_hold_makes_repeat_stutter() {
+    // Hold is a row and not a switch so an LFO can play it (row 48). With a
+    // square on it, the chain loops on the high half and passes the dry on
+    // the low: the output leaves the dry, and comes back to it.
+    use shard_dsp::{LfoSpec, ModSet, Shape};
+    let n = instance(Kind::Repeat);
+    let render = |linked: bool| {
+        let mut e = Engine::new(SR, 128);
+        e.set_source(tone(96_000));
+        e.set_playing(true);
+        let bank = ParamBank::new();
+        loud(&bank, &[Kind::Repeat]);
+        assert!(bank.set_by_id(&format!("fx.{n}.repeat.length"), 30.0));
+        chain(&bank, &[Kind::Repeat]);
+        if linked {
+            let mut set = ModSet::new(&[LfoSpec {
+                id: 1,
+                rate_hz: 2.0,
+                shape: Shape::Square,
+                phase: 0.0,
+            }]);
+            set.link(&format!("fx.{n}.repeat.hold"), 1, 0.0, 1.0)
+                .unwrap();
+            drop(e.set_modulation(set));
+        }
+        let mut out = vec![0.0; 256];
+        let mut all = Vec::new();
+        for _ in 0..375 {
+            e.process_block(&mut out, &bank);
+            all.extend(out.iter().step_by(2).copied());
+        }
+        all
+    };
+    let (dry, stutter) = (render(false), render(true));
+    // In 20 ms windows: some the same as the dry, some far from it.
+    let (mut same, mut apart) = (0, 0);
+    for (d, s) in dry.chunks(960).zip(stutter.chunks(960)).skip(5) {
+        let diff = d
+            .iter()
+            .zip(s)
+            .map(|(a, b)| (a - b).abs())
+            .fold(0.0, f32::max);
+        if diff < 1e-6 {
+            same += 1;
+        } else if diff > 0.1 {
+            apart += 1;
+        }
+    }
+    assert!(same > 10, "never passed the dry ({same} windows)");
+    assert!(apart > 10, "never looped ({apart} windows)");
 }

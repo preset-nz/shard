@@ -34,6 +34,7 @@ use crate::flanger::{Flanger, FlangerParams};
 use crate::fx::{self, Kind, Order, INSTANCES, ORDER_LEN, POOL};
 use crate::overtone::{Overtone, OvertoneParams};
 use crate::params::ParamDef;
+use crate::repeat::{Repeat, RepeatParams};
 use crate::reverb::{Reverb, ReverbParams, ReverbType};
 use crate::ringmod::{RingMod, RingModParams};
 use crate::rise::{Rise, RiseParams};
@@ -117,6 +118,7 @@ pub(crate) enum FxParams {
     Echo(EchoParams),
     Rise(RiseParams),
     Reverb(ReverbParams),
+    Repeat(RepeatParams),
 }
 
 /// The rows of each kind that `read_fx` takes, after `on` and `mix`, in the
@@ -136,6 +138,7 @@ pub(crate) fn read_order(kind: Kind) -> &'static [&'static str] {
         Kind::Echo => &["time", "feedback", "tone", "wobble", "grit"],
         Kind::Rise => &["time", "feedback", "shift", "wobble", "tone"],
         Kind::Reverb => &["type", "decay", "size", "tone", "predelay"],
+        Kind::Repeat => &["hold", "length", "speed", "reverse"],
     }
 }
 
@@ -225,6 +228,14 @@ fn read_fx(
             predelay_ms: v(6),
             mix,
         }),
+        Kind::Repeat => FxParams::Repeat(RepeatParams {
+            // Through the LFOs: an LFO on Hold is how it stutters.
+            hold: v(2),
+            length_ms: v(3),
+            speed_st: v(4),
+            reverse: r(5) >= 0.5,
+            mix,
+        }),
     }
 }
 
@@ -298,6 +309,7 @@ enum Proc {
     Echo(Echo),
     Rise(Rise),
     Reverb(Reverb),
+    Repeat(Repeat),
 }
 
 impl Proc {
@@ -315,6 +327,7 @@ impl Proc {
             Kind::Echo => Proc::Echo(Echo::seeded(sr, salt)),
             Kind::Rise => Proc::Rise(Rise::seeded(sr, salt)),
             Kind::Reverb => Proc::Reverb(Reverb::new(sr)),
+            Kind::Repeat => Proc::Repeat(Repeat::new(sr)),
         }
     }
 
@@ -331,6 +344,7 @@ impl Proc {
             Proc::Echo(x) => x.reset(),
             Proc::Rise(x) => x.reset(),
             Proc::Reverb(x) => x.reset(),
+            Proc::Repeat(x) => x.reset(),
         }
     }
 }
@@ -671,6 +685,14 @@ impl Chain {
                         ..*q
                     },
                 ),
+                (Proc::Repeat(x), FxParams::Repeat(q)) => x.process(
+                    l,
+                    r,
+                    &RepeatParams {
+                        mix: q.mix * level,
+                        ..*q
+                    },
+                ),
                 // The pool and the params are built from the same list, so a
                 // mismatch cannot happen; pass the signal on rather than
                 // panic on the audio thread.
@@ -946,7 +968,9 @@ mod tests {
     fn mix_is_a_crossfade_so_full_mix_never_passes_the_original() {
         // Mix at 100% is the effect alone. For the effects that start from
         // silence (repeats, a tail, layers a little late), the frame the
-        // impulse arrives in must come out empty.
+        // impulse arrives in must come out empty. Not Repeat: with Hold down
+        // it passes the dry at any Mix by design, and `repeat.rs` holds its
+        // own full-mix contract while holding.
         for kind in [
             Kind::Delay,
             Kind::Echo,
