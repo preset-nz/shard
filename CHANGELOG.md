@@ -1,0 +1,188 @@
+## 0.2.1 (2026-10-13)
+
+### Features
+
+- granular engine and ring modulation, audible from the CLI
+- Tauri shell with a per-parameter drift toggle
+- transport, dry/granular blend, and starter material
+- trim, a looping envelope, and denser grain defaults
+- envelope amount is back, and the curve is drawn on the sample
+- save and load the patch
+- a bitcrusher with its own envelope
+- a grain inspector, built on spawns rather than live grains
+- a tape transport — brake and reverse
+- reverse is a gesture, not a state — tap flicks, hold sustains
+- an audio-thread allocation guard and a worst-case block timer
+- parameter sections fold away, and remember it
+- an octave up or down on the material, as varispeed
+- granular is an effect, and effects switch off without losing settings
+- node presets, kept in the patch
+- LFOs and parameter links in the engine (modulation story 1)
+- eased LFO shapes
+- generators have gain, effects have mix, and Output Gain is the master
+- LFOs and links in the patch and in node presets (modulation story 2)
+- retire drift (modulation story 3)
+- commands to add, edit and link LFOs
+- a rough LFO UI: modulators list, LFO editor, link from a row
+- work area, selection-driven inspector, Settings for tape
+- trim and octave belong to the material, not a pre-process lane
+- MIDI in and the controller registry, learned on touch
+- knobs map to parameters, with pickup
+- pick a knob from the row's menu, learning by touch second
+- a link sweeps between two ends, not a depth around the hand
+- a filter on the master
+- a look-ahead limiter on the output
+- drive, a process with four curves, oversampled
+- a step sequencer, 4, 8 or 16 steps that retrigger the material
+- each step has a pitch, played varispeed like the octave
+- the tracker holds a pitch per step, edited under the steps
+- a tracker mode and a sound scaping mode
+- a pool of materials in the tree, each keeping its own octave and trim
+- materials are wired into Sample and Granular, and the drone is one of them
+- a knob says whether it is a pot or an endless encoder
+- a channel is a named bank, and the control menu reads in sections
+- shard works out what a knob is, instead of asking which encoding it speaks
+- a MIDI probe in the tree, because guessing has been wrong every time
+- button 8 is play, and its light follows the transport
+- a control surface is one row in Settings, not two dozen controls
+- dark, like the rest of the family, title bar and dialogs included
+- a node card is the operator folded down, drawn by facets from a summary scope
+- the arrangement's chain over the patch, with a fader and the limiter last
+- the arrangement's values live in the app, save above the patch and reach the engine each block
+- the tracker shows the arrangement, in the same three lanes, with its own inspector
+- knobs map to the arrangement's controls
+- FM, a third generator: two operators built as phase modulation
+- FM drift and type, towards analogue
+- modulation envelopes, a second kind of modulator on the pass's clock
+- generators in the side panel, added by type from one dropdown, as modulators are
+- the patch drawn, one pass rendered offline as sound scaping plays it
+- a patch's Length: loop for ever, one pass of the sample, or a held note
+- .shard is a document type: Finder knows it, and opening one from Finder or `open` loads it in Shard
+- chorus, a stereo effect on the master before the filter, in the patch and the arrangement
+- chorus in the process lane, three voices a side, a CH-1 style EQ on the copies, gentler rate and depth
+- chorus Ensemble voicing, string-machine style: four copies a side from the mono sum, slow swirl plus fast shimmer, lows kept dry
+- chorus Voices, 1 to 8, continuous: the next copy fades in as it turns, so it sweeps without a click
+- chorus Choir voicing for voices: copies held sharp and flat by micro pitch shifters, 12 to 50 ms back, each wandering on its own
+- chorus Spread and Low cut, for every voicing: scale where the copies sit, and cut the bass out of them
+- shared pitch shifter, two Hann-faded read points, for the nodes that bend pitch
+- delay node, clean repeats with a tone control in the loop and ping-pong, in the patch and the arrangement
+- flanger node, a short swept delay with bipolar feedback, in the patch and the arrangement
+- wear node, cassette warble with dropouts, a level-following low-pass gate and chaotic pitch drift
+- echo node, repeats that come back darker and softer with the pitch wandering
+- rise node, pitch-shifted repeats that climb into ascending trails
+- overtone node, sub, octave and fifth layers made from the incoming sound
+- reverb node, an eight-line network with Room, Hall and Plate; a seconds unit for its Decay
+- reset on the pitch shifter, to forget what it holds
+- reset on drive, crush, ring and chorus, to forget the audio they hold
+- reset on delay, echo, rise, overtone and reverb, to forget what they hold
+- reset on flanger and wear, to forget what they hold
+- effect palette engine, a fixed pool of instances run in a chosen order; ids fx.<n>.<kind>.<param>, order rows fx.order.<p>; adds fade in from a reset, removals fade out, reorders duck
+- effect palette in the app, a + on the Process lane, move and remove on each card, Alt+Up/Down and Delete on the selected effect; commands fx_add, fx_remove, fx_move; no knob can reorder the chain
+- palette_ab example renders the new effects for listening; CLAUDE.md describes the palette
+- undo and redo, a bounded history of document snapshots; a drag is one step; Cmd+Z and Shift+Cmd+Z; palette edits, steps, LFOs, links and presets are undoable
+- a hold per step, in sixteenths, gating that step's note under the patch's Hold length; a Hold row in the tracker strip; zero keeps the patch's own
+- a root note on a material (a MIDI number, unknown by default), and the tracker shows step pitches as note names when the Sample material has one
+- tracks of 4, 8, 16, 32 or 64 steps, each step {on, pitch, hold} in the file; the strip draws a bar of sixteen to a row
+- faster step entry, piano keys on the focused step, arrows, bar copy, paste, repeat, clear and transpose, rotate; pattern edits are one undo each; the mode switch is not an edit
+- velocity per step, scaling its whole note; one number cell for pitch, hold and velocity
+- the native menu bar, App, File, Edit with named Undo and Redo, Effects, Pattern, View and Window; every item is one event to the webview, run by the same functions as the keyboard fallback
+- the window comes back where it was (window-state plugin), and the last document reopens at launch if the file is still there
+- File > Reset Sound, every patch parameter back to its default as one undo step; the sound only
+- nudge per step, early or late in milliseconds, held to a fifth of a step so steps keep their order; a Nudge row in the strip
+- agent evals, local models writing tracker patterns, timed and checked against what the tracker accepts
+- agent evals answer through tool calls too, three tools or ten
+- agent eval reports re-score saved answers with the current checks
+- a drum kit beside the track, kick, snare and hat synthesised on the tracker's clock; a grid of its own with hits and ghost notes, several drums a step; a Drums card for gain, tune and decay
+- the tracker view drops the material strip, its title and waveform, giving the room to the steps; sound scaping keeps it, and trim stays in the material's inspector
+- Shard on ux-kit (epic 32, story 1). components/ui re-export the kit, Phosphor icons for lucide, the kit's tokens and fonts, facets 0.2; radix-ui, lucide-react and Inter gone
+- Shard's object model on rhizome-pom 0.1.4, declared and seeded (epic 32, story 2, slice A). Kinds come from the parameter tables; an effect is a node in its chain, at most two of a kind; links are bindings onto continuous values from the patch's own modulators; generators and effects carry presets that never touch their switch. Brake and reverse stay out of the tree. Nothing reads it yet
+- the session compiles to what the engine reads today (epic 32, story 2, slice B). A new session gives today's patch and arrangement banks bit for bit; a chain compiles as the palette code writes it, the k-th of a kind as copy k; links compile to the Modulation records that build a ModSet; the arrangement reads back as a Tracker that round-trips; writing a plan never touches a held brake or reverse. Rebuilt after every commit, undo and redo; not wired into the app until story 3
+- the session as a rhizome document, kept in step with the engine (epic 32, story 3, slice a). Every write is an edit and leaves through one sync that hands over only what changed; params, the chain, reset, undo and redo, the tracker, modulation, presets, materials and files as session verbs, with lib.rs's undo tests ported to it. The mode leaves the tree (Georg, 2026-10-06); materials keep the order added; a chain holds at most 16. Not wired into the app yet
+- the app runs on the session (epic 32, story 3, slice b). Every command and every caught knob writes through rhizome; a drag is one step, read as "Undo Set Size"; undo reaches the chain, the tracker, modulation, presets, materials and the controller map. Save and open use rhizome's format and an old JSON file is refused. Shard's own undo (history.rs), the old presets and the Pool and Modulation editing code are gone; patch.rs is left only for the end-to-end fixture
+- the end-to-end fixture is in rhizome's format and opens through the session (epic 32, story 3, slice c). Converted once by replaying the old JSON through the session's verbs, and proven by rendering every old file both ways: bit-exact on all eight. Floats are stored as their shortest decimal, so a file says 0.4, not 0.4000000059604645
+- pattern-to-shard writes rhizome's format through the session (epic 32, story 3, slice c). A flat sketch (tracker, rows by id, effects by kind) becomes a .shard via just shard-write, so the skill never writes the tree itself; an unknown id fails by name. The eval files in ~/Downloads are converted
+- no old-format file is left (epic 32, story 3, slice c). The agent eval references are converted, bit-exact against the old loader; patch.rs, its converter and the old format's serde aliases and modulator counter are gone
+- the session is app-kit's document (epic 32, story 4, slice a). History and Document on Audio, the state app-kit looks up: Undo and Redo name the edit, every step is listed for a history list, New starts an empty Untitled-N, and the session tells one hook after every change with its locks released, so the menu and the unsaved mark can follow. Not installed yet
+- the menu bar is app-kit's, with Shard's commands on its table (epic 32, story 4, slice b). Ids and accelerators are kept and held unique by a test; Effects becomes the Effect menu, View moves before it, as the family's menu standard has them. Undo's title follows every change through the session's hook, a knob turn included, and Cmd+Z in a text field undoes typing through app-kit. The old history menu, its poll and the contextmenu stopgap are gone. Open and Save stay Shard's until slice c
+- File is app-kit's (epic 32, story 4, slice c). New, Open, Open Recent, Close, Save, Save As and Revert run against the session behind the close guard; the window comes back where it was and the last document reopens at launch; a document from Finder wins over it; a file that won't reopen is a note. The webview reads materials, modulation and the tracker again when a document replaces the one on screen. opened.rs, the save and load commands, the remembered last document and the header's Open and Save buttons are gone; surfaces are released on Exit, which the close guard cannot cancel
+- header keeps only transport and the mode switch
+- draw mod envelopes as curves with ux-kit's CurveEditor
+- hold several patches, with New Patch on Shift+Cmd+N
+- replace the mode switch with a scene view on the left
+- let the track pick the patch it plays
+- rename, duplicate and delete patches
+- play a pool of eight voices on one transport
+- play several melody tracks, each on its own patch
+- mute and solo each track on the next bar
+- make drums a track type, up to four
+- let the patch filter's cutoff follow the step's pitch
+- add a 24 dB slope to the patch and arrangement filters
+- add a driven 4-pole ladder after the patch filter
+- add a new LFO or envelope from a control's link menu
+- duck a track's volume on another track's steps
+- add global LFOs that every patch can follow
+- tap the master, a voice or a kit for recording
+- record a take to a WAV in Materials
+- add Record Take to the File menu and the header
+- write where a take came from into its WAV
+- play the patch alone, looping or once
+- scrub the sample like tape, or the cloud like a freeze
+- find the transients in a material
+- mark regions in a take and extract one to a WAV
+
+### Fixes
+
+- draw the grain position inside the trim window
+- the envelope is an ADSR on the sample, not an LFO
+- make just check pass after the envelope curve change
+- grain bars fade out instead of piling up
+- effects start off, and the grain mix is the first thing in its section
+- sections leave room under their last row
+- generators get their own lane in the work area
+- banners can be dismissed, by the cross or Escape
+- a yes-or-no row draws as a checkbox, not a two-item select
+- the three pedal curves are told apart
+- swing reads 50 to 75 per cent, the drum-machine way
+- a step plays the pass once, and nothing sounds between steps
+- a document opens in the mode its track was saved in
+- a material that was just read from the pool activates without a fallible step
+- switching materials is a copy, not a decode
+- with nothing wired into Sample, a step plays the cloud once
+- a controllers.json this build cannot read is moved aside, not overwritten
+- a pad is always absolute, both ways round
+- calibration can be stopped from the banner, not just from the row
+- switching modes clears only a selection from the other level
+- the arrangement's filter and drive types show their names, not their steps
+- clicking anywhere on a node card selects it
+- a linked mod envelope shows all four stages under its node
+- the material view follows what is heard, and the preview's two panes say what they are
+- .shard no longer conforms to public.json, so Finder's icon view and preview show Shard's icon, not the file's text
+- a two-step row with named steps draws as a select, so chorus Type is Chorus or Ensemble, not a checkbox
+- Mix crossfades in delay, echo, rise, reverb and overtone, so 100% is the effect alone; a test holds it
+- velocity scales the note before the effects, not their tails; Cmd+Z in a text field undoes the text; one check for whether a tracker change is an edit; a test pins that the envelope cuts effect tails under Hold
+- one-line description for eval-agent
+- agent evals run the tool loop, since a reasoning model calls one tool and waits for its result
+- agent evals cap tokens per turn and time per answer, after a reasoning answer with tools ran for an hour
+- agent evals hold a track to the length the prompt asked for, or four bars when it named none
+- an answer with no tracks fails the hard checks rather than dropping out of them
+- drums you can hear; the kick gets a body falling from 180 Hz and a click, the snare and hats come up, the fixture's bass comes down and squeals less; the Drums card holds the kit's switch, arrangement.kit.on, like every node; a test that the drums are heard over the bass
+- louder drums; fuller kick and snare bodies, a hat filter that keeps its fizz, and a soft saturation on each drum's own channel so its level holds beside a patch without one drum ducking another; velocity squared so ghost notes stay ghosts; a test holds the default beat above -15 dBFS
+- menu items fire onClick under Base UI, not Radix's onSelect; every menu item was dead (epic 32, story 1)
+- notes and errors are the kit's snackbar, not a banner that shifts the layout; a menu click no longer clears the selection; no WebKit context menu outside text fields (epic 32, story 1)
+- a link's target is a parameter the engine has, never a modulator's own setting; the session's one patch can't be removed until multi-patch (epic 32, story 2, slice A)
+- the patch, tape and output keep presets as before; a knob mapped to an effect no node plays moves nothing, quietly, as it did (epic 32, story 3)
+- menus show their labels, not their values: the material picker, octave and root, the controller map and the LFO shape pass Base UI their items (epic 32, story 1)
+- the Pattern menu reaches the step strip again; it listened for the old menu event, which app-kit's command event replaced (epic 32, story 4)
+- the Undo title is refreshed on the main thread, so a knob turned during a drag cannot deadlock on the menu, and a burst of drag ticks is one refresh (epic 32, story 4)
+- Move Earlier and Later work from a focused card title, and the selection follows an effect past another of its kind (epic 32, story 4). The keyboard fallback skipped ⌥↑/↓ and Delete whenever a button had focus, which a card's title is; it now leaves ⌘ chords to the menu. fx_move answers the instance the effect plays afterwards, since the k-th of a kind plays copy k
+- take app-kit 0.1.2, which stops File > New from hanging
+- fit every mod envelope to the note
+- let any ADSR stage grow, the others making room
+- bring every added effect in with its mix at zero
+- make Cmd+D duplicate the pattern, Repeat Bar on Opt+Cmd+D
+- play the track's patch on entering tracker mode
+- give the fixture and eval references a ladder node
+- move the cloud's position under Tape as well as Freeze
+- show and audition the grains of the patch's own voice
+- make Space play and stop wherever focus is
+- start on Untitled with app-kit 0.1.3, take rhizome 0.1.5
