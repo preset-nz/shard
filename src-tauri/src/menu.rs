@@ -99,7 +99,9 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("file-extract-region", "CmdOrCtrl+E"),
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
-    ("view-inspector", "CmdOrCtrl+I"),
+    // Safari's Web Inspector chord: the grain inspector is a debugger, and
+    // the menu standard keeps Cmd+I free for Get Info (rule 2).
+    ("view-inspector", "CmdOrCtrl+Alt+I"),
     // The menu standard's zoom chords (rule 4), on the material waveform.
     ("view-zoom-in", "CmdOrCtrl+="),
     ("view-zoom-out", "CmdOrCtrl+-"),
