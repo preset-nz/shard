@@ -975,3 +975,69 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
         smooth_ms: 20.0,
     },
 ];
+
+pub(crate) const BANDS_ROWS: &[ParamDef] = &[
+    // Band Delay: the sound is split into low, mid and high, each with its own
+    // echo. Harmonic sets how far the bands' times part, from all at Time to
+    // Time, Time/2 and Time/3. Time glides, so moving it bends pitch.
+    ParamDef {
+        id: "bands.on",
+        name: "Band Delay",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "bands.mix",
+        name: "Mix",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "bands.time",
+        name: "Time",
+        min: crate::bands::TIME_MIN_MS,
+        max: crate::bands::TIME_MAX_MS,
+        default: 375.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "bands.harmonic",
+        name: "Harmonic",
+        min: 0.0,
+        max: 1.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "bands.feedback",
+        name: "Feedback",
+        min: 0.0,
+        max: crate::bands::FEEDBACK_MAX,
+        default: 0.4,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    ParamDef {
+        id: "bands.split",
+        name: "Split",
+        min: crate::bands::SPLIT_MIN_HZ,
+        max: crate::bands::SPLIT_MAX_HZ,
+        default: 800.0,
+        taper: Taper::Exponential,
+        unit: Unit::Hz,
+        smooth_ms: 20.0,
+    },
+];

@@ -18,9 +18,9 @@
 use std::sync::LazyLock;
 
 use crate::fx_rows::{
-    CHORUS_ROWS, CRUSH_ROWS, DELAY_ROWS, DRIVE_ROWS, ECHO_ROWS, FLANGER_ROWS, FREQSHIFT_ROWS,
-    OVERTONE_ROWS, PEAKS_ROWS, REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS, SHAPER_ROWS,
-    WEAR_ROWS,
+    BANDS_ROWS, CHORUS_ROWS, CRUSH_ROWS, DELAY_ROWS, DRIVE_ROWS, ECHO_ROWS, FLANGER_ROWS,
+    FREQSHIFT_ROWS, OVERTONE_ROWS, PEAKS_ROWS, REPEAT_ROWS, REVERB_ROWS, RING_ROWS, RISE_ROWS,
+    SHAPER_ROWS, WEAR_ROWS,
 };
 use crate::params::{ParamBank, ParamDef, Taper, Unit};
 
@@ -42,10 +42,11 @@ pub enum Kind {
     FreqShift,
     Peaks,
     Shaper,
+    Bands,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 15] = [
+    pub const ALL: [Kind; 16] = [
         Kind::Drive,
         Kind::Crush,
         Kind::Ring,
@@ -61,6 +62,7 @@ impl Kind {
         Kind::FreqShift,
         Kind::Peaks,
         Kind::Shaper,
+        Kind::Bands,
     ];
 
     /// The name in ids, and in the template rows: `chorus`.
@@ -81,6 +83,7 @@ impl Kind {
             Kind::FreqShift => "freqshift",
             Kind::Peaks => "peaks",
             Kind::Shaper => "shaper",
+            Kind::Bands => "bands",
         }
     }
 
@@ -106,6 +109,7 @@ impl Kind {
             Kind::FreqShift => FREQSHIFT_ROWS,
             Kind::Peaks => PEAKS_ROWS,
             Kind::Shaper => SHAPER_ROWS,
+            Kind::Bands => BANDS_ROWS,
         }
     }
 
@@ -118,7 +122,7 @@ impl Kind {
 /// How many of each kind a chain can hold at once.
 pub const COPIES: usize = 2;
 /// Every instance in the pool.
-pub const INSTANCES: usize = 30;
+pub const INSTANCES: usize = 32;
 /// How many effects a chain can run.
 pub const ORDER_LEN: usize = 16;
 
@@ -157,6 +161,8 @@ pub const POOL: [(Kind, u8); INSTANCES] = [
     (Kind::Peaks, 1),
     (Kind::Shaper, 0),
     (Kind::Shaper, 1),
+    (Kind::Bands, 0),
+    (Kind::Bands, 1),
 ];
 
 pub fn kind_of(n: usize) -> Kind {
@@ -449,6 +455,9 @@ mod tests {
         // The Transient shaper (row 48) came after Peaks, both copies at the end.
         assert_eq!(POOL[28], (Kind::Shaper, 0));
         assert_eq!(POOL[29], (Kind::Shaper, 1));
+        // Band Delay (row 48) came after the Transient shaper, both copies at the end.
+        assert_eq!(POOL[30], (Kind::Bands, 0));
+        assert_eq!(POOL[31], (Kind::Bands, 1));
     }
 
     #[test]

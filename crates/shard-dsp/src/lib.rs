@@ -16,6 +16,7 @@
 //! it.
 
 pub mod arrangement;
+pub mod bands;
 pub mod chain;
 pub mod chorus;
 pub mod crush;
@@ -62,6 +63,7 @@ pub mod steps;
 mod voice;
 pub mod wear;
 
+pub use bands::{Bands, BandsParams};
 pub use chorus::{Chorus, ChorusParams, ChorusType};
 pub use crush::{Crush, CrushParams};
 pub use delay::{Delay, DelayParams};
