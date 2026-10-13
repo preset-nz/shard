@@ -27,7 +27,7 @@ sha256 = "f3a33563a6f00ac348fee5597eb34274d3b9f469dfa19d3184da0913ad78a9d1"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "909947ce84d8b2104bb78c8348f9eaa26f0d9b24f22a827086bf7187ce01e085"
+sha256 = "de14945cc3541e945ea99a520e28d25d366053863c4df261a1bcd1e5e4cf93bd"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
@@ -5171,6 +5171,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "@standard-schema/spec"
+version = "1.1.0"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "@tailwindcss/node"
 version = "4.3.3"
 source = "registry"
@@ -5459,6 +5467,22 @@ scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "@types/chai"
+version = "5.2.3"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@types/deep-eql"
+version = "4.0.2"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "@types/estree"
 version = "1.0.9"
 source = "registry"
@@ -5667,6 +5691,62 @@ scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "@vitest/expect"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@vitest/mocker"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@vitest/pretty-format"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@vitest/runner"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@vitest/snapshot"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@vitest/spy"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "@vitest/utils"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "accepts"
 version = "2.0.0"
 source = "registry"
@@ -5720,6 +5800,14 @@ version = "6.4.0"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "assertion-error"
+version = "2.0.1"
+source = "registry"
+declared = "MIT"
+scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
@@ -5824,6 +5912,14 @@ version = "1.0.30001815"
 source = "registry"
 declared = "CC-BY-4.0"
 scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "chai"
+version = "6.3.0"
+source = "registry"
+declared = "MIT"
+scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
@@ -6171,6 +6267,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "es-module-lexer"
+version = "2.3.2"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "es-object-atoms"
 version = "1.1.2"
 source = "registry"
@@ -6211,6 +6315,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "estree-walker"
+version = "3.0.3"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "etag"
 version = "1.8.1"
 source = "registry"
@@ -6248,6 +6360,14 @@ version = "9.6.1"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "expect-type"
+version = "1.4.0"
+source = "registry"
+declared = "Apache-2.0"
+scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
@@ -7115,6 +7235,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "obug"
+version = "2.2.1"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "on-finished"
 version = "2.4.1"
 source = "registry"
@@ -7248,6 +7376,14 @@ version = "8.4.2"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "pathe"
+version = "2.0.3"
+source = "registry"
+declared = "MIT"
+scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
@@ -7579,6 +7715,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "siginfo"
+version = "2.0.0"
+source = "registry"
+declared = "ISC"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "signal-exit"
 version = "3.0.7"
 source = "registry"
@@ -7635,11 +7779,27 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "stackback"
+version = "0.0.2"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "statuses"
 version = "2.0.2"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "std-env"
+version = "4.3.0"
+source = "registry"
+declared = "MIT"
+scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
@@ -7747,8 +7907,32 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "tinybench"
+version = "2.9.0"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "tinyexec"
+version = "1.3.1"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "tinyglobby"
 version = "0.2.17"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "tinyrainbow"
+version = "3.2.0"
 source = "registry"
 declared = "MIT"
 scope = "dev"
@@ -7915,6 +8099,14 @@ scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"
+name = "vitest"
+version = "4.1.11"
+source = "registry"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "pnpm"
 name = "which"
 version = "2.0.2"
 source = "registry"
@@ -7928,6 +8120,14 @@ version = "4.0.0"
 source = "registry"
 declared = "ISC"
 scope = "shipped"
+
+[[packages]]
+ecosystem = "pnpm"
+name = "why-is-node-running"
+version = "2.3.0"
+source = "registry"
+declared = "MIT"
+scope = "dev"
 
 [[packages]]
 ecosystem = "pnpm"

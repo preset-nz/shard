@@ -65,6 +65,7 @@ import {
   type Meters,
   type ModulationView,
   mapMidi,
+  materialPeaks,
   materialWave,
   modulatorsOf,
   newPatch,
@@ -150,6 +151,7 @@ import {
   registerParamScope,
 } from '@/scope';
 import { useSelection } from '@/stores/selection';
+import { FIT, minSpanFor, stepZoom, type View } from '@/waveView';
 
 /**
  * How many spawns the inspector keeps.
@@ -531,6 +533,23 @@ export default function App() {
   const shownRecord = pool.materials.find((m) => m.id === shownId) ?? null;
   const shownWave = shownId === null ? null : (waves[shownId] ?? null);
   const shownRegions = shownRecord?.regions ?? [];
+  // The waveform's visible window (View > Zoom). Webview state, never in the
+  // document: a different material shown starts again at fit.
+  const [viewFor, setViewFor] = useState<{ id: number | null; view: View }>({
+    id: null,
+    view: FIT,
+  });
+  const waveView = viewFor.id === shownId ? viewFor.view : FIT;
+  const setWaveView = (v: View) => setViewFor({ id: shownId, view: v });
+  const waveMinSpan = minSpanFor(shownWave?.seconds ?? 0);
+  const fetchWavePeaks = useMemo(
+    () =>
+      shownId === null
+        ? undefined
+        : (start: number, end: number, buckets: number) =>
+            materialPeaks(shownId, start, end, buckets),
+    [shownId],
+  );
   const selectedRegion =
     regionSel !== null && regionSel.id === shownId && regionSel.index < shownRegions.length
       ? regionSel.index
@@ -1182,6 +1201,8 @@ export default function App() {
   const deletableTrack = mode === 'tracker' && selection === null && canRemoveTrack;
   const canDelete = selectedFx !== null || deletablePatch !== null || deletableTrack;
 
+  // View > Zoom works on the material waveform, when sound scaping shows one.
+  const waveZoomable = mode === 'soundscape' && shownWave !== null && !blank;
   const menuRef = useRef<(id: string) => void>(() => {});
   menuRef.current = (id) => {
     if (id.startsWith('fx-add:')) {
@@ -1191,6 +1212,22 @@ export default function App() {
     const sel = useSelection.getState().selection;
     const node = sel?.kind === 'node' ? nodeById(sel.id) : null;
     switch (id) {
+      case 'view-zoom-in':
+      case 'view-zoom-out':
+        if (waveZoomable) {
+          setWaveView(
+            stepZoom(
+              waveView,
+              id === 'view-zoom-in' ? 'in' : 'out',
+              meter.playing && shownIsPlayer ? meter.playhead : null,
+              waveMinSpan,
+            ),
+          );
+        }
+        break;
+      case 'view-zoom-fit':
+        if (waveZoomable) setWaveView(FIT);
+        break;
       case 'app.settings':
         setSettingsOpen(true);
         break;
@@ -1283,6 +1320,9 @@ export default function App() {
       'edit.rename': canRename,
       'edit.duplicate': canDuplicate,
       'edit.delete': canDelete,
+      'view-zoom-in': waveZoomable,
+      'view-zoom-out': waveZoomable,
+      'view-zoom-fit': waveZoomable,
       'track.add:melody': canAddMelody,
       'track.add:drums': canAddDrums,
       'track.remove': mode === 'tracker' && canRemoveTrack,
@@ -1315,6 +1355,7 @@ export default function App() {
     mode,
     selectedMute,
     selectedSolo,
+    waveZoomable,
   ]);
   useCommands(bindings);
 
@@ -1773,6 +1814,11 @@ export default function App() {
                 <div className={clockOnly ? 'opacity-40' : ''}>
                   <Waveform
                     peaks={blank ? [] : (shownWave?.peaks ?? [])}
+                    view={waveView}
+                    onView={setWaveView}
+                    minSpan={waveMinSpan}
+                    fetchPeaks={fetchWavePeaks}
+                    fetchKey={shownId}
                     position={values['grain.position'] ?? 0}
                     jitter={values['grain.jitter'] ?? 0}
                     showGrain={shownIsGrain}

@@ -79,6 +79,10 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
     ("view-inspector", "CmdOrCtrl+I"),
+    // The menu standard's zoom chords (rule 4), on the material waveform.
+    ("view-zoom-in", "CmdOrCtrl+="),
+    ("view-zoom-out", "CmdOrCtrl+-"),
+    ("view-zoom-fit", "CmdOrCtrl+0"),
     // Logic's New Tracks chord. Remove Track has none: every Cmd+Backspace
     // is taken (Remove Effect, Clear Bar) or would be stolen from text fields.
     (TRACK_ADD_MELODY, "CmdOrCtrl+Alt+N"),
@@ -151,6 +155,10 @@ pub fn commands() -> Vec<Command> {
         view("view-tracker", "Track", 0),
         view("view-soundscape", "Patch", 0),
         view("view-inspector", "Grain Inspector", 1),
+        // Time zoom on the material waveform, greyed when none is shown.
+        view("view-zoom-in", "Zoom In", 2),
+        view("view-zoom-out", "Zoom Out", 2),
+        view("view-zoom-fit", "Fit in Window", 2),
     ];
     // The process lane's palette (`design/effect-palette.md`).
     for kind in Kind::ALL {

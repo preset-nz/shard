@@ -73,6 +73,7 @@ shard-write sketch out:
 check:
     ./node_modules/.bin/tsc --noEmit
     ./node_modules/.bin/biome check .
+    ./node_modules/.bin/vitest run
     # A production build: tsc misses a bare side-effect import that no longer resolves.
     ./node_modules/.bin/vite build --logLevel warn
     cargo fmt --all --check

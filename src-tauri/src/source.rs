@@ -101,6 +101,36 @@ pub fn startup_drone(sample_rate: f32) -> Loaded {
     }
 }
 
+/// The most buckets a zoomed view may ask for.
+pub const MAX_RANGE_BUCKETS: usize = 4096;
+
+/// Absolute peaks of the part of `samples` between two fractions of the whole,
+/// in `buckets` equal slices of it. This is what a zoomed waveform is drawn
+/// from: the same fold as `peaks`, but over the visible range only, so a
+/// minute-long take is as sharp at 5 ms as a one-shot is at fit. Fractions
+/// are clamped to 0..=1 and put in order; a slice is never empty, so a range
+/// narrower than a bucket repeats the sample it lands on.
+pub fn peaks_range(samples: &[f32], start: f32, end: f32, buckets: usize) -> Vec<f32> {
+    let buckets = buckets.min(MAX_RANGE_BUCKETS);
+    if samples.is_empty() || buckets == 0 {
+        return Vec::new();
+    }
+    let n = samples.len();
+    let (a, b) = (start.clamp(0.0, 1.0), end.clamp(0.0, 1.0));
+    let (a, b) = if a <= b { (a, b) } else { (b, a) };
+    let lo = a as f64 * n as f64;
+    let width = (b - a) as f64 * n as f64;
+    (0..buckets)
+        .map(|i| {
+            let from = (lo + width * i as f64 / buckets as f64).floor() as usize;
+            let to = (lo + width * (i + 1) as f64 / buckets as f64).ceil() as usize;
+            let from = from.min(n - 1);
+            let to = to.clamp(from + 1, n);
+            samples[from..to].iter().fold(0.0f32, |m, s| m.max(s.abs()))
+        })
+        .collect()
+}
+
 /// Downsample to absolute peaks for drawing. Raw samples never cross the
 /// Tauri boundary; this is what the waveform is drawn from.
 pub fn peaks(samples: &[f32], buckets: usize) -> Vec<f32> {
@@ -113,4 +143,52 @@ pub fn peaks(samples: &[f32], buckets: usize) -> Vec<f32> {
         .map(|c| c.iter().fold(0.0f32, |a, s| a.max(s.abs())))
         .take(buckets)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A ramp 0, 1, 2 ... so a bucket's peak says exactly where it looked.
+    fn ramp(n: usize) -> Vec<f32> {
+        (0..n).map(|i| i as f32).collect()
+    }
+
+    #[test]
+    fn the_whole_range_covers_every_sample_in_order() {
+        let p = peaks_range(&ramp(1000), 0.0, 1.0, 10);
+        assert_eq!(p.len(), 10);
+        assert_eq!(p[0], 99.0);
+        assert_eq!(p[9], 999.0);
+        assert!(p.windows(2).all(|w| w[0] < w[1]));
+    }
+
+    #[test]
+    fn a_narrow_range_sees_only_its_own_samples() {
+        // 10_000 samples, the 10 % from 0.5: samples 5000..6000.
+        let p = peaks_range(&ramp(10_000), 0.5, 0.6, 4);
+        assert_eq!(p.len(), 4);
+        assert!((5249.0..=5250.0).contains(&p[0]), "{}", p[0]);
+        assert!((5999.0..=6000.0).contains(&p[3]), "{}", p[3]);
+        assert!(p.iter().all(|&v| (5000.0..=6000.0).contains(&v)));
+    }
+
+    #[test]
+    fn a_range_narrower_than_a_bucket_never_comes_back_empty() {
+        let p = peaks_range(&ramp(100), 0.5, 0.5001, 8);
+        assert_eq!(p, vec![50.0; 8]);
+    }
+
+    #[test]
+    fn it_takes_absolute_values_and_survives_bad_input() {
+        assert_eq!(peaks_range(&[-0.5, 0.25], 0.0, 1.0, 1), vec![0.5]);
+        // Backwards and out-of-range fractions are put right.
+        assert_eq!(peaks_range(&ramp(10), 2.0, -1.0, 1), vec![9.0]);
+        assert!(peaks_range(&[], 0.0, 1.0, 4).is_empty());
+        assert!(peaks_range(&ramp(10), 0.0, 1.0, 0).is_empty());
+        assert_eq!(
+            peaks_range(&ramp(10), 0.0, 1.0, usize::MAX).len(),
+            MAX_RANGE_BUCKETS
+        );
+    }
 }

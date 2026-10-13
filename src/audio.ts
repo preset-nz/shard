@@ -311,6 +311,14 @@ export interface MaterialsView {
 export const materials = () => invoke<MaterialsView>('materials');
 /** A material's waveform. Rejects for one whose file could not be read. */
 export const materialWave = (id: number) => invoke<SourceInfo>('material_wave', { id });
+
+/**
+ * `buckets` absolute peaks across the fractions `start` to `end` of a
+ * material: what a zoomed waveform is drawn from. Peaks only; the webview
+ * never sees a sample.
+ */
+export const materialPeaks = (id: number, start: number, end: number, buckets: number) =>
+  invoke<number[]>('material_peaks', { id, start, end, buckets });
 /** Decode a WAV and add it to the pool, whole and at its own pitch. A silent generator reads it. */
 export const addMaterial = (path: string) => invoke<MaterialsView>('add_material', { path });
 /** Put the built-in drone back in the pool after it was removed. */

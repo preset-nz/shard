@@ -1,6 +1,8 @@
 import type React from 'react';
 import { useEffect, useRef, useState } from 'react';
 import type { GrainInfo, Region } from '@/audio';
+import { WaveformOverview } from '@/components/WaveformOverview';
+import { FIT, fromView, isFit, panBy, span as spanOf, type View, zoomAround } from '@/waveView';
 
 /**
  * How many recent spawns the live overlay shows before a bar is gone.
@@ -18,6 +20,19 @@ const LANE = 16;
 const GRAB = 6;
 /** The narrowest region a drag may make, as a fraction of the file. */
 const MIN_REGION = 0.002;
+
+/** Pixels per zoomed bucket asked of Rust: one bucket per this many. */
+const PX_PER_BUCKET = 2;
+/** How long a view must sit still before finer peaks are asked for. */
+const PEAKS_DEBOUNCE_MS = 40;
+
+/** Peaks fetched for a zoomed view, with the range they cover. */
+interface ZoomPeaks {
+  key: number | null;
+  start: number;
+  end: number;
+  peaks: number[];
+}
 
 /** What a press that began on a region (or a Shift-drag) is doing. */
 type RegionDrag =
@@ -64,6 +79,11 @@ export function Waveform({
   onSetRegion,
   onSelectRegion,
   onRemoveRegion,
+  view = FIT,
+  onView,
+  minSpan = 0,
+  fetchPeaks,
+  fetchKey = null,
 }: {
   peaks: number[];
   /** Grain read position, as a fraction of the *trimmed window*. */
@@ -129,11 +149,117 @@ export function Waveform({
   onSetRegion?: (index: number, start: number, end: number) => void;
   onSelectRegion?: (index: number | null) => void;
   onRemoveRegion?: () => void;
+  /**
+   * The visible time window, as fractions of the whole material. Webview
+   * state held by the caller, since the View menu's zoom commands move it
+   * too. Everything drawn and every pointer position goes through it.
+   */
+  view?: View;
+  onView?: (v: View) => void;
+  /** The narrowest span the view may take, as a fraction of the material. */
+  minSpan?: number;
+  /**
+   * Finer peaks for the visible range, from Rust: `buckets` of them across
+   * the fractions `start` to `end`. Asked for only while zoomed; until they
+   * arrive the coarse peaks are drawn stretched.
+   */
+  fetchPeaks?: (start: number, end: number, buckets: number) => Promise<number[]>;
+  /** Which material `fetchPeaks` reads, so one's peaks are never drawn for another. */
+  fetchKey?: number | null;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const wrap = useRef<HTMLDivElement>(null);
+  const [zoomPeaks, setZoomPeaks] = useState<ZoomPeaks | null>(null);
+  const live = useRef({ view, onView, minSpan });
+  live.current = { view, onView, minSpan };
+  const zoomed = !isFit(view);
+  const vs = spanOf(view);
   const regionDrag = useRef<RegionDrag | null>(null);
   /** A region being swept out by Shift-drag, before it is added. */
   const [draft, setDraft] = useState<Region | null>(null);
+
+  // Finer peaks for the visible range, once the view has settled.
+  const { start: viewStart, end: viewEnd } = view;
+  useEffect(() => {
+    if (!fetchPeaks || viewEnd - viewStart >= 0.999999) return;
+    const width = ref.current?.clientWidth ?? 600;
+    const buckets = Math.min(2048, Math.max(64, Math.round(width / PX_PER_BUCKET)));
+    let alive = true;
+    const timer = window.setTimeout(() => {
+      fetchPeaks(viewStart, viewEnd, buckets)
+        .then((p) => {
+          if (alive) setZoomPeaks({ key: fetchKey, start: viewStart, end: viewEnd, peaks: p });
+        })
+        .catch(() => {
+          // Keep drawing the coarse peaks.
+        });
+    }, PEAKS_DEBOUNCE_MS);
+    return () => {
+      alive = false;
+      window.clearTimeout(timer);
+    };
+  }, [fetchPeaks, fetchKey, viewStart, viewEnd]);
+
+  // Pinch and two-finger scroll. Native listeners, because React's wheel is
+  // passive and the page must not zoom or scroll under a gesture here.
+  useEffect(() => {
+    const el = wrap.current;
+    const canvas = ref.current;
+    if (!el || !canvas) return;
+    const across = (clientX: number) => {
+      const rect = canvas.getBoundingClientRect();
+      return Math.min(1, Math.max(0, (clientX - rect.left) / Math.max(1, rect.width)));
+    };
+    const onWheel = (e: WheelEvent) => {
+      const { view: v, onView: set, minSpan: min } = live.current;
+      if (!set) {
+        if (e.ctrlKey) e.preventDefault();
+        return;
+      }
+      if (e.ctrlKey) {
+        // A trackpad pinch arrives as Ctrl+wheel; deltaY < 0 spreads (zoom in).
+        e.preventDefault();
+        const dy = Math.max(-50, Math.min(50, e.deltaY));
+        set(zoomAround(v, Math.exp(dy * 0.01), fromView(v, across(e.clientX)), min));
+        return;
+      }
+      if (isFit(v)) return;
+      const horizontal = e.shiftKey && e.deltaX === 0 ? e.deltaY : e.deltaX;
+      if (horizontal === 0 || (!e.shiftKey && Math.abs(e.deltaY) > Math.abs(e.deltaX))) return;
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      set(panBy(v, (horizontal / Math.max(1, rect.width)) * spanOf(v)));
+    };
+    // WebKit's own pinch events, for a webview that sends those instead.
+    let base: { view: View; anchor: number } | null = null;
+    const onGestureStart = (e: Event) => {
+      e.preventDefault();
+      const g = e as unknown as { clientX: number };
+      const v = live.current.view;
+      base = { view: v, anchor: fromView(v, across(g.clientX)) };
+    };
+    const onGestureChange = (e: Event) => {
+      e.preventDefault();
+      const g = e as unknown as { scale: number };
+      const { onView: set, minSpan: min } = live.current;
+      if (!base || !set || !(g.scale > 0)) return;
+      set(zoomAround(base.view, 1 / g.scale, base.anchor, min));
+    };
+    const onGestureEnd = (e: Event) => {
+      e.preventDefault();
+      base = null;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    el.addEventListener('gesturestart', onGestureStart);
+    el.addEventListener('gesturechange', onGestureChange);
+    el.addEventListener('gestureend', onGestureEnd);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('gesturestart', onGestureStart);
+      el.removeEventListener('gesturechange', onGestureChange);
+      el.removeEventListener('gestureend', onGestureEnd);
+    };
+  }, []);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -158,25 +284,41 @@ export function Waveform({
     const lo = Math.min(trimStart, trimEnd);
     const hi = Math.max(trimStart, trimEnd);
 
-    if (peaks.length > 0) {
+    // Every file fraction below goes to a pixel through the view, and every
+    // span (a grain's length, a jitter band) is scaled by it.
+    const X = (t: number) => ((t - view.start) / vs) * w;
+    const D = (dt: number) => (dt / vs) * w;
+
+    // The finest peaks in hand for this view: the fetched ones while they
+    // belong to this material, else the coarse set over the whole file. Each
+    // carries its own range, so a stale fetch stays put under a moving view.
+    const fine = zoomed && zoomPeaks && zoomPeaks.key === fetchKey ? zoomPeaks : null;
+    const src = fine ?? { start: 0, end: 1, peaks };
+    if (src.peaks.length > 0) {
       ctx.fillStyle = wave;
       const mid = h / 2;
-      const step = w / peaks.length;
-      peaks.forEach((p, i) => {
+      const n = src.peaks.length;
+      const per = src.end - src.start;
+      src.peaks.forEach((p, i) => {
+        const x0 = X(src.start + (i / n) * per);
+        const x1 = X(src.start + ((i + 1) / n) * per);
+        if (x1 < 0 || x0 > w) return;
         const half = Math.max(0.5, p * mid * 0.95);
-        ctx.fillRect(i * step, mid - half, Math.max(1, step * 0.9), half * 2);
+        ctx.fillRect(x0, mid - half, Math.max(1, (x1 - x0) * 0.9), half * 2);
       });
     }
 
     if (lo > 0.001 || hi < 0.999) {
       ctx.fillStyle = '#000';
       ctx.globalAlpha = 0.55;
-      ctx.fillRect(0, 0, lo * w, h);
-      ctx.fillRect(hi * w, 0, w - hi * w, h);
+      const xl = Math.min(w, Math.max(0, X(lo)));
+      const xh = Math.min(w, Math.max(0, X(hi)));
+      ctx.fillRect(0, 0, xl, h);
+      ctx.fillRect(xh, 0, w - xh, h);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1;
-      for (const x of [lo * w, hi * w]) {
+      for (const x of [X(lo), X(hi)]) {
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
@@ -186,8 +328,8 @@ export function Waveform({
 
     // Regions: a shaded span each, a numbered tab in the strip along the top.
     const drawRegion = (r: Region, label: string, on: boolean, dashed: boolean) => {
-      const x0 = r.start * w;
-      const x1 = r.end * w;
+      const x0 = X(r.start);
+      const x1 = X(r.end);
       ctx.fillStyle = accent;
       ctx.globalAlpha = on ? 0.3 : 0.14;
       ctx.fillRect(x0, 0, x1 - x0, h);
@@ -205,11 +347,13 @@ export function Waveform({
       }
       ctx.setLineDash([]);
       ctx.globalAlpha = 1;
-      if (label && x1 - x0 > 12) {
+      // The tab's number stays on screen while any of the region is.
+      const shown = Math.max(0, x0);
+      if (label && Math.min(w, x1) - shown > 12) {
         ctx.fillStyle = '#000';
         ctx.font = '10px ui-monospace, monospace';
         ctx.textBaseline = 'middle';
-        ctx.fillText(label, x0 + 4, LANE / 2 + 0.5);
+        ctx.fillText(label, shown + 4, LANE / 2 + 0.5);
       }
     };
     regions.forEach((r, i) => {
@@ -229,8 +373,8 @@ export function Waveform({
     if (showGrain && jitterSpan > 0.001) {
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.15;
-      const a = Math.max(lo, grainX - jitterSpan) * w;
-      const b = Math.min(hi, grainX + jitterSpan) * w;
+      const a = X(Math.max(lo, grainX - jitterSpan));
+      const b = X(Math.min(hi, grainX + jitterSpan));
       ctx.fillRect(a, 0, b - a, h);
       ctx.globalAlpha = 1;
     }
@@ -239,11 +383,11 @@ export function Waveform({
     // line so those stay readable through a dense cloud.
     if (grains.length > 0 && totalSamples > 0) {
       for (const g of grains) {
-        const x = g.position * w;
+        const x = X(g.position);
         // Reverse grains read backwards from their spawn point, so the span
         // they actually touch lies to the *left* of it. Drawing them
         // rightwards would put the bar over audio the grain never reached.
-        const width = Math.max(1.5, (Math.abs(g.len * g.rate) / totalSamples) * w);
+        const width = Math.max(1.5, D(Math.abs(g.len * g.rate) / totalSamples));
         const left = g.rate < 0 ? x - width : x;
         // Pan across the vertical, so a wide stereo spread reads as a
         // scattered field rather than as a thicker line.
@@ -268,8 +412,8 @@ export function Waveform({
       ctx.strokeStyle = wave;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(playhead * w, 0);
-      ctx.lineTo(playhead * w, h);
+      ctx.moveTo(X(playhead), 0);
+      ctx.lineTo(X(playhead), h);
       ctx.stroke();
     }
 
@@ -283,7 +427,7 @@ export function Waveform({
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       envelope.forEach((v, i) => {
-        const x = (lo + (i / (envelope.length - 1)) * span) * w;
+        const x = X(lo + (i / (envelope.length - 1)) * span);
         const y = h - v * h * 0.94 - h * 0.03;
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -299,8 +443,8 @@ export function Waveform({
       ctx.strokeStyle = accent;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(scrubAt * w, 0);
-      ctx.lineTo(scrubAt * w, h);
+      ctx.moveTo(X(scrubAt), 0);
+      ctx.lineTo(X(scrubAt), h);
       ctx.stroke();
     }
 
@@ -309,8 +453,8 @@ export function Waveform({
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(grainX * w, 0);
-      ctx.lineTo(grainX * w, h);
+      ctx.moveTo(X(grainX), 0);
+      ctx.lineTo(X(grainX), h);
       ctx.stroke();
     }
   }, [
@@ -331,13 +475,17 @@ export function Waveform({
     regions,
     selectedRegion,
     draft,
+    view,
+    vs,
+    zoomed,
+    zoomPeaks,
+    fetchKey,
   ]);
 
   // Dragging near an edge moves it. Whichever edge is closer wins, so there
   // is no mode to be in and nothing to click first.
   const drag = (e: React.PointerEvent<HTMLCanvasElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const t = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
+    const t = where(e).t;
     if (scrub !== 'off' && onScrub) {
       // Across the trimmed window, which is what both rows address.
       const lo = Math.min(trimStart, trimEnd);
@@ -357,7 +505,7 @@ export function Waveform({
    */
   const pick = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
-    const t = (e.clientX - rect.left) / rect.width;
+    const t = fromView(view, (e.clientX - rect.left) / rect.width);
     const v = (e.clientY - rect.top) / rect.height;
 
     let best: GrainInfo | null = null;
@@ -366,7 +514,7 @@ export function Waveform({
       const span = totalSamples > 0 ? Math.abs(g.len * g.rate) / totalSamples : 0;
       const left = g.rate < 0 ? g.position - span : g.position;
       // Distance to the bar, which is zero anywhere along its length.
-      const dx = Math.max(0, Math.max(left - t, t - (left + span)));
+      const dx = Math.max(0, Math.max(left - t, t - (left + span))) / vs;
       const dy = v - (0.12 + g.pan * 0.76);
       const d = Math.hypot(dx, dy * 0.5);
       if (d < bestD) {
@@ -377,11 +525,11 @@ export function Waveform({
     onPickGrain(bestD < 0.08 ? best : null);
   };
 
-  /** Where a pointer is on the canvas, as a fraction across and pixels down. */
+  /** Where a pointer is on the canvas, as a file fraction and pixels down. */
   const where = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect();
     return {
-      t: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+      t: fromView(view, Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width))),
       y: e.clientY - rect.top,
       width: rect.width,
     };
@@ -401,7 +549,7 @@ export function Waveform({
       return true;
     }
     if (y >= LANE || regions.length === 0) return false;
-    const reach = GRAB / width;
+    const reach = (GRAB / width) * vs;
     let best: { index: number; edge: 'start' | 'end'; d: number } | null = null;
     regions.forEach((r, index) => {
       for (const edge of ['start', 'end'] as const) {
@@ -424,6 +572,9 @@ export function Waveform({
     return true;
   };
 
+  /** The narrowest region a drag may make; zoomed in, a finer one. */
+  const minRegion = Math.min(MIN_REGION, vs * 0.01);
+
   const regionMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
     const g = regionDrag.current;
     if (!g) return;
@@ -434,9 +585,9 @@ export function Waveform({
       const r = regions[g.index];
       if (!r) return;
       if (g.edge === 'start') {
-        onSetRegion?.(g.index, Math.min(t, r.end - MIN_REGION), r.end);
+        onSetRegion?.(g.index, Math.min(t, r.end - minRegion), r.end);
       } else {
-        onSetRegion?.(g.index, r.start, Math.max(t, r.start + MIN_REGION));
+        onSetRegion?.(g.index, r.start, Math.max(t, r.start + minRegion));
       }
     } else {
       const width = g.end - g.start;
@@ -449,49 +600,52 @@ export function Waveform({
     const g = regionDrag.current;
     regionDrag.current = null;
     if (g?.kind === 'add' && draft) {
-      if (draft.end - draft.start >= MIN_REGION) onAddRegion?.(draft.start, draft.end);
+      if (draft.end - draft.start >= minRegion) onAddRegion?.(draft.start, draft.end);
     }
     setDraft(null);
   };
 
   return (
-    <canvas
-      ref={ref}
-      tabIndex={0}
-      onKeyDown={(e) => {
-        // Only a selected region takes Backspace, and only here; anything
-        // else leaves the key to whoever else wants it.
-        if ((e.key === 'Backspace' || e.key === 'Delete') && selectedRegion !== null) {
-          e.preventDefault();
-          e.stopPropagation();
-          onRemoveRegion?.();
-        }
-      }}
-      onPointerUp={regionUp}
-      onPointerCancel={regionUp}
-      onPointerDown={(e) => {
-        e.currentTarget.focus({ preventScroll: true });
-        if (regionDown(e)) {
+    <div ref={wrap}>
+      <canvas
+        ref={ref}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          // Only a selected region takes Backspace, and only here; anything
+          // else leaves the key to whoever else wants it.
+          if ((e.key === 'Backspace' || e.key === 'Delete') && selectedRegion !== null) {
+            e.preventDefault();
+            e.stopPropagation();
+            onRemoveRegion?.();
+          }
+        }}
+        onPointerUp={regionUp}
+        onPointerCancel={regionUp}
+        onPointerDown={(e) => {
+          e.currentTarget.focus({ preventScroll: true });
+          if (regionDown(e)) {
+            e.currentTarget.setPointerCapture(e.pointerId);
+            return;
+          }
+          if (inspecting && scrub === 'off') {
+            pick(e);
+            return;
+          }
           e.currentTarget.setPointerCapture(e.pointerId);
-          return;
-        }
-        if (inspecting && scrub === 'off') {
-          pick(e);
-          return;
-        }
-        e.currentTarget.setPointerCapture(e.pointerId);
-        drag(e);
-      }}
-      onPointerMove={(e) => {
-        if (regionDrag.current) {
-          regionMove(e);
-          return;
-        }
-        if ((!inspecting || scrub !== 'off') && e.buttons === 1) drag(e);
-      }}
-      className={`h-40 w-full rounded border border-border bg-card outline-none focus-visible:ring-1 focus-visible:ring-ring [--wave-accent:#e0a96d] [--wave-color:#6b7b93] ${
-        inspecting && scrub === 'off' ? 'cursor-crosshair' : 'cursor-ew-resize'
-      }`}
-    />
+          drag(e);
+        }}
+        onPointerMove={(e) => {
+          if (regionDrag.current) {
+            regionMove(e);
+            return;
+          }
+          if ((!inspecting || scrub !== 'off') && e.buttons === 1) drag(e);
+        }}
+        className={`h-40 w-full rounded border border-border bg-card outline-none focus-visible:ring-1 focus-visible:ring-ring [--wave-accent:#e0a96d] [--wave-color:#6b7b93] ${
+          inspecting && scrub === 'off' ? 'cursor-crosshair' : 'cursor-ew-resize'
+        }`}
+      />
+      {zoomed && onView && <WaveformOverview peaks={peaks} view={view} onView={onView} />}
+    </div>
   );
 }

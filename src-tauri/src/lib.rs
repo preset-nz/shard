@@ -1120,6 +1120,24 @@ fn material_wave(state: tauri::State<'_, Audio>, id: u64) -> Result<SourceInfo, 
     })
 }
 
+/// A material's peaks over part of its length, for a zoomed waveform: `buckets`
+/// absolute peaks across the fractions `start` to `end` of the whole. Peaks
+/// only, so the webview still never sees a sample.
+#[tauri::command]
+fn material_peaks(
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    start: f32,
+    end: f32,
+    buckets: usize,
+) -> Result<Vec<f32>, String> {
+    let loaded = state
+        .session
+        .loaded(id)
+        .ok_or_else(|| format!("material {id} could not be read"))?;
+    Ok(source::peaks_range(&loaded.samples, start, end, buckets))
+}
+
 /// A material as the tree and the inspector show it.
 #[derive(Serialize)]
 pub struct MaterialView {
@@ -2414,6 +2432,7 @@ pub fn run() {
             envelope_curve,
             patch_preview,
             material_wave,
+            material_peaks,
             materials,
             add_material,
             remove_material,
