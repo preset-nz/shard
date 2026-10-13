@@ -482,6 +482,73 @@ const BASE: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // Dust, the fifth generator (row 59): sparse random clicks, a tick now
+    // and then to dense crackle. See `dust.rs`. Reads no material and has no
+    // pitch. Off by default.
+    ParamDef {
+        id: "dust.on",
+        name: "Dust",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "dust.gain",
+        name: "Gain",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 40.0,
+    },
+    // Clicks a second, on average; where they fall is random, never a grid.
+    ParamDef {
+        id: "dust.density",
+        name: "Density",
+        min: 0.1,
+        max: 2000.0,
+        default: 8.0,
+        taper: Taper::Exponential,
+        unit: Unit::None,
+        smooth_ms: 20.0,
+    },
+    // Each click's brightness: dark thuds at 0, bright ticks at 1.
+    ParamDef {
+        id: "dust.tone",
+        name: "Tone",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
+    // Each click's length: a needle tick to a short pop.
+    ParamDef {
+        id: "dust.decay",
+        name: "Decay",
+        min: 0.1,
+        max: 50.0,
+        default: 1.0,
+        taper: Taper::Exponential,
+        unit: Unit::Ms,
+        smooth_ms: 20.0,
+    },
+    // 0 every click in the centre; 1 each at its own random place.
+    ParamDef {
+        id: "dust.spread",
+        name: "Spread",
+        min: 0.0,
+        max: 1.0,
+        default: 0.5,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "env.on",
         name: "Envelope",
@@ -745,7 +812,7 @@ pub static PARAMS: LazyLock<Vec<ParamDef>> = LazyLock::new(|| {
 /// Gain; every other switchable node is an effect and leads with Mix. A
 /// drums track's kit is a generator too, but a track's, not a row here
 /// (`kit.rs`).
-pub const GENERATORS: &[&str] = &["material", "grain", "fm", "noise"];
+pub const GENERATORS: &[&str] = &["material", "grain", "fm", "noise", "dust"];
 
 pub fn index_of(id: &str) -> Option<usize> {
     PARAMS.iter().position(|p| p.id == id)

@@ -226,7 +226,7 @@ pub const PLAYED: &[&str] = &["arrangement.tape.brake", "arrangement.tape.revers
 /// its defaults, and an absent generator (`GENERATORS`) as off: a generator is
 /// in the patch while its node is, and Remove deletes it.
 pub const PATCH_NODES: &[&str] = &[
-    "material", "grain", "fm", "noise", "env", "tape", "filter", "ladder", "amp",
+    "material", "grain", "fm", "noise", "dust", "env", "tape", "filter", "ladder", "amp",
 ];
 
 /// The generators that read a material, through `<kind>.source`.

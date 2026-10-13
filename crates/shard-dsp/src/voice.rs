@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use crate::chain::{Chain, ChainParams, ChainSlots, BYPASS_MS};
+use crate::dust::{Dust, DustParams};
 use crate::envelope::EnvParams;
 use crate::fm::{Fm, FmParams, FmType};
 use crate::granular::{GrainParams, Granular, Window};
@@ -81,6 +82,12 @@ struct Slots {
     noise_freq: usize,
     noise_width: usize,
     noise_run: usize,
+    dust_on: usize,
+    dust_gain: usize,
+    dust_density: usize,
+    dust_tone: usize,
+    dust_decay: usize,
+    dust_spread: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
     /// The patch filter's key tracking. Not in `ChainSlots`: the arrangement
@@ -138,6 +145,12 @@ impl Slots {
             noise_freq: at("noise.freq"),
             noise_width: at("noise.width"),
             noise_run: at("noise.run"),
+            dust_on: at("dust.on"),
+            dust_gain: at("dust.gain"),
+            dust_density: at("dust.density"),
+            dust_tone: at("dust.tone"),
+            dust_decay: at("dust.decay"),
+            dust_spread: at("dust.spread"),
             fx: ChainSlots::resolve(at),
             filter_tracking: at("filter.tracking"),
             ladder: LadderSlots::resolve(at),
@@ -158,6 +171,7 @@ struct Smoothers {
     material_gain: OnePole,
     fm_gain: OnePole,
     noise_gain: OnePole,
+    dust_gain: OnePole,
 }
 
 /// One ramp per switchable section. Each multiplies its section's mix and
@@ -171,6 +185,7 @@ struct Fades {
     /// Noise's Run: 0 follows the notes, 1 runs free past the envelope. The
     /// two paths crossfade on this, so the switch does not click.
     noise_run: Ramp,
+    dust: Ramp,
     /// FM and noise have no pass of their own, so under the steps they
     /// follow the player's: this opens while one sounds and closes between
     /// them. One gate for both.
@@ -196,6 +211,7 @@ impl Fades {
             fm: ramp(slots.fm_on),
             noise: ramp(slots.noise_on),
             noise_run: ramp(slots.noise_run),
+            dust: ramp(slots.dust_on),
             note_gate: {
                 let mut r = Ramp::new(1.0);
                 r.set_time(BYPASS_MS, sample_rate);
@@ -270,6 +286,9 @@ struct Block {
     fm_on_target: f32,
     noise_on_target: f32,
     noise_run_target: f32,
+    dust_gain_target: f32,
+    dust_params: DustParams,
+    dust_on_target: f32,
     material_on_target: f32,
     /// Whether the plain sample is scrubbed, and where its head is asked to be.
     scrub_target: f32,
@@ -322,6 +341,8 @@ pub(crate) struct Voice {
     fm: Fm,
     /// The fourth, which reads none either.
     noise: Noise,
+    /// The fifth, which reads none either.
+    dust: Dust,
     /// Every spawn the cloud makes, for the inspector. Shared out by
     /// `grain_log`; the audio thread only ever pushes to it.
     log: Arc<GrainLog>,
@@ -412,6 +433,7 @@ impl Voice {
             material_gain: mk(defs[slots.material_gain].smooth_ms),
             fm_gain: mk(defs[slots.fm_gain].smooth_ms),
             noise_gain: mk(defs[slots.noise_gain].smooth_ms),
+            dust_gain: mk(defs[slots.dust_gain].smooth_ms),
         };
         // Start settled at the defaults, otherwise every parameter glides up
         // from zero for the first few milliseconds after load.
@@ -428,6 +450,7 @@ impl Voice {
             .reset(defs[slots.material_gain].default);
         smooth.fm_gain.reset(defs[slots.fm_gain].default);
         smooth.noise_gain.reset(defs[slots.noise_gain].default);
+        smooth.dust_gain.reset(defs[slots.dust_gain].default);
 
         let log = Arc::new(GrainLog::new());
         let mut granular = Granular::seeded(sample_rate, max_grains, salt);
@@ -478,6 +501,9 @@ impl Voice {
             fm_on_target: 0.0,
             noise_on_target: 0.0,
             noise_run_target: 0.0,
+            dust_gain_target: 0.0,
+            dust_params: DustParams::default(),
+            dust_on_target: 0.0,
             material_on_target: 0.0,
             scrub_target: 0.0,
             scrub_position: 0.0,
@@ -516,6 +542,7 @@ impl Voice {
             granular,
             fm: Fm::seeded(sample_rate, salt),
             noise: Noise::seeded(sample_rate, salt),
+            dust: Dust::seeded(sample_rate, salt),
             log,
             auditioning: false,
             active: index == 0,
@@ -850,6 +877,13 @@ impl Voice {
             drift: read(&self.mods, bank, self.slots.fm_drift),
             ty: FmType::from_value(bank.get(self.slots.fm_type)),
         };
+        let dust_gain_target = read(&self.mods, bank, self.slots.dust_gain);
+        let dust_params = DustParams {
+            density: read(&self.mods, bank, self.slots.dust_density),
+            tone: read(&self.mods, bank, self.slots.dust_tone),
+            decay_ms: read(&self.mods, bank, self.slots.dust_decay),
+            spread: read(&self.mods, bank, self.slots.dust_spread),
+        };
         let noise_gain_target = read(&self.mods, bank, self.slots.noise_gain);
         let noise_params = NoiseParams {
             color: read(&self.mods, bank, self.slots.noise_color),
@@ -863,6 +897,7 @@ impl Voice {
         let grain_on_target = gate(self.slots.grain_on);
         let fm_on_target = gate(self.slots.fm_on);
         let noise_on_target = gate(self.slots.noise_on);
+        let dust_on_target = gate(self.slots.dust_on);
         let noise_run_target = gate(self.slots.noise_run);
         let material_on_target = gate(self.slots.material_on);
         let scrub_target = gate(self.slots.scrub);
@@ -892,6 +927,7 @@ impl Voice {
             s.material_gain.reset(material_gain_target);
             s.fm_gain.reset(fm_gain_target);
             s.noise_gain.reset(noise_gain_target);
+            s.dust_gain.reset(dust_gain_target);
             self.fades.material.set(material_on_target);
             self.fades.scrub.set(scrub_target);
             self.scrub.snap(scrub_position);
@@ -899,12 +935,14 @@ impl Voice {
             self.fades.fm.set(fm_on_target);
             self.fades.noise.set(noise_on_target);
             self.fades.noise_run.set(noise_run_target);
+            self.fades.dust.set(dust_on_target);
             self.fades.env.set(env_on_target);
             self.fades.note_gate.set(if stepped { 0.0 } else { 1.0 });
             self.fx.forget(&fx);
             self.ladder.reset(&ladder);
             self.fm.settle(&fm_params);
             self.noise.settle(&noise_params);
+            self.dust.settle(&dust_params);
             self.granular.clear();
             self.tail_left = 0.0;
             if stepped {
@@ -1038,6 +1076,9 @@ impl Voice {
             fm_on_target,
             noise_on_target,
             noise_run_target,
+            dust_gain_target,
+            dust_params,
+            dust_on_target,
             material_on_target,
             scrub_target,
             scrub_position,
@@ -1260,6 +1301,15 @@ impl Voice {
                 free = (nl * level, nr * level);
             }
         }
+        // Dust follows the notes through the same gate, and only runs while
+        // it sounds, so off leaves the sum exactly as it was.
+        let dust_on = self.fades.dust.process(b.dust_on_target);
+        let dust_level = self.smooth.dust_gain.process(b.dust_gain_target) * dust_on * open;
+        if dust_on > 0.0 {
+            let (dl, dr) = self.dust.process(&b.dust_params);
+            l += dl * dust_level;
+            r += dr * dust_level;
+        }
         let (l, r) = (l * note_level, r * note_level);
 
         // A step's velocity scales its note where it is made, before the
@@ -1368,6 +1418,10 @@ impl Voice {
         // Noise's filters likewise start from rest.
         if self.fades.noise.value() == 0.0 {
             self.noise.reset();
+        }
+        // Dust's decays are emptied likewise.
+        if self.fades.dust.value() == 0.0 {
+            self.dust.reset();
         }
 
         // Faded out: idle from the next block, with nothing left running.

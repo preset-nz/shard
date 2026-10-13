@@ -159,6 +159,15 @@ export const NODES: NodeInfo[] = [
     table: 'noise',
     owns: under('noise'),
   },
+  // The fifth generator (row 59): sparse random clicks, a tick to crackle.
+  {
+    layer: 'patch',
+    id: 'dust',
+    label: 'Dust',
+    lane: 'generate',
+    table: 'dust',
+    owns: under('dust'),
+  },
   // The process lane's effects are the palette's: drawn from the chain's
   // order, below (`fxNodes`, `fxChain`). The envelope stays fixed.
   {

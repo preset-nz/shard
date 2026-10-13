@@ -267,7 +267,11 @@ mod tests {
         let fm = render(&bank, &m, 0.0).samples;
         assert!(plain != fm);
         bank.set_by_id("noise.on", 1.0);
-        assert!(fm != render(&bank, &m, 0.0).samples);
+        let noise = render(&bank, &m, 0.0).samples;
+        assert!(fm != noise);
+        bank.set_by_id("dust.on", 1.0);
+        bank.set_by_id("dust.density", 400.0);
+        assert!(noise != render(&bank, &m, 0.0).samples);
     }
 
     #[test]

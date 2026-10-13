@@ -356,6 +356,11 @@ fn a_write_to_a_section_the_opened_file_lacks_makes_it() {
         ("noise.on", 1.0),
         ("noise.gain", 0.5),
         ("noise.color", -0.5),
+        ("dust.on", 1.0),
+        ("dust.density", 120.0),
+        ("dust.tone", 0.8),
+        ("dust.decay", 4.0),
+        ("dust.spread", 0.25),
     ];
     for (id, v) in rows {
         s.set_param(id, v).unwrap_or_else(|e| panic!("{id}: {e}"));

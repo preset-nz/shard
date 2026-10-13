@@ -1521,7 +1521,7 @@ mod tests {
         // the signal; a generator, the same generator never switched on, which
         // proves nothing of it lingers.
         type Settings<'a> = &'a [(&'a str, f32)];
-        let cases: [(&str, &str, Settings, Settings, bool); 15] = [
+        let cases: [(&str, &str, Settings, Settings, bool); 16] = [
             ("material", "material.on", &[], &[], false),
             ("granular", "grain.on", &[], &[], false),
             (
@@ -1532,6 +1532,13 @@ mod tests {
                 false,
             ),
             ("noise", "noise.on", &[("noise.color", -0.7)], &[], false),
+            (
+                "dust",
+                "dust.on",
+                &[("dust.density", 400.0), ("dust.tone", 0.8)],
+                &[],
+                false,
+            ),
             (
                 "crush",
                 "fx.1.crush.on",
