@@ -316,6 +316,10 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
                 trim_start: float(&s, "sample.start"),
                 trim_end: float(&s, "sample.end"),
                 root,
+                regions: match s.value("sample.regions") {
+                    Some(Value::Shaped(j)) => serde_json::from_value(j).unwrap_or_default(),
+                    _ => Vec::new(),
+                },
             });
         }
     }

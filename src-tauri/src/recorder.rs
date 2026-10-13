@@ -190,6 +190,17 @@ pub fn date_stamp(now: SystemTime) -> String {
 /// `ICMT`; strings NUL-terminated, each subchunk padded to an even length)
 /// and rewrites the RIFF size in the header. hound cannot write one.
 pub fn append_info(path: &Path, meta: &TakeMeta, date: &str) -> std::io::Result<()> {
+    append_info_text(path, &meta.product, date, &meta.comment())
+}
+
+/// `append_info` with the comment already written: what an Extract says about
+/// where it came from rather than where a take did.
+pub fn append_info_text(
+    path: &Path,
+    product: &str,
+    date: &str,
+    comment: &str,
+) -> std::io::Result<()> {
     fn sub(out: &mut Vec<u8>, id: &[u8; 4], text: &str) {
         let mut body = text.as_bytes().to_vec();
         body.push(0);
@@ -201,9 +212,9 @@ pub fn append_info(path: &Path, meta: &TakeMeta, date: &str) -> std::io::Result<
         }
     }
     let mut body = b"INFO".to_vec();
-    sub(&mut body, b"ISFT", &meta.product);
+    sub(&mut body, b"ISFT", product);
     sub(&mut body, b"ICRD", date);
-    sub(&mut body, b"ICMT", &meta.comment());
+    sub(&mut body, b"ICMT", comment);
 
     let mut file = std::fs::OpenOptions::new()
         .read(true)

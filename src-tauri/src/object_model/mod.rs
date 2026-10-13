@@ -70,6 +70,20 @@ pub fn float(v: f32) -> f64 {
     v.to_string().parse().unwrap_or(f64::from(v))
 }
 
+/// A material's regions as the tree holds them: a list of `{start, end}`, or
+/// null for none, so a material with no regions is a default node.
+pub fn regions_value(regions: &[crate::materials::Region]) -> Value {
+    if regions.is_empty() {
+        return Value::Shaped(serde_json::Value::Null);
+    }
+    Value::Shaped(serde_json::Value::Array(
+        regions
+            .iter()
+            .map(|r| json!({ "start": float(r.start), "end": float(r.end) }))
+            .collect(),
+    ))
+}
+
 pub use compile::{
     arrangement_node, as_f32, compile, global_lfos, instance_of, locate, patch_node, patches,
     patches_in, played_by, read_tracker, to_value, track_patch, tracks, write_values, PatchPlan,
@@ -904,7 +918,15 @@ pub fn kinds() -> Vec<KindDecl> {
         .float("sample.start", 0.0..=1.0, 0.0)
         .float("sample.end", 0.0..=1.0, 1.0)
         // The MIDI note it sounds at, when known.
-        .shaped("sample.root", Shape::optional(Shape::Int));
+        .shaped("sample.root", Shape::optional(Shape::Int))
+        // Marked regions, as fractions of the file (row 49); null for none.
+        .shaped(
+            "sample.regions",
+            Shape::optional(Shape::list(Shape::record([
+                ("start", Shape::Float),
+                ("end", Shape::Float),
+            ]))),
+        );
     push(
         checked(t, Under::Category, |n| listed_in(n, POOL)),
         Role::Structure,
@@ -1320,6 +1342,9 @@ impl ShardEdit for Edit<'_> {
             }
             if let Some(root) = m.root {
                 self.set_value(node, "sample.root", Value::Shaped(json!(root)))?;
+            }
+            if !m.regions.is_empty() {
+                self.set_value(node, "sample.regions", regions_value(&m.regions))?;
             }
             self.append_to_order(format!("/{MATERIALS}").as_str(), POOL, node)?;
             out.push((m.id, node));

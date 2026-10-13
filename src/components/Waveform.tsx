@@ -1,6 +1,6 @@
 import type React from 'react';
-import { useEffect, useRef } from 'react';
-import type { GrainInfo } from '@/audio';
+import { useEffect, useRef, useState } from 'react';
+import type { GrainInfo, Region } from '@/audio';
 
 /**
  * How many recent spawns the live overlay shows before a bar is gone.
@@ -11,6 +11,19 @@ import type { GrainInfo } from '@/audio';
  * when you have turned the density down to watch them arrive one at a time.
  */
 const LIVE_TRAIL = 120;
+
+/** The strip along the top that belongs to regions, in pixels. */
+const LANE = 16;
+/** How near an edge a press must be to grab it, in pixels. */
+const GRAB = 6;
+/** The narrowest region a drag may make, as a fraction of the file. */
+const MIN_REGION = 0.002;
+
+/** What a press that began on a region (or a Shift-drag) is doing. */
+type RegionDrag =
+  | { kind: 'add'; anchor: number }
+  | { kind: 'edge'; index: number; edge: 'start' | 'end' }
+  | { kind: 'move'; index: number; grab: number; start: number; end: number };
 
 /**
  * The source, drawn from precomputed peaks. Raw samples never cross the Tauri
@@ -45,6 +58,12 @@ export function Waveform({
   scrub = 'off',
   scrubAt = null,
   onScrub,
+  regions = [],
+  selectedRegion = null,
+  onAddRegion,
+  onSetRegion,
+  onSelectRegion,
+  onRemoveRegion,
 }: {
   peaks: number[];
   /** Grain read position, as a fraction of the *trimmed window*. */
@@ -97,8 +116,24 @@ export function Waveform({
   scrubAt?: number | null;
   /** The position dragged to, as a fraction of the trimmed window. */
   onScrub?: (t: number) => void;
+  /**
+   * Regions (roadmap row 49), in whole-file terms, drawn as shaded spans with
+   * their numbers. They have a strip of their own along the top, so a plain
+   * drag below it is still the trim: Shift-drag anywhere adds one, a drag in
+   * the strip moves one or, at its edge, resizes it, a click there selects
+   * it, and Backspace removes the selected one while the waveform has focus.
+   */
+  regions?: Region[];
+  selectedRegion?: number | null;
+  onAddRegion?: (start: number, end: number) => void;
+  onSetRegion?: (index: number, start: number, end: number) => void;
+  onSelectRegion?: (index: number | null) => void;
+  onRemoveRegion?: () => void;
 }) {
   const ref = useRef<HTMLCanvasElement>(null);
+  const regionDrag = useRef<RegionDrag | null>(null);
+  /** A region being swept out by Shift-drag, before it is added. */
+  const [draft, setDraft] = useState<Region | null>(null);
 
   useEffect(() => {
     const canvas = ref.current;
@@ -148,6 +183,39 @@ export function Waveform({
         ctx.stroke();
       }
     }
+
+    // Regions: a shaded span each, a numbered tab in the strip along the top.
+    const drawRegion = (r: Region, label: string, on: boolean, dashed: boolean) => {
+      const x0 = r.start * w;
+      const x1 = r.end * w;
+      ctx.fillStyle = accent;
+      ctx.globalAlpha = on ? 0.3 : 0.14;
+      ctx.fillRect(x0, 0, x1 - x0, h);
+      ctx.globalAlpha = on ? 0.9 : 0.45;
+      ctx.fillRect(x0, 0, x1 - x0, LANE);
+      ctx.globalAlpha = on ? 1 : 0.7;
+      ctx.strokeStyle = accent;
+      ctx.lineWidth = on ? 2 : 1;
+      ctx.setLineDash(dashed ? [4, 3] : []);
+      for (const x of [x0, x1]) {
+        ctx.beginPath();
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, h);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.globalAlpha = 1;
+      if (label && x1 - x0 > 12) {
+        ctx.fillStyle = '#000';
+        ctx.font = '10px ui-monospace, monospace';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(label, x0 + 4, LANE / 2 + 0.5);
+      }
+    };
+    regions.forEach((r, i) => {
+      drawRegion(r, String(i + 1), i === selectedRegion, false);
+    });
+    if (draft) drawRegion(draft, '', true, true);
 
     // Grain position and jitter are fractions of the trimmed window, not of
     // the file, because the engine hands the granular voice a slice. Map them
@@ -260,6 +328,9 @@ export function Waveform({
     totalSamples,
     inspecting,
     scrubAt,
+    regions,
+    selectedRegion,
+    draft,
   ]);
 
   // Dragging near an edge moves it. Whichever edge is closer wins, so there
@@ -306,10 +377,104 @@ export function Waveform({
     onPickGrain(bestD < 0.08 ? best : null);
   };
 
+  /** Where a pointer is on the canvas, as a fraction across and pixels down. */
+  const where = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    return {
+      t: Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width)),
+      y: e.clientY - rect.top,
+      width: rect.width,
+    };
+  };
+
+  /**
+   * A press that belongs to regions: Shift anywhere starts one, a press in
+   * the strip grabs an edge (the nearest within a few pixels), else the body
+   * of the region it is over, else selects nothing. Returns whether it took
+   * the press.
+   */
+  const regionDown = (e: React.PointerEvent<HTMLCanvasElement>): boolean => {
+    const { t, y, width } = where(e);
+    if (e.shiftKey && onAddRegion) {
+      regionDrag.current = { kind: 'add', anchor: t };
+      setDraft({ start: t, end: t });
+      return true;
+    }
+    if (y >= LANE || regions.length === 0) return false;
+    const reach = GRAB / width;
+    let best: { index: number; edge: 'start' | 'end'; d: number } | null = null;
+    regions.forEach((r, index) => {
+      for (const edge of ['start', 'end'] as const) {
+        const d = Math.abs(t - r[edge]);
+        if (d <= reach && (best === null || d < best.d)) best = { index, edge, d };
+      }
+    });
+    if (best) {
+      const hit = best as { index: number; edge: 'start' | 'end' };
+      regionDrag.current = { kind: 'edge', index: hit.index, edge: hit.edge };
+      onSelectRegion?.(hit.index);
+      return true;
+    }
+    const inside = regions.findIndex((r) => t >= r.start && t <= r.end);
+    onSelectRegion?.(inside >= 0 ? inside : null);
+    if (inside >= 0) {
+      const r = regions[inside];
+      regionDrag.current = { kind: 'move', index: inside, grab: t, start: r.start, end: r.end };
+    }
+    return true;
+  };
+
+  const regionMove = (e: React.PointerEvent<HTMLCanvasElement>) => {
+    const g = regionDrag.current;
+    if (!g) return;
+    const { t } = where(e);
+    if (g.kind === 'add') {
+      setDraft({ start: Math.min(g.anchor, t), end: Math.max(g.anchor, t) });
+    } else if (g.kind === 'edge') {
+      const r = regions[g.index];
+      if (!r) return;
+      if (g.edge === 'start') {
+        onSetRegion?.(g.index, Math.min(t, r.end - MIN_REGION), r.end);
+      } else {
+        onSetRegion?.(g.index, r.start, Math.max(t, r.start + MIN_REGION));
+      }
+    } else {
+      const width = g.end - g.start;
+      const start = Math.min(1 - width, Math.max(0, g.start + (t - g.grab)));
+      onSetRegion?.(g.index, start, start + width);
+    }
+  };
+
+  const regionUp = () => {
+    const g = regionDrag.current;
+    regionDrag.current = null;
+    if (g?.kind === 'add' && draft) {
+      if (draft.end - draft.start >= MIN_REGION) onAddRegion?.(draft.start, draft.end);
+    }
+    setDraft(null);
+  };
+
   return (
     <canvas
       ref={ref}
+      tabIndex={0}
+      onKeyDown={(e) => {
+        // Only a selected region takes Backspace, and only here; anything
+        // else leaves the key to whoever else wants it.
+        if ((e.key === 'Backspace' || e.key === 'Delete') && selectedRegion !== null) {
+          e.preventDefault();
+          e.stopPropagation();
+          onRemoveRegion?.();
+        }
+      }}
+      onPointerUp={regionUp}
+      onPointerCancel={regionUp}
       onPointerDown={(e) => {
+        e.currentTarget.focus({ preventScroll: true });
+        if (regionDown(e)) {
+          e.currentTarget.setPointerCapture(e.pointerId);
+          return;
+        }
         if (inspecting && scrub === 'off') {
           pick(e);
           return;
@@ -318,9 +483,13 @@ export function Waveform({
         drag(e);
       }}
       onPointerMove={(e) => {
+        if (regionDrag.current) {
+          regionMove(e);
+          return;
+        }
         if ((!inspecting || scrub !== 'off') && e.buttons === 1) drag(e);
       }}
-      className={`h-40 w-full rounded border border-border bg-card [--wave-accent:#e0a96d] [--wave-color:#6b7b93] ${
+      className={`h-40 w-full rounded border border-border bg-card outline-none focus-visible:ring-1 focus-visible:ring-ring [--wave-accent:#e0a96d] [--wave-color:#6b7b93] ${
         inspecting && scrub === 'off' ? 'cursor-crosshair' : 'cursor-ew-resize'
       }`}
     />

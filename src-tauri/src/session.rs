@@ -115,6 +115,9 @@ type Decoded = HashMap<Option<String>, Arc<Loaded>>;
 /// while fewer than `VOICES` tracks play.
 pub const AUDITION: usize = VOICES - 1;
 
+/// The narrowest region, as a fraction of the file.
+const MIN_REGION: f32 = 0.0002;
+
 /// `Voices::shown` when no voice plays the current patch.
 pub const NO_VOICE: usize = usize::MAX;
 
@@ -1705,6 +1708,7 @@ impl Session {
                 trim_start: 0.0,
                 trim_end: 1.0,
                 root: None,
+                regions: Vec::new(),
             });
             let added = tx.add_pool(&pool)?;
             let Some(&(_, sample)) = added.first() else {
@@ -1808,6 +1812,157 @@ impl Session {
             tx.put(node, "sample.root", Value::Shaped(root))
         })?;
         Ok(())
+    }
+
+    // Regions (roadmap row 49): stretches of a material marked while hunting
+    // through it. They live on the material's node as `sample.regions`, so
+    // they save with the document and each change is one undo step.
+
+    /// A material's regions, in order.
+    pub fn regions(&self, id: u64) -> Vec<materials::Region> {
+        self.pool()
+            .get(id)
+            .map(|m| m.regions.clone())
+            .unwrap_or_default()
+    }
+
+    fn write_regions(
+        &self,
+        id: u64,
+        label: &str,
+        coalesce: Option<&str>,
+        regions: &[materials::Region],
+    ) -> Result<(), String> {
+        let node = self.sample(id)?;
+        self.edit(label, coalesce, |tx| {
+            tx.put(node, "sample.regions", om::regions_value(regions))
+        })?;
+        Ok(())
+    }
+
+    /// A region from two fractions in either order, clamped to the file.
+    fn region_between(a: f32, b: f32) -> Result<materials::Region, String> {
+        if !a.is_finite() || !b.is_finite() {
+            return Err("that region has no place".into());
+        }
+        let (a, b) = (a.clamp(0.0, 1.0), b.clamp(0.0, 1.0));
+        let region = materials::Region {
+            start: a.min(b),
+            end: a.max(b),
+        };
+        if region.end - region.start < MIN_REGION {
+            return Err("that region is too short".into());
+        }
+        Ok(region)
+    }
+
+    /// Adds a region by hand, among the others in time order, and returns the
+    /// index it took. One undo step, "Add Region".
+    pub fn add_region(&self, id: u64, start: f32, end: f32) -> Result<usize, String> {
+        let new = Self::region_between(start, end)?;
+        let mut regions = self.regions(id);
+        let at = regions
+            .iter()
+            .position(|r| r.start > new.start)
+            .unwrap_or(regions.len());
+        regions.insert(at, new);
+        self.write_regions(id, "Add Region", None, &regions)?;
+        Ok(at)
+    }
+
+    /// Removes region `index`. One undo step, "Remove Region".
+    pub fn remove_region(&self, id: u64, index: usize) -> Result<(), String> {
+        let mut regions = self.regions(id);
+        if index >= regions.len() {
+            return Err(format!("there is no region {}", index + 1));
+        }
+        regions.remove(index);
+        self.write_regions(id, "Remove Region", None, &regions)
+    }
+
+    /// Moves or resizes region `index`. A drag is one undo step, "Move
+    /// Region". The index is kept: a region dragged past another does not
+    /// change places with it.
+    pub fn set_region(&self, id: u64, index: usize, start: f32, end: f32) -> Result<(), String> {
+        let new = Self::region_between(start, end)?;
+        let mut regions = self.regions(id);
+        let Some(slot) = regions.get_mut(index) else {
+            return Err(format!("there is no region {}", index + 1));
+        };
+        *slot = new;
+        self.write_regions(
+            id,
+            "Move Region",
+            Some(&format!("region:{id}:{index}")),
+            &regions,
+        )
+    }
+
+    /// Replaces the material's regions with one from each detected transient
+    /// to the next, or to where the sound dies away. `sensitivity` is
+    /// `shard_dsp::onset`'s, 0 to 1. One undo step, "Detect Regions".
+    /// Returns how many there are now.
+    pub fn detect_regions(&self, id: u64, sensitivity: f32) -> Result<usize, String> {
+        self.sample(id)?;
+        let loaded = self
+            .loaded(id)
+            .ok_or_else(|| "that material's audio is not loaded".to_string())?;
+        let samples = &loaded.samples;
+        let rate = self.sample_rate;
+        let onsets = shard_dsp::onset::detect_onsets(samples, rate, sensitivity);
+        let len = samples.len().max(1) as f32;
+        let regions: Vec<materials::Region> =
+            shard_dsp::onset::regions_from_onsets(samples, rate, &onsets)
+                .into_iter()
+                .map(|(a, b)| materials::Region {
+                    start: a as f32 / len,
+                    end: b as f32 / len,
+                })
+                .filter(|r| r.end - r.start >= MIN_REGION)
+                .collect();
+        self.write_regions(id, "Detect Regions", None, &regions)?;
+        Ok(regions.len())
+    }
+
+    /// Writes region `index` of a material to a new WAV in `dir` and adds it
+    /// to the pool, wired to nothing, as one undo step, "Extract". Undo takes
+    /// it out of the pool; the file stays. Returns the new file's path.
+    pub fn extract_region_to(
+        &self,
+        dir: &Path,
+        id: u64,
+        index: usize,
+        product: &str,
+        date: &str,
+    ) -> Result<String, String> {
+        let record = self
+            .pool()
+            .get(id)
+            .cloned()
+            .ok_or_else(|| format!("there is no material {id}"))?;
+        let source = record
+            .path
+            .ok_or("the built-in drone has no file to extract from")?;
+        let region = record
+            .regions
+            .get(index)
+            .copied()
+            .ok_or_else(|| format!("there is no region {}", index + 1))?;
+        let path =
+            crate::extract::write_region(dir, &source, region.start, region.end, product, date)?;
+        let key = Some(path.clone());
+        let added = (|| {
+            self.decode(&key)?;
+            let name = lock(&self.decoded)
+                .get(&key)
+                .map_or_else(|| path.clone(), |l| l.name.clone());
+            self.insert_sample(&name, &path, "Extract", false)
+        })();
+        if let Err(e) = added {
+            let _ = std::fs::remove_file(&path);
+            return Err(e);
+        }
+        Ok(path)
     }
 
     // The controller map a patch plays with.

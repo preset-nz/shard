@@ -75,6 +75,7 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("file-reset-sound", "CmdOrCtrl+Shift+R"),
     ("file-add-material", "CmdOrCtrl+Shift+I"),
     ("file-record-take", "CmdOrCtrl+R"),
+    ("file-extract-region", "CmdOrCtrl+E"),
     ("view-tracker", "CmdOrCtrl+1"),
     ("view-soundscape", "CmdOrCtrl+2"),
     ("view-inspector", "CmdOrCtrl+I"),
@@ -135,6 +136,11 @@ pub fn commands() -> Vec<Command> {
         file("file-reset-sound", "Reset Sound", 1),
         file("file-add-material", "Import…", 1),
         file(RECORD_TAKE, RECORD_TITLE, 1),
+        // Regions in the patch view's waveform (row 49): Extract writes the
+        // selected one to a new WAV in Materials; Detect marks the material's
+        // transients. Shift+Cmd+E is the menu standard's Export.
+        file("file-extract-region", "Extract Region", 1),
+        file("file-detect-regions", "Detect Regions", 1),
         // The menu standard's Edit-level commands, ids reserved there (and
         // Rename beside them), on the selection. Delete has no key in the menu: a bare Backspace there
         // would be taken from every text field. The scene view's patch row

@@ -273,6 +273,14 @@ export interface MaterialView {
   trim_end: number;
   /** The note it sounds at, as a MIDI number (60 is C4), or null if unknown. */
   root: number | null;
+  /** Stretches marked in the file, as fractions of it (roadmap row 49). */
+  regions: Region[];
+}
+
+/** A marked stretch of a material, as fractions of the whole file. */
+export interface Region {
+  start: number;
+  end: number;
 }
 
 /** Which material each generator reads, by node id. Null is silent. */
@@ -306,6 +314,21 @@ export const setMaterial = (
   trimEnd: number,
   root: number | null,
 ) => invoke<MaterialsView>('set_material', { id, octave, trimStart, trimEnd, root });
+
+/** Mark a region by hand. Answers with the pool and the index it took. */
+export const addRegion = (id: number, start: number, end: number) =>
+  invoke<{ materials: MaterialsView; index: number }>('add_region', { id, start, end });
+export const removeRegion = (id: number, index: number) =>
+  invoke<MaterialsView>('remove_region', { id, index });
+/** Move or resize a region. A drag is one undo step. */
+export const setRegion = (id: number, index: number, start: number, end: number) =>
+  invoke<MaterialsView>('set_region', { id, index, start, end });
+/** Replace the regions with the ones the transients make. Sensitivity is 0 to 1. */
+export const detectRegions = (id: number, sensitivity: number) =>
+  invoke<MaterialsView>('detect_regions', { id, sensitivity });
+/** Write a region to a new WAV in Materials and add it to the pool. */
+export const extractRegion = (id: number, index: number) =>
+  invoke<{ materials: MaterialsView; name: string }>('extract_region', { id, index });
 
 /** Everything spawned since the last call. Drains, so poll it steadily. */
 export const grainLog = () => invoke<GrainInfo[]>('grain_log');

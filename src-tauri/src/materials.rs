@@ -46,6 +46,18 @@ pub struct MaterialRecord {
     /// root lets the tracker show them as note names. None means unknown.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub root: Option<u8>,
+    /// Stretches of the file marked while hunting through it (roadmap row 49),
+    /// in the order they were made. Nothing reads them but Extract.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub regions: Vec<Region>,
+}
+
+/// A marked stretch of a material, as fractions of the whole file like the
+/// trim, so it means the same at any rate. `start` is below `end`.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Region {
+    pub start: f32,
+    pub end: f32,
 }
 
 fn one() -> f32 {
@@ -120,6 +132,7 @@ impl Pool {
                 trim_start: 0.0,
                 trim_end: 1.0,
                 root: None,
+                regions: Vec::new(),
             }],
             next_material_id: 2,
             wires: Wires {

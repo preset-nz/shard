@@ -34,6 +34,7 @@ mod drums_tests;
 mod duck_tests;
 #[cfg(test)]
 mod e2e;
+mod extract;
 #[cfg(test)]
 mod globals_tests;
 mod mapping;
@@ -54,6 +55,8 @@ mod session_tests;
 // Writes a `.shard` from a flat sketch, for `just shard-write`.
 #[cfg(test)]
 mod play_mode_tests;
+#[cfg(test)]
+mod regions_tests;
 #[cfg(test)]
 mod sketch;
 mod source;
@@ -1089,6 +1092,8 @@ pub struct MaterialView {
     pub trim_end: f32,
     /// The note it sounds at, as a MIDI number, or none.
     pub root: Option<u8>,
+    /// Marked regions, as fractions of the file.
+    pub regions: Vec<materials::Region>,
 }
 
 /// The pool in the tree's order, and what each generator reads.
@@ -1116,6 +1121,7 @@ impl MaterialsView {
                     trim_start: m.trim_start,
                     trim_end: m.trim_end,
                     root: m.root,
+                    regions: m.regions.clone(),
                 })
                 .collect(),
             wires: pool.wires,
@@ -1183,6 +1189,96 @@ fn set_material(
         .session
         .set_material(id, octave, trim_start, trim_end, root)?;
     Ok(MaterialsView::of(&state.session.pool()))
+}
+
+/// A region just added: the pool, and the index it took.
+#[derive(Serialize)]
+pub struct RegionAdded {
+    pub materials: MaterialsView,
+    pub index: usize,
+}
+
+/// Mark a region of a material by hand (roadmap row 49), in fractions of the
+/// file. One undo step.
+#[tauri::command]
+fn add_region(
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    start: f32,
+    end: f32,
+) -> Result<RegionAdded, String> {
+    let index = state.session.add_region(id, start, end)?;
+    Ok(RegionAdded {
+        materials: MaterialsView::of(&state.session.pool()),
+        index,
+    })
+}
+
+#[tauri::command]
+fn remove_region(
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    index: usize,
+) -> Result<MaterialsView, String> {
+    state.session.remove_region(id, index)?;
+    Ok(MaterialsView::of(&state.session.pool()))
+}
+
+/// Move or resize a region. A drag is one undo step.
+#[tauri::command]
+fn set_region(
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    index: usize,
+    start: f32,
+    end: f32,
+) -> Result<MaterialsView, String> {
+    state.session.set_region(id, index, start, end)?;
+    Ok(MaterialsView::of(&state.session.pool()))
+}
+
+/// Replace a material's regions with the ones its transients make. Runs off
+/// the main thread: it walks the whole file.
+#[tauri::command(async)]
+fn detect_regions(
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    sensitivity: f32,
+) -> Result<MaterialsView, String> {
+    state.session.detect_regions(id, sensitivity)?;
+    Ok(MaterialsView::of(&state.session.pool()))
+}
+
+/// A region written out as a new material.
+#[derive(Serialize)]
+pub struct Extracted {
+    pub materials: MaterialsView,
+    pub name: String,
+}
+
+/// Write region `index` of a material to a new WAV in Materials and add it to
+/// the pool, wired to nothing. One undo step, "Extract".
+#[tauri::command(async)]
+fn extract_region(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Audio>,
+    id: u64,
+    index: usize,
+) -> Result<Extracted, String> {
+    let path = state.session.extract_region_to(
+        &recorder::materials_dir()?,
+        id,
+        index,
+        &app.package_info().name,
+        &recorder::date_stamp(std::time::SystemTime::now()),
+    )?;
+    let name = std::path::Path::new(&path)
+        .file_name()
+        .map_or(path.clone(), |n| n.to_string_lossy().into_owned());
+    Ok(Extracted {
+        materials: MaterialsView::of(&state.session.pool()),
+        name,
+    })
 }
 
 /// Open the device and start the stream.
@@ -2277,6 +2373,11 @@ pub fn run() {
             add_drone,
             wire_material,
             set_material,
+            add_region,
+            remove_region,
+            set_region,
+            detect_regions,
+            extract_region,
             grain_log,
             audition_grain,
             preset_names,
@@ -2461,6 +2562,7 @@ mod tests {
             "octave",
             "trim_start",
             "trim_end",
+            "regions",
         ] {
             assert!(
                 view["materials"][0].get(key).is_some(),

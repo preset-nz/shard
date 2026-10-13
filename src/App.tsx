@@ -19,12 +19,14 @@ import {
   addGlobalLfo,
   addLfo,
   addMaterial,
+  addRegion,
   addTrack,
   arrangementDefs,
   auditionGrain,
   type ChainLevel,
   cancelLearn,
   deletePatch,
+  detectRegions,
   duplicatePatch,
   EMPTY_MAPPINGS,
   editTracker,
@@ -33,6 +35,7 @@ import {
   envelopeGestureBegin,
   envelopeGestureCancel,
   envelopeGestureEnd,
+  extractRegion,
   forgetMidi,
   format,
   fxAdd,
@@ -81,6 +84,7 @@ import {
   removeEnvelope,
   removeLfo,
   removeMaterial,
+  removeRegion,
   removeTrack,
   renamePatch,
   resetSound,
@@ -94,6 +98,7 @@ import {
   setPlaying,
   setPlayMode,
   setRecordMenu,
+  setRegion,
   setTrackDuck,
   setTracker,
   setTrackPatch,
@@ -242,6 +247,14 @@ export default function App() {
   // Sample's Scrub row on, Freeze is the cloud's Position, Off leaves the
   // waveform's trim as it was.
   const [scrub, setScrub] = usePersistedState<'off' | 'tape' | 'freeze'>('shard.scrub', 'off');
+  // Regions (roadmap row 49): how readily Detect finds onsets, and which
+  // region of which material is selected. UI state; the regions themselves
+  // are the session's.
+  const [detectSensitivity, setDetectSensitivity] = usePersistedState(
+    'shard.detectSensitivity',
+    0.5,
+  );
+  const [regionSel, setRegionSel] = useState<{ id: number; index: number } | null>(null);
   // What Play plays. UI state, remembered across launches and told to the
   // backend on launch and whenever it changes; the backend keeps it for the
   // session, outside the document.
@@ -505,6 +518,11 @@ export default function App() {
         : pool.wires.material;
   const shownRecord = pool.materials.find((m) => m.id === shownId) ?? null;
   const shownWave = shownId === null ? null : (waves[shownId] ?? null);
+  const shownRegions = shownRecord?.regions ?? [];
+  const selectedRegion =
+    regionSel !== null && regionSel.id === shownId && regionSel.index < shownRegions.length
+      ? regionSel.index
+      : null;
   const shownIsPlayer = shownId !== null && shownId === pool.wires.material;
   const shownIsGrain = shownId !== null && shownId === pool.wires.grain;
   // Only the generators that are on read anything you can hear.
@@ -653,6 +671,69 @@ export default function App() {
     try {
       const view = await setMaterial(m.id, m.octave, m.trim_start, m.trim_end, m.root);
       if (seq === materialSeq.current) setPool(view);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  /** Regions of the material on show. Rust holds them; each gesture is a step. */
+  const regionSeq = useRef(0);
+  const markRegion = useCallback(async (id: number, start: number, end: number) => {
+    try {
+      const added = await addRegion(id, start, end);
+      setPool(added.materials);
+      setRegionSel({ id, index: added.index });
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+  const moveRegion = useCallback(async (id: number, index: number, start: number, end: number) => {
+    setPool((prev) => ({
+      ...prev,
+      materials: prev.materials.map((m) =>
+        m.id === id
+          ? { ...m, regions: m.regions.map((r, i) => (i === index ? { start, end } : r)) }
+          : m,
+      ),
+    }));
+    const seq = ++regionSeq.current;
+    try {
+      const view = await setRegion(id, index, start, end);
+      if (seq === regionSeq.current) setPool(view);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+  const dropRegion = useCallback(
+    async (id: number, index: number) => {
+      await editMaterials(() => removeRegion(id, index));
+      setRegionSel(null);
+    },
+    [editMaterials],
+  );
+  const findRegions = useCallback(async (id: number, sensitivity: number) => {
+    try {
+      const view = await detectRegions(id, sensitivity);
+      setPool(view);
+      setRegionSel(null);
+      const n = view.materials.find((m) => m.id === id)?.regions.length ?? 0;
+      setNote(
+        n === 0
+          ? 'No transients found. Raise the sensitivity, or Shift-drag to mark by hand.'
+          : `Marked ${n} region${n === 1 ? '' : 's'}. Undo brings the old ones back.`,
+      );
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+  const extractSelected = useCallback(async (id: number, index: number) => {
+    try {
+      const out = await extractRegion(id, index);
+      setPool(out.materials);
+      setNote(`Extracted region ${index + 1} to Materials as ${out.name}.`);
+      setError(null);
     } catch (e) {
       setError(String(e));
     }
@@ -1086,6 +1167,16 @@ export default function App() {
         break;
       case 'file-record-take':
         void toggleRecord();
+        break;
+      case 'file-extract-region':
+        if (shownRecord?.path && selectedRegion !== null) {
+          void extractSelected(shownRecord.id, selectedRegion);
+        } else {
+          setNote('Select a region in the waveform first (click its numbered tab), then Extract.');
+        }
+        break;
+      case 'file-detect-regions':
+        if (shownRecord) void findRegions(shownRecord.id, detectSensitivity);
         break;
       case 'file-new-patch':
         newPatchRow();
@@ -1593,6 +1684,53 @@ export default function App() {
                     </span>
                   )}
                 </div>
+                <div className="-mb-2 flex items-center gap-2 text-[11px]">
+                  <span className="font-semibold uppercase tracking-wider text-muted-foreground">
+                    Regions
+                  </span>
+                  <button
+                    type="button"
+                    disabled={!shownRecord || blank}
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={() =>
+                      shownRecord && void findRegions(shownRecord.id, detectSensitivity)
+                    }
+                    title="Mark a region from each transient to the next, replacing the ones here"
+                    className="rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                  >
+                    Detect
+                  </button>
+                  <input
+                    type="range"
+                    min={0}
+                    max={1}
+                    step={0.01}
+                    value={detectSensitivity}
+                    onChange={(e) => setDetectSensitivity(Number(e.target.value))}
+                    aria-label="Detect sensitivity"
+                    title={`Sensitivity ${Math.round(detectSensitivity * 100)}%: higher finds softer hits`}
+                    className="h-1 w-20 accent-primary"
+                  />
+                  <span className="text-muted-foreground">
+                    {shownRegions.length > 0
+                      ? `${shownRegions.length} marked · click a numbered tab to select, drag its edge to resize`
+                      : 'Shift-drag to mark one by hand'}
+                  </span>
+                  {selectedRegion !== null && (
+                    <button
+                      type="button"
+                      disabled={!shownRecord?.path}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() =>
+                        shownRecord && void extractSelected(shownRecord.id, selectedRegion)
+                      }
+                      title="Write region to a new WAV in Materials (Cmd+E)"
+                      className="rounded px-1.5 py-0.5 text-muted-foreground hover:text-foreground disabled:opacity-40"
+                    >
+                      Extract {selectedRegion + 1}
+                    </button>
+                  )}
+                </div>
                 <div className={clockOnly ? 'opacity-40' : ''}>
                   <Waveform
                     peaks={blank ? [] : (shownWave?.peaks ?? [])}
@@ -1620,6 +1758,22 @@ export default function App() {
                           : { ...shownRecord, trim_end: v },
                       );
                     }}
+                    regions={blank ? [] : shownRegions}
+                    selectedRegion={selectedRegion}
+                    onAddRegion={(a, b) => shownRecord && void markRegion(shownRecord.id, a, b)}
+                    onSetRegion={(i, a, b) =>
+                      shownRecord && void moveRegion(shownRecord.id, i, a, b)
+                    }
+                    onSelectRegion={(i) =>
+                      setRegionSel(
+                        i === null || !shownRecord ? null : { id: shownRecord.id, index: i },
+                      )
+                    }
+                    onRemoveRegion={() =>
+                      shownRecord &&
+                      selectedRegion !== null &&
+                      void dropRegion(shownRecord.id, selectedRegion)
+                    }
                     scrub={scrub}
                     scrubAt={
                       scrub === 'tape' && shownIsPlayer && shownRecord
