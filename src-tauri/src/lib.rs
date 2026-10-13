@@ -149,6 +149,9 @@ pub struct ParamInfo {
     pub taper: &'static str,
     /// Present only for stepped parameters.
     pub steps: Option<u32>,
+    /// Names for the steps, one each, when they are choices rather than
+    /// numbers; empty otherwise.
+    pub step_names: &'static [&'static str],
     pub unit: &'static str,
     pub smooth_ms: f32,
 }
@@ -338,6 +341,7 @@ fn infos(defs: &'static [ParamDef]) -> Vec<ParamInfo> {
                 Taper::Stepped(n) => Some(n),
                 _ => None,
             },
+            step_names: p.steps,
             unit: match p.unit {
                 Unit::None => "",
                 Unit::Ms => "ms",

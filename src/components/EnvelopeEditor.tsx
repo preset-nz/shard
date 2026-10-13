@@ -173,6 +173,7 @@ export function EnvelopeEditor({
     default: 0.1,
     taper: 'linear',
     steps: null,
+    step_names: [],
     unit: '%',
     smooth_ms: 0,
   });
@@ -185,6 +186,7 @@ export function EnvelopeEditor({
     default: 0.2,
     taper: 'linear',
     steps: null,
+    step_names: [],
     unit: '%',
     smooth_ms: 0,
   };

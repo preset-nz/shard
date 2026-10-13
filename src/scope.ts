@@ -27,21 +27,11 @@
 import { type PropertySchema, registerFieldRenderer, registerScope } from '@preset.nz/facets';
 import {
   ARRANGEMENT_PREFIX,
-  CHORUS_TYPES,
-  DRIVE_TYPES,
   denormalise,
-  FILTER_SLOPES,
-  FILTER_TRACKING,
-  FILTER_TYPES,
-  FM_TYPES,
   format,
-  LENGTH_NAMES,
-  NOISE_RUN,
   normalise,
   type ParamInfo,
-  REVERB_TYPES,
   setParam,
-  WINDOW_NAMES,
 } from '@/audio';
 import { MaterialField } from '@/components/MaterialPicker';
 import { ParamRow } from '@/components/ParamRow';
@@ -353,28 +343,9 @@ export function isSwitch(p: ParamInfo): boolean {
     p.steps === 2 &&
     p.min === 0 &&
     p.max === 1 &&
-    !(templateId(p.id) in STEP_NAMES)
+    p.step_names.length === 0
   );
 }
-
-/**
- * Names for the stepped rows whose steps are choices rather than numbers.
- * The arrangement borrows these rows, so its ids are looked up without their
- * prefix.
- */
-const STEP_NAMES: Record<string, string[]> = {
-  'grain.window': WINDOW_NAMES,
-  'filter.type': FILTER_TYPES,
-  'filter.slope': FILTER_SLOPES,
-  'filter.tracking': FILTER_TRACKING,
-  'ladder.tracking': FILTER_TRACKING,
-  'drive.type': DRIVE_TYPES,
-  'chorus.type': CHORUS_TYPES,
-  'reverb.type': REVERB_TYPES,
-  'patch.length': LENGTH_NAMES,
-  'fm.type': FM_TYPES,
-  'noise.run': NOISE_RUN,
-};
 
 function fieldFor(p: ParamInfo) {
   const base = { id: p.id, path: p.id, label: p.name };
@@ -385,7 +356,7 @@ function fieldFor(p: ParamInfo) {
 
   if (p.taper === 'stepped') {
     const n = Math.max(1, p.steps ?? 1);
-    const names = STEP_NAMES[templateId(p.id)] ?? null;
+    const names = p.step_names.length > 0 ? p.step_names : null;
     return {
       ...base,
       kind: 'select' as const,

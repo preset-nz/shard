@@ -57,6 +57,13 @@ pub struct ParamDef {
     pub unit: Unit,
     /// Per-parameter smoothing time. The table decides, not the caller.
     pub smooth_ms: f32,
+    /// Names for a stepped row's steps, in order from `min`, when the steps
+    /// are choices rather than numbers (`filter.type`: Low-pass, High-pass,
+    /// Band-pass). Empty for every other row: the switches (`<node>.on`, a
+    /// yes or no), the numeric steps (octave) and the chain order
+    /// (`fx.order.*`, whose steps are instance indices that mean nothing
+    /// alone). When present there is one per step.
+    pub steps: &'static [&'static str],
 }
 
 impl ParamDef {
@@ -107,6 +114,11 @@ impl ParamDef {
     }
 }
 
+/// `noise.run`'s steps: gated by the notes, or free past the envelope.
+const NOISE_RUN_NAMES: [&str; 2] = ["Notes", "Free"];
+/// Key tracking for the patch filter and the ladder.
+const TRACKING_NAMES: [&str; 3] = ["Off", "Half", "Full"];
+
 /// The set the engine actually reads. Deliberately small: a row exists here
 /// because a node reads it, never because a control might be nice to have.
 ///
@@ -131,6 +143,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::note::Length::NAMES,
     },
     // How long a note is held under Hold, before its release. Read once, when
     // the note starts, so nothing moving it can move a note's end mid-note.
@@ -144,6 +157,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // Generators make sound, effects shape it (Georg, 2026-09-13). The plain
     // sample is one generator and the grain cloud is another; each has a
@@ -159,6 +173,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "material.gain",
@@ -170,6 +185,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Scrubbing (roadmap row 45), a mode of the plain sample: with it on, the
     // sample plays no passes and its head chases Position instead. The head
@@ -185,6 +201,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "material.position",
@@ -196,6 +213,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // No octave or trim here: those belong to each material, and reach the
     // engine as a `sources::Reading` per generator (Georg, 2026-09-15).
@@ -218,6 +236,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // The cloud's own level. Unity by default, so switching granular on is
     // heard at once: a generator's neutral is unity, where an effect's mix is
@@ -232,6 +251,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.position",
@@ -243,6 +263,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.jitter",
@@ -254,6 +275,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.size",
@@ -265,6 +287,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 30.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.density",
@@ -276,6 +299,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 30.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.pitch",
@@ -287,6 +311,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Semitones,
         smooth_ms: 30.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.spread",
@@ -298,6 +323,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Semitones,
         smooth_ms: 30.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.pan",
@@ -309,6 +335,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 30.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.reverse",
@@ -320,6 +347,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "grain.window",
@@ -331,6 +359,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(4),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::granular::Window::NAMES,
     },
     // FM, the third generator (Georg, 2026-09-27). Two operators, built as
     // phase modulation; see `fm.rs`. It reads no material: its pitch is the
@@ -345,6 +374,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "fm.gain",
@@ -356,6 +386,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+        steps: &[],
     },
     ParamDef {
         id: "fm.freq",
@@ -367,6 +398,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Exponential, so 1 sits a third of the way along and 2 at the centre.
     ParamDef {
@@ -379,6 +411,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "fm.index",
@@ -390,6 +423,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "fm.feedback",
@@ -401,6 +435,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Towards analogue (Georg, 2026-09-27). Each operator wanders off its
     // pitch on its own; zero is the exact, clinical voice.
@@ -414,6 +449,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Phase, linear or exponential: see `FmType`. Names from `FmType::NAMES`.
     ParamDef {
@@ -426,6 +462,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::fm::FmType::NAMES,
     },
     // Noise, the fourth generator (epic 48). See `noise.rs`. It reads no
     // material and, for now, has no pitch. Off by default, like FM.
@@ -439,6 +476,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "noise.gain",
@@ -450,6 +488,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+        steps: &[],
     },
     // The kind of noise, as a slider so an LFO can sweep it: -1 brown, -0.5
     // pink, 0 white, 0.5 blue, 1 violet, and between two a crossfade of the
@@ -464,6 +503,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // A resonant band-pass of the noise at Frequency, crossfaded in at the
     // noise's own level (see `noise.rs`): wind, whistle, a pitched hiss. Zero
@@ -478,6 +518,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // The band's centre. A step's pitch moves it, as it moves fm.freq.
     ParamDef {
@@ -490,6 +531,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // 0 a whistle (Q 80), 1 a blow two octaves wide.
     ParamDef {
@@ -502,6 +544,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // 0 Notes: gated by the notes and shaped by the amplitude envelope like
     // every generator. 1 Free: sounds for as long as the transport plays,
@@ -516,6 +559,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &NOISE_RUN_NAMES,
     },
     // Dust, the fifth generator (row 59): sparse random clicks, a tick now
     // and then to dense crackle. See `dust.rs`. Reads no material and has no
@@ -530,6 +574,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "dust.gain",
@@ -541,6 +586,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 40.0,
+        steps: &[],
     },
     // Clicks a second, on average; where they fall is random, never a grid.
     ParamDef {
@@ -553,6 +599,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Each click's brightness: dark thuds at 0, bright ticks at 1.
     ParamDef {
@@ -565,6 +612,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Each click's length: a needle tick to a short pop.
     ParamDef {
@@ -577,6 +625,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // 0 every click in the centre; 1 each at its own random place.
     ParamDef {
@@ -589,6 +638,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "env.on",
@@ -600,6 +650,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // Formerly `env.amount`. It is the envelope's mix: how much of the shaped
     // signal replaces the unshaped one, transparent at zero.
@@ -613,6 +664,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "env.attack",
@@ -624,6 +676,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Ms,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "env.decay",
@@ -635,6 +688,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Ms,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "env.sustain",
@@ -646,6 +700,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "env.release",
@@ -657,6 +712,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Ms,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // The tape's feel. One mechanism: `speed` is a multiplier on tape time,
     // and brake and reverse are two ways of asking for a different one. Both
@@ -675,6 +731,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "tape.flick",
@@ -688,6 +745,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // The filter, on the master after every effect (Georg, 2026-09-14). What
     // takes the harmonics away that crush and ring add. Type is stepped, and
@@ -702,6 +760,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "filter.mix",
@@ -713,6 +772,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "filter.cutoff",
@@ -724,6 +784,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "filter.resonance",
@@ -735,6 +796,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "filter.type",
@@ -746,6 +808,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::filter::FilterType::NAMES,
     },
     // 12 or 24 dB per octave. At 24 the resonance sits on the second of two
     // stages; the arrangement's filter borrows this row too.
@@ -759,6 +822,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::filter::FilterSlope::NAMES,
     },
     // Off, half, full: how far the cutoff follows the step's pitch, an octave
     // per octave at full. The patch's filter only; the arrangement has no note.
@@ -772,6 +836,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &TRACKING_NAMES,
     },
     // The ladder (epic 36, story 3): a driven 4-pole low-pass after the
     // filter, patch only. Resonance one self-oscillates at the cutoff.
@@ -785,6 +850,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "ladder.mix",
@@ -796,6 +862,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "ladder.drive",
@@ -807,6 +874,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "ladder.cutoff",
@@ -818,6 +886,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "ladder.resonance",
@@ -829,6 +898,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Off, half, full, as the filter's: the ladder's own, so the clean filter
     // can stay put while this follows the note.
@@ -842,6 +912,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &TRACKING_NAMES,
     },
     // The master gain, after every generator and effect. Unity is bit-exact.
     ParamDef {
@@ -854,6 +925,7 @@ const BASE: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -1015,6 +1087,35 @@ pub(crate) fn repeats_no_node_name(table: &[ParamDef], prefix: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Step names are all or nothing: a named row has one per step, and a
+    /// row that is not stepped has none. Unnamed stepped rows are the
+    /// switches, the numeric steps (octave) and `fx.order.*`, whose steps are
+    /// instance indices with no meaning alone.
+    #[test]
+    fn step_names_match_the_steps() {
+        let tables: [&[ParamDef]; 3] = [&PARAMS, crate::fx::rows(), crate::arrangement::params()];
+        let mut named = 0;
+        for p in tables.into_iter().flatten() {
+            match p.taper {
+                Taper::Stepped(n) => {
+                    assert!(
+                        p.steps.is_empty() || p.steps.len() == n as usize,
+                        "{} has {} step names for {n} steps",
+                        p.id,
+                        p.steps.len()
+                    );
+                    named += usize::from(!p.steps.is_empty());
+                }
+                _ => assert!(
+                    p.steps.is_empty(),
+                    "{} is not stepped but names steps",
+                    p.id
+                ),
+            }
+        }
+        assert!(named >= 11, "the choice rows lost their names");
+    }
 
     #[test]
     fn ids_are_unique() {

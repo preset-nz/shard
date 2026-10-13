@@ -12,7 +12,7 @@ The patch's master level, after every generator and effect.
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
-| Gain | 0 to 2 | 1 | The master level, after every generator and effect; 100% leaves the sound as it is. |
+| Gain | 0% to 200% | 100% | The master level, after every generator and effect; 100% leaves the sound as it is. |
 <!-- generated:end -->
 
 ## What it's for

@@ -2073,6 +2073,7 @@ export default function App() {
                 playing={meter.playing}
                 auditioning={meter.auditioning}
                 sampleRate={shownWave?.sample_rate ?? 48000}
+                windowNames={defs?.find((d) => d.id === 'grain.window')?.step_names ?? []}
                 onFreeze={setFrozen}
                 onClear={() => {
                   setGrains([]);

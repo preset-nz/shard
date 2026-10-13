@@ -19,6 +19,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "drive.mix",
@@ -30,6 +31,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "drive.amount",
@@ -41,6 +43,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "drive.tone",
@@ -52,6 +55,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "drive.type",
@@ -63,6 +67,7 @@ pub(crate) const DRIVE_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(4),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::drive::DriveType::NAMES,
     },
 ];
 
@@ -77,6 +82,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     // Defaults to zero, like the ring modulator: loading a patch and pressing
     // play gives you the material, not an effect you did not ask for.
@@ -90,6 +96,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "crush.bits",
@@ -103,6 +110,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "crush.rate",
@@ -114,6 +122,7 @@ pub(crate) const CRUSH_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -128,6 +137,7 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "ring.mix",
@@ -139,6 +149,7 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "ring.freq",
@@ -150,6 +161,7 @@ pub(crate) const RING_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -173,6 +185,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "chorus.mix",
@@ -184,6 +197,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "chorus.type",
@@ -195,6 +209,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::chorus::ChorusType::NAMES,
     },
     ParamDef {
         id: "chorus.rate",
@@ -206,6 +221,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "chorus.depth",
@@ -217,6 +233,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Voices is continuous: the next copy fades in as it turns, so it sweeps
     // and follows an LFO without a click. Few beat, many blur into a wall.
@@ -230,6 +247,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::None,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // Spread scales where every voicing's copies sit, half to twice; low cut
     // is a high-pass on the copies. Both shape every voicing alike.
@@ -243,6 +261,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "chorus.lowcut",
@@ -254,6 +273,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "chorus.eq",
@@ -265,6 +285,7 @@ pub(crate) const CHORUS_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Db,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -282,6 +303,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "overtone.mix",
@@ -293,6 +315,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "overtone.sub",
@@ -304,6 +327,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "overtone.octave",
@@ -315,6 +339,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "overtone.fifth",
@@ -326,6 +351,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "overtone.tone",
@@ -337,6 +363,7 @@ pub(crate) const OVERTONE_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -352,6 +379,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "flanger.mix",
@@ -363,6 +391,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "flanger.manual",
@@ -374,6 +403,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "flanger.rate",
@@ -385,6 +415,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "flanger.depth",
@@ -396,6 +427,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "flanger.feedback",
@@ -407,6 +439,7 @@ pub(crate) const FLANGER_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -422,6 +455,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "wear.mix",
@@ -433,6 +467,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "wear.wow",
@@ -444,6 +479,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "wear.flutter",
@@ -455,6 +491,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "wear.unstable",
@@ -466,6 +503,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "wear.dropouts",
@@ -477,6 +515,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "wear.dull",
@@ -488,6 +527,7 @@ pub(crate) const WEAR_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -505,6 +545,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "delay.mix",
@@ -516,6 +557,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "delay.time",
@@ -527,6 +569,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "delay.feedback",
@@ -538,6 +581,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "delay.tone",
@@ -549,6 +593,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "delay.pingpong",
@@ -560,6 +605,7 @@ pub(crate) const DELAY_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -575,6 +621,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "echo.mix",
@@ -586,6 +633,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "echo.time",
@@ -597,6 +645,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "echo.feedback",
@@ -608,6 +657,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "echo.tone",
@@ -619,6 +669,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "echo.wobble",
@@ -630,6 +681,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "echo.grit",
@@ -641,6 +693,7 @@ pub(crate) const ECHO_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -656,6 +709,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "rise.mix",
@@ -667,6 +721,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "rise.time",
@@ -678,6 +733,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "rise.feedback",
@@ -689,6 +745,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "rise.shift",
@@ -700,6 +757,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Semitones,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "rise.wobble",
@@ -711,6 +769,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "rise.tone",
@@ -722,6 +781,7 @@ pub(crate) const RISE_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -738,6 +798,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "reverb.mix",
@@ -749,6 +810,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "reverb.type",
@@ -760,6 +822,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(3),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &crate::reverb::ReverbType::NAMES,
     },
     ParamDef {
         id: "reverb.decay",
@@ -771,6 +834,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Seconds,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "reverb.size",
@@ -782,6 +846,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "reverb.tone",
@@ -793,6 +858,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "reverb.predelay",
@@ -804,6 +870,7 @@ pub(crate) const REVERB_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -819,6 +886,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "repeat.mix",
@@ -830,6 +898,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     // A gate read through the LFOs, so not smoothed: a smoothed square
     // would cross half late.
@@ -843,6 +912,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "repeat.length",
@@ -854,6 +924,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 50.0,
+        steps: &[],
     },
     ParamDef {
         id: "repeat.speed",
@@ -865,6 +936,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Semitones,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "repeat.reverse",
@@ -876,6 +948,7 @@ pub(crate) const REPEAT_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
 ];
 
@@ -891,6 +964,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "freqshift.mix",
@@ -902,6 +976,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "freqshift.shift",
@@ -913,6 +988,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "freqshift.feedback",
@@ -924,6 +1000,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "freqshift.spread",
@@ -935,6 +1012,7 @@ pub(crate) const FREQSHIFT_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -951,6 +1029,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "peaks.mix",
@@ -962,6 +1041,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "peaks.low",
@@ -973,6 +1053,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "peaks.high",
@@ -984,6 +1065,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "peaks.boost",
@@ -995,6 +1077,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Db,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "peaks.width",
@@ -1006,6 +1089,7 @@ pub(crate) const PEAKS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -1021,6 +1105,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "shaper.mix",
@@ -1032,6 +1117,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "shaper.attack",
@@ -1043,6 +1129,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "shaper.sustain",
@@ -1054,6 +1141,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
         taper: Taper::Bipolar,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "shaper.speed",
@@ -1065,6 +1153,7 @@ pub(crate) const SHAPER_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];
 
@@ -1082,6 +1171,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     },
     ParamDef {
         id: "bands.mix",
@@ -1093,6 +1183,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "bands.time",
@@ -1104,6 +1195,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Ms,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "bands.harmonic",
@@ -1115,6 +1207,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "bands.feedback",
@@ -1126,6 +1219,7 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 20.0,
+        steps: &[],
     },
     ParamDef {
         id: "bands.split",
@@ -1137,5 +1231,6 @@ pub(crate) const BANDS_ROWS: &[ParamDef] = &[
         taper: Taper::Exponential,
         unit: Unit::Hz,
         smooth_ms: 20.0,
+        steps: &[],
     },
 ];

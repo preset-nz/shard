@@ -24,6 +24,8 @@ export interface ParamInfo {
   default: number;
   taper: Taper;
   steps: number | null;
+  /** Names for the steps, one each, when they are choices; empty otherwise. */
+  step_names: string[];
   unit: string;
   smooth_ms: number;
 }
@@ -118,7 +120,7 @@ export interface GrainInfo {
   len: number;
   /** 0 hard left, 1 hard right. */
   pan: number;
-  /** Index into WINDOW_NAMES. */
+  /** Index into the `grain.window` row's `step_names`. */
   window: number;
   /** Spawn number since the engine started. Strictly increasing. */
   seq: number;
@@ -777,27 +779,6 @@ export const editTracker = (track: number, edit: TrackerEdit) =>
 export const MAX_MELODY_TRACKS = 8;
 /** The most drums tracks: the engine's kits. */
 export const MAX_DRUMS_TRACKS = 4;
-
-/** Labels for the stepped window parameter, matching `Window::ALL` in Rust. */
-export const WINDOW_NAMES = ['Hann', 'Triangle', 'Expodec', 'Rexpodec'];
-/** `FilterType::NAMES`, in stepped order. */
-export const FILTER_TYPES = ['Low-pass', 'High-pass', 'Band-pass'];
-/** `FilterSlope::NAMES`, in stepped order. */
-export const FILTER_SLOPES = ['12 dB', '24 dB'];
-/** The patch filter's key tracking, in stepped order. */
-export const FILTER_TRACKING = ['Off', 'Half', 'Full'];
-/** `DriveType::NAMES`, in stepped order. */
-export const DRIVE_TYPES = ['Overdrive', 'Distortion', 'Fuzz', 'Fold'];
-/** `ChorusType::NAMES`, in stepped order. */
-export const CHORUS_TYPES = ['Chorus', 'Ensemble', 'Choir'];
-/** `ReverbType::NAMES`, in stepped order. */
-export const REVERB_TYPES = ['Room', 'Hall', 'Plate'];
-/** `FmType::NAMES`, in stepped order. */
-export const FM_TYPES = ['Phase', 'Linear', 'Exponential'];
-/** Noise's Run, in stepped order: gated by the notes, or free past the envelope. */
-export const NOISE_RUN = ['Notes', 'Free'];
-/** `note::Length::NAMES`, in stepped order: what sets a note's length. */
-export const LENGTH_NAMES = ['Loop', 'Sample', 'Hold'];
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {

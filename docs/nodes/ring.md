@@ -13,8 +13,8 @@ Multiplies the sound by a tone, adding metallic, bell-like frequencies that do n
 | Control | Range | Default | What it does |
 |---|---|---|---|
 | Ring modulation | on or off | on | Multiplies the sound by a tone, adding metallic, bell-like frequencies that do not follow the original harmonics. |
-| Mix | 0 to 1 | 0 | How much ring-modulated sound is blended with the original. |
-| Frequency | 1 Hz to 5000 Hz | 140 Hz | The pitch of the tone the sound is multiplied by: low values wobble, high values clang. |
+| Mix | 0% to 100% | 0% | How much ring-modulated sound is blended with the original. |
+| Frequency | 1 Hz to 5 kHz | 140 Hz | The pitch of the tone the sound is multiplied by: low values wobble, high values clang. |
 <!-- generated:end -->
 
 ## What it's for

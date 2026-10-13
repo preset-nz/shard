@@ -73,6 +73,7 @@ export function LfoEditor({
     default: 0.1,
     taper: 'exponential',
     steps: null,
+    step_names: [],
     unit: 'Hz',
     smooth_ms: 0,
   };
@@ -85,6 +86,7 @@ export function LfoEditor({
     default: 0,
     taper: 'linear',
     steps: null,
+    step_names: [],
     unit: '%',
     smooth_ms: 0,
   };

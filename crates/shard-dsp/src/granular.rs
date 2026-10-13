@@ -27,6 +27,9 @@ pub enum Window {
 }
 
 impl Window {
+    /// Display names, in `ALL` order (the stepped `grain.window` row).
+    pub const NAMES: [&'static str; 4] = ["Hann", "Triangle", "Expodec", "Rexpodec"];
+
     /// `phase` runs 0 to 1 across the grain's life.
     #[inline]
     pub fn gain(self, phase: f32) -> f32 {

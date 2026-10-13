@@ -1,5 +1,4 @@
 import type { GrainInfo } from '@/audio';
-import { WINDOW_NAMES } from '@/audio';
 
 /**
  * The grain inspector.
@@ -26,6 +25,7 @@ export function GrainInspector({
   playing,
   auditioning,
   sampleRate,
+  windowNames,
   onFreeze,
   onClear,
   onSelect,
@@ -37,6 +37,8 @@ export function GrainInspector({
   playing: boolean;
   auditioning: boolean;
   sampleRate: number;
+  /** The grain window's step names (`grain.window`'s `step_names`). */
+  windowNames: string[];
   onFreeze: (frozen: boolean) => void;
   onClear: () => void;
   onSelect: (g: GrainInfo) => void;
@@ -132,7 +134,7 @@ export function GrainInspector({
                     {g.rate < 0 && <span title="played backwards"> ←</span>}
                   </td>
                   <td className="px-2 py-0.5 text-right">{panLabel(g.pan)}</td>
-                  <td className="px-2 py-0.5">{WINDOW_NAMES[g.window] ?? g.window}</td>
+                  <td className="px-2 py-0.5">{windowNames[g.window] ?? g.window}</td>
                 </tr>
               ))}
             </tbody>

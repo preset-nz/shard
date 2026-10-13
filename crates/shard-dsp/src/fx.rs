@@ -228,6 +228,7 @@ pub(crate) fn rows() -> &'static [ParamDef] {
                 taper: Taper::Stepped(INSTANCES as u32 + 1),
                 unit: Unit::None,
                 smooth_ms: 0.0,
+                steps: &[],
             });
         }
         out

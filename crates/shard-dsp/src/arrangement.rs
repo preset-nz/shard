@@ -70,6 +70,7 @@ const ROWS: &[Row] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     }),
     Row::Own(ParamDef {
         id: "arrangement.amp.ceiling",
@@ -81,6 +82,7 @@ const ROWS: &[Row] = &[
         taper: Taper::Linear,
         unit: Unit::Percent,
         smooth_ms: 0.0,
+        steps: &[],
     }),
     // The tape's two gestures, played rather than set: a held button, a pad
     // or a pedal writes them, and no document stores them. They slow the
@@ -103,6 +105,7 @@ const ROWS: &[Row] = &[
         // Not smoothed here. `tape.time` is the slew, and it is the control
         // that decides how the gesture sounds.
         smooth_ms: 0.0,
+        steps: &[],
     }),
     // Reverse is a *gate*, not a state: the button holds it high, and a MIDI
     // note or CC can do the same. What a tap means rather than a hold is
@@ -117,6 +120,7 @@ const ROWS: &[Row] = &[
         taper: Taper::Stepped(2),
         unit: Unit::None,
         smooth_ms: 0.0,
+        steps: &[],
     }),
 ];
 

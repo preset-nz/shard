@@ -368,15 +368,19 @@ pub fn spec(def: &ParamDef) -> ValueSpec {
         _ => ValueSpec::float(def.id, float(def.min)..=float(def.max), float(def.default)),
     }
     .described(def.name, def.description);
-    match unit_text(def.unit) {
+    let spec = match unit_text(def.unit) {
         Some(u) => spec.unit(u),
         None => spec,
+    };
+    if def.steps.is_empty() {
+        spec
+    } else {
+        spec.names(def.steps)
     }
 }
 
-/// A unit as the pages and tooltips write it. Percent is left out: those rows
-/// hold a fraction (0 to 1) in the tree, and rhizome writes a range with its
-/// unit unscaled, so "%" would read "0% to 1%".
+/// A unit as the pages and tooltips write it. Percent rows hold a fraction (0
+/// to 1) in the tree, and rhizome-docs shows a "%" value scaled by 100.
 fn unit_text(unit: Unit) -> Option<&'static str> {
     match unit {
         Unit::Ms => Some("ms"),
@@ -385,7 +389,8 @@ fn unit_text(unit: Unit) -> Option<&'static str> {
         Unit::Semitones => Some("st"),
         Unit::Octaves => Some("oct"),
         Unit::Db => Some("dB"),
-        Unit::Percent | Unit::None => None,
+        Unit::Percent => Some("%"),
+        Unit::None => None,
     }
 }
 
