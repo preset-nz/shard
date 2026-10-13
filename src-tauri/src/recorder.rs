@@ -12,7 +12,7 @@
 //! Times in file names are UTC: no time crate is a dependency.
 
 use std::fs::File;
-use std::io::BufWriter;
+use std::io::{BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -135,6 +135,102 @@ impl Source {
     pub const MASTER: Source = Source::Master(MasterTag::Master);
 }
 
+/// Where a take came from: what goes into the WAV's `INFO` chunk, for
+/// whatever reads the file later (Strata) to find its way back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TakeMeta {
+    /// The product name, `ISFT`.
+    pub product: String,
+    /// The document's absolute path; none while it is untitled.
+    pub document: Option<PathBuf>,
+    /// The patch the take was made from; none for a drums track or when the
+    /// master is recorded from no track.
+    pub patch: Option<String>,
+    /// The track's name; none for the master.
+    pub track: Option<String>,
+    /// `master` or `track`.
+    pub source: &'static str,
+}
+
+impl TakeMeta {
+    /// The `ICMT` text: line-based, one `key: value` per line after the
+    /// `shard-take v1` header, a line omitted when it has no value. Control
+    /// characters in a value become spaces so a value cannot add a line.
+    pub fn comment(&self) -> String {
+        let clean = |s: &str| -> String {
+            s.chars()
+                .map(|c| if c.is_control() { ' ' } else { c })
+                .collect()
+        };
+        let mut lines = vec!["shard-take v1".to_string()];
+        if let Some(d) = &self.document {
+            lines.push(format!("document: {}", clean(&d.to_string_lossy())));
+        }
+        if let Some(p) = &self.patch {
+            lines.push(format!("patch: {}", clean(p)));
+        }
+        if let Some(t) = &self.track {
+            lines.push(format!("track: {}", clean(t)));
+        }
+        lines.push(format!("source: {}", self.source));
+        lines.join("\n")
+    }
+}
+
+/// `YYYY-MM-DD` (UTC) for `now`.
+pub fn date_stamp(now: SystemTime) -> String {
+    let secs = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs() as i64);
+    let (y, m, d) = civil(secs.div_euclid(86_400));
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Appends a `LIST` chunk of type `INFO` to a finished WAV (`ISFT`, `ICRD`,
+/// `ICMT`; strings NUL-terminated, each subchunk padded to an even length)
+/// and rewrites the RIFF size in the header. hound cannot write one.
+pub fn append_info(path: &Path, meta: &TakeMeta, date: &str) -> std::io::Result<()> {
+    fn sub(out: &mut Vec<u8>, id: &[u8; 4], text: &str) {
+        let mut body = text.as_bytes().to_vec();
+        body.push(0);
+        out.extend_from_slice(id);
+        out.extend_from_slice(&(body.len() as u32).to_le_bytes());
+        out.extend_from_slice(&body);
+        if body.len() % 2 == 1 {
+            out.push(0);
+        }
+    }
+    let mut body = b"INFO".to_vec();
+    sub(&mut body, b"ISFT", &meta.product);
+    sub(&mut body, b"ICRD", date);
+    sub(&mut body, b"ICMT", &meta.comment());
+
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    let mut head = [0u8; 12];
+    file.read_exact(&mut head)?;
+    if &head[..4] != b"RIFF" || &head[8..] != b"WAVE" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "not a RIFF/WAVE file",
+        ));
+    }
+    let mut len = file.seek(SeekFrom::End(0))?;
+    if len % 2 == 1 {
+        file.write_all(&[0])?;
+        len += 1;
+    }
+    file.write_all(b"LIST")?;
+    file.write_all(&(body.len() as u32).to_le_bytes())?;
+    file.write_all(&body)?;
+    let total = len + 8 + body.len() as u64;
+    file.seek(SeekFrom::Start(4))?;
+    file.write_all(&((total - 8) as u32).to_le_bytes())?;
+    file.sync_all()
+}
+
 /// A finished take.
 #[derive(Debug, Clone, Serialize)]
 pub struct TakeInfo {
@@ -231,6 +327,7 @@ impl Recorder {
         tap: Tap,
         source: Source,
         track: Option<&str>,
+        meta: TakeMeta,
         now: SystemTime,
     ) -> Result<PathBuf, String> {
         let mut running = lock(&self.running);
@@ -252,9 +349,10 @@ impl Recorder {
         let stop = Arc::new(AtomicBool::new(false));
         let writer = {
             let (ring, stop) = (Arc::clone(&self.ring), Arc::clone(&stop));
+            let (path, date) = (path.clone(), date_stamp(now));
             std::thread::Builder::new()
                 .name("shard-take-writer".into())
-                .spawn(move || write_out(&ring, wav, &stop))
+                .spawn(move || write_out(&ring, wav, &stop, &path, &meta, &date))
                 .map_err(|e| format!("could not start the writer: {e}"))?
         };
         *running = Some(Running {
@@ -327,6 +425,9 @@ fn write_out(
     ring: &Ring,
     mut wav: hound::WavWriter<BufWriter<File>>,
     stop: &AtomicBool,
+    path: &Path,
+    meta: &TakeMeta,
+    date: &str,
 ) -> Result<(), String> {
     let mut chunk = vec![0.0f32; 8192];
     let mut failed: Option<String> = None;
@@ -353,7 +454,10 @@ fn write_out(
     }
     match failed {
         Some(e) => Err(e),
-        None => wav.finalize().map_err(|e| e.to_string()),
+        None => {
+            wav.finalize().map_err(|e| e.to_string())?;
+            append_info(path, meta, date).map_err(|e| format!("{}: {e}", path.display()))
+        }
     }
 }
 
@@ -423,6 +527,47 @@ mod tests {
         dir
     }
 
+    fn meta() -> TakeMeta {
+        TakeMeta {
+            product: "Shard".into(),
+            document: Some(PathBuf::from("/Users/me/Songs/a song.shard")),
+            patch: Some("Patch 2".into()),
+            track: Some("Track 1".into()),
+            source: "track",
+        }
+    }
+
+    /// Every chunk of a RIFF/WAVE file as (id, body), walked by the header.
+    fn chunks(bytes: &[u8]) -> Vec<([u8; 4], Vec<u8>)> {
+        assert_eq!(&bytes[..4], b"RIFF");
+        assert_eq!(&bytes[8..12], b"WAVE");
+        let riff = u32::from_le_bytes(bytes[4..8].try_into().unwrap()) as usize;
+        assert_eq!(riff, bytes.len() - 8, "the RIFF size is the file's");
+        let (mut at, mut out) = (12, Vec::new());
+        while at < bytes.len() {
+            let id: [u8; 4] = bytes[at..at + 4].try_into().unwrap();
+            let n = u32::from_le_bytes(bytes[at + 4..at + 8].try_into().unwrap()) as usize;
+            out.push((id, bytes[at + 8..at + 8 + n].to_vec()));
+            at += 8 + n + n % 2;
+        }
+        assert_eq!(at, bytes.len());
+        out
+    }
+
+    fn info(body: &[u8]) -> Vec<([u8; 4], String)> {
+        assert_eq!(&body[..4], b"INFO");
+        let (mut at, mut out) = (4, Vec::new());
+        while at < body.len() {
+            let id: [u8; 4] = body[at..at + 4].try_into().unwrap();
+            let n = u32::from_le_bytes(body[at + 4..at + 8].try_into().unwrap()) as usize;
+            let text = &body[at + 8..at + 8 + n];
+            assert_eq!(text.last(), Some(&0), "NUL-terminated");
+            out.push((id, String::from_utf8(text[..n - 1].to_vec()).unwrap()));
+            at += 8 + n + n % 2;
+        }
+        out
+    }
+
     fn read(path: &Path) -> (hound::WavSpec, Vec<f32>) {
         let mut r = hound::WavReader::open(path).expect("a valid WAV");
         let spec = r.spec();
@@ -435,8 +580,15 @@ mod tests {
         // A ring much smaller than the signal, pushed in callback-sized
         // blocks while the writer drains, so the wrap is exercised.
         let rec = Recorder::with_capacity(48_000.0, 4096);
-        rec.start(&dir, Tap::Master, Source::MASTER, None, SystemTime::now())
-            .unwrap();
+        rec.start(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
         let signal: Vec<f32> = (0..2 * 20_000)
             .map(|i| (i as f32 * 0.0137).sin() * 0.9)
             .collect();
@@ -490,6 +642,7 @@ mod tests {
             Tap::Voice(0),
             Source::Track(0),
             Some("Track 1"),
+            meta(),
             UNIX_EPOCH + Duration::from_secs(1_791_900_000),
         )
         .unwrap();
@@ -522,8 +675,15 @@ mod tests {
         engine.set_source(tone);
         engine.set_playing(true);
         let bank = shard_dsp::ParamBank::new();
-        rec.start(&dir, Tap::Master, Source::MASTER, None, SystemTime::now())
-            .unwrap();
+        rec.start(
+            &dir,
+            Tap::Master,
+            Source::MASTER,
+            None,
+            meta(),
+            SystemTime::now(),
+        )
+        .unwrap();
         let (mut applied, mut heard) = (0, Vec::new());
         let mut out = vec![0.0f32; 512];
         for _ in 0..100 {
@@ -623,5 +783,64 @@ mod tests {
             Source::Track(3)
         );
         assert!(serde_json::from_str::<Source>("\"nope\"").is_err());
+    }
+
+    #[test]
+    fn the_info_chunk_reads_back_and_the_samples_are_untouched() {
+        let dir = scratch_dir("info");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.wav");
+        let spec = hound::WavSpec {
+            channels: 2,
+            sample_rate: 48_000,
+            bits_per_sample: 32,
+            sample_format: hound::SampleFormat::Float,
+        };
+        let signal: Vec<f32> = (0..2000).map(|i| (i as f32 * 0.05).sin()).collect();
+        let mut w = hound::WavWriter::create(&path, spec).unwrap();
+        for s in &signal {
+            w.write_sample(*s).unwrap();
+        }
+        w.finalize().unwrap();
+
+        append_info(&path, &meta(), "2026-10-13").unwrap();
+
+        let all = chunks(&std::fs::read(&path).unwrap());
+        let list = all.iter().find(|(id, _)| id == b"LIST").expect("a LIST");
+        assert_eq!(
+            info(&list.1),
+            vec![
+                (*b"ISFT", "Shard".to_string()),
+                (*b"ICRD", "2026-10-13".to_string()),
+                (
+                    *b"ICMT",
+                    "shard-take v1\ndocument: /Users/me/Songs/a song.shard\npatch: Patch 2\ntrack: Track 1\nsource: track"
+                        .to_string()
+                ),
+            ]
+        );
+        assert!(all.iter().any(|(id, _)| id == b"data"));
+        let (spec2, back) = read(&path);
+        assert_eq!(spec2, spec);
+        assert!(back == signal, "samples differ");
+    }
+
+    #[test]
+    fn the_comment_omits_what_is_absent_and_cannot_gain_a_line() {
+        let master = TakeMeta {
+            product: "Shard".into(),
+            document: None,
+            patch: Some("a\nb".into()),
+            track: None,
+            source: "master",
+        };
+        assert_eq!(
+            master.comment(),
+            "shard-take v1\npatch: a b\nsource: master"
+        );
+        assert_eq!(
+            date_stamp(UNIX_EPOCH + Duration::from_secs(1_791_925_509)),
+            "2026-10-13"
+        );
     }
 }

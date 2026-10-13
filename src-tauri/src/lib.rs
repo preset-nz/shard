@@ -856,11 +856,17 @@ fn toggle_track_mute(
 /// edit: the source is session state, like mute.
 #[tauri::command]
 fn record_start(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Audio>,
     source: recorder::Source,
 ) -> Result<recorder::RecordingState, String> {
+    let mut patch = None;
     let (tap, track) = match source {
-        recorder::Source::Master(_) => (shard_dsp::Tap::Master, None),
+        recorder::Source::Master(_) => {
+            // The master plays no one patch; the one on screen is the nearest.
+            patch = state.session.current_patch();
+            (shard_dsp::Tap::Master, None)
+        }
         recorder::Source::Track(i) => {
             let slot = *state
                 .session
@@ -868,17 +874,37 @@ fn record_start(
                 .get(i)
                 .ok_or_else(|| format!("there is no track {}", i + 1))?;
             let tap = match slot {
-                tracker::Slot::Melody(k) => shard_dsp::Tap::Voice(k),
+                tracker::Slot::Melody(k) => {
+                    patch = state.session.tracker().tracks.get(i).and_then(|t| t.patch);
+                    shard_dsp::Tap::Voice(k)
+                }
+                // A kit has no patch.
                 tracker::Slot::Drums(k) => shard_dsp::Tap::Kit(k),
             };
             (tap, Some(session::track_name(slot)))
         }
+    };
+    let patch = patch.and_then(|id| {
+        state
+            .session
+            .patches()
+            .into_iter()
+            .find(|p| p.id == id)
+            .map(|p| p.name)
+    });
+    let meta = recorder::TakeMeta {
+        product: app.package_info().name.clone(),
+        document: state.session.path().map(|p| p.canonicalize().unwrap_or(p)),
+        patch,
+        track: track.clone(),
+        source: if track.is_some() { "track" } else { "master" },
     };
     state.recorder.start(
         &recorder::materials_dir()?,
         tap,
         source,
         track.as_deref(),
+        meta,
         std::time::SystemTime::now(),
     )?;
     Ok(state.recorder.state())
