@@ -131,8 +131,8 @@ the patch without it.
 - Its switch is `<node>.on`, drawn in the section header.
 - A **generator** makes sound, and its first row after the switch is
   `<node>.gain`, named "Gain". It is listed in `GENERATORS`; today that is the
-  plain sample (`material`), the cloud (`grain`) and two-operator FM
-  (`fm`). Generators are summed.
+  plain sample (`material`), the cloud (`grain`), two-operator FM (`fm`)
+  and noise (`noise`). Generators are summed.
 - An **effect** shapes sound, and its first row is `<node>.mix`, named "Mix", defaulting to 0: an added effect is silent until
   its Mix is raised (Georg, 2026-10-10).
 - `amp.gain` is the master gain, after everything.

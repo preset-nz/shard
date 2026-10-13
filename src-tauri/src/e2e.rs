@@ -323,11 +323,11 @@ fn check_a_shard_file() {
     println!("wrote {}", dest.display());
 }
 
-/// Epic 36's rows on an opened file, not a fresh session: every row can be
-/// set and comes back after a save and a reopen. A fixed node added to
-/// `PATCH_NODES` is missing from every file saved before it, and its rows
-/// are refused there, so the fixture and the eval references gain the node
-/// when it lands (the ladder, 2026-10-12).
+/// The rows of epics 36 and 48 on an opened file, not a fresh session:
+/// every row can be set and comes back after a save and a reopen. A fixed
+/// node added to `PATCH_NODES` is missing from every file saved before it,
+/// and its rows are refused there, so the fixture and the eval references
+/// gain the node when it lands (the ladder, 2026-10-12; noise, 2026-10-14).
 #[test]
 fn the_filter_rows_set_and_save_on_an_opened_file() {
     let l = load();
@@ -338,6 +338,9 @@ fn the_filter_rows_set_and_save_on_an_opened_file() {
         ("ladder.on", 1.0),
         ("ladder.cutoff", 640.0),
         ("ladder.tracking", 1.0),
+        ("noise.on", 1.0),
+        ("noise.gain", 0.5),
+        ("noise.color", -0.5),
     ];
     for (id, v) in rows {
         s.set_param(id, v).unwrap_or_else(|e| panic!("{id}: {e}"));

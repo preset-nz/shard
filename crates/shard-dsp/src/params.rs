@@ -399,6 +399,41 @@ const BASE: &[ParamDef] = &[
         unit: Unit::None,
         smooth_ms: 0.0,
     },
+    // Noise, the fourth generator (epic 48). See `noise.rs`. It reads no
+    // material and, for now, has no pitch. Off by default, like FM.
+    ParamDef {
+        id: "noise.on",
+        name: "Noise",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
+    ParamDef {
+        id: "noise.gain",
+        name: "Gain",
+        min: 0.0,
+        max: 2.0,
+        default: 1.0,
+        taper: Taper::Linear,
+        unit: Unit::Percent,
+        smooth_ms: 40.0,
+    },
+    // The kind of noise, as a slider so an LFO can sweep it: -1 brown, -0.5
+    // pink, 0 white, 0.5 blue, 1 violet, and between two a crossfade of the
+    // pair at the same level. The id keeps the standard spelling.
+    ParamDef {
+        id: "noise.color",
+        name: "Colour",
+        min: -1.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Bipolar,
+        unit: Unit::None,
+        smooth_ms: 20.0,
+    },
     ParamDef {
         id: "env.on",
         name: "Envelope",
@@ -662,7 +697,7 @@ pub static PARAMS: LazyLock<Vec<ParamDef>> = LazyLock::new(|| {
 /// Gain; every other switchable node is an effect and leads with Mix. A
 /// drums track's kit is a generator too, but a track's, not a row here
 /// (`kit.rs`).
-pub const GENERATORS: &[&str] = &["material", "grain", "fm"];
+pub const GENERATORS: &[&str] = &["material", "grain", "fm", "noise"];
 
 pub fn index_of(id: &str) -> Option<usize> {
     PARAMS.iter().position(|p| p.id == id)

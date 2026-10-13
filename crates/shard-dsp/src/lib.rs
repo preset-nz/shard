@@ -37,6 +37,7 @@ pub mod ladder;
 pub mod limiter;
 pub mod mix;
 pub mod modulation;
+pub mod noise;
 pub mod note;
 pub mod onset;
 pub mod overtone;
@@ -76,6 +77,7 @@ pub use mix::Mix;
 pub use modulation::{
     adsr_curve, Curve, Ease, EnvSpec, Globals, LfoSpec, LinkError, ModSet, Shape,
 };
+pub use noise::{Noise, NoiseParams};
 pub use note::{Alone, Length};
 pub use overtone::{Overtone, OvertoneParams};
 pub use params::{ParamBank, ParamDef, Taper, Unit, PARAMS};

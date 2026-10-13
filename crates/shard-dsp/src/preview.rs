@@ -264,7 +264,10 @@ mod tests {
         let m = tone(24_000);
         let plain = render(&bank, &m, 0.0).samples;
         bank.set_by_id("fm.on", 1.0);
-        assert!(plain != render(&bank, &m, 0.0).samples);
+        let fm = render(&bank, &m, 0.0).samples;
+        assert!(plain != fm);
+        bank.set_by_id("noise.on", 1.0);
+        assert!(fm != render(&bank, &m, 0.0).samples);
     }
 
     #[test]

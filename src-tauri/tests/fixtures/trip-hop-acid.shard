@@ -556,6 +556,11 @@
       }
     },
     {
+      "path": "/patches/patch/noise",
+      "id": "01M4ZQ48N0SE00000000000001",
+      "type": "noise"
+    },
+    {
       "path": "/patches/patch/tape",
       "id": "01M48DSQ1TFJAEBSZSYD87VG5H",
       "type": "tape"

@@ -468,6 +468,11 @@
       }
     },
     {
+      "path": "/patches/patch/noise",
+      "id": "01M4ZQ48N0SE00000000000002",
+      "type": "noise"
+    },
+    {
       "path": "/patches/patch/reverb",
       "id": "01M48E19QFNC1QY4GVDHHWGFFK",
       "type": "reverb",

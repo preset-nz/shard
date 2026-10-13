@@ -26,6 +26,7 @@ use crate::granular::{GrainParams, Granular, Window};
 use crate::inspect::{GrainLog, GrainSpawn};
 use crate::ladder::{self, Ladder, LadderParams, LadderSlots};
 use crate::modulation::{Globals, ModSet};
+use crate::noise::{Noise, NoiseParams};
 use crate::note::{Alone, Length};
 use crate::params::{index_of, ParamBank};
 use crate::player::Player;
@@ -73,6 +74,9 @@ struct Slots {
     fm_feedback: usize,
     fm_drift: usize,
     fm_type: usize,
+    noise_on: usize,
+    noise_gain: usize,
+    noise_color: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
     /// The patch filter's key tracking. Not in `ChainSlots`: the arrangement
@@ -123,6 +127,9 @@ impl Slots {
             fm_feedback: at("fm.feedback"),
             fm_drift: at("fm.drift"),
             fm_type: at("fm.type"),
+            noise_on: at("noise.on"),
+            noise_gain: at("noise.gain"),
+            noise_color: at("noise.color"),
             fx: ChainSlots::resolve(at),
             filter_tracking: at("filter.tracking"),
             ladder: LadderSlots::resolve(at),
@@ -142,6 +149,7 @@ struct Smoothers {
     grain_gain: OnePole,
     material_gain: OnePole,
     fm_gain: OnePole,
+    noise_gain: OnePole,
 }
 
 /// One ramp per switchable section. Each multiplies its section's mix and
@@ -151,9 +159,11 @@ struct Fades {
     material: Ramp,
     grain: Ramp,
     fm: Ramp,
-    /// FM has no pass of its own, so under the steps it follows the
-    /// player's: this opens while one sounds and closes between them.
-    fm_gate: Ramp,
+    noise: Ramp,
+    /// FM and noise have no pass of their own, so under the steps they
+    /// follow the player's: this opens while one sounds and closes between
+    /// them. One gate for both.
+    note_gate: Ramp,
     env: Ramp,
     /// Scrub's switch: the plain sample's passes fade out as the head fades in.
     scrub: Ramp,
@@ -173,7 +183,8 @@ impl Fades {
             material: ramp(slots.material_on),
             grain: ramp(slots.grain_on),
             fm: ramp(slots.fm_on),
-            fm_gate: {
+            noise: ramp(slots.noise_on),
+            note_gate: {
                 let mut r = Ramp::new(1.0);
                 r.set_time(BYPASS_MS, sample_rate);
                 r
@@ -241,8 +252,11 @@ struct Block {
     material_gain_target: f32,
     fm_gain_target: f32,
     fm_params: FmParams,
+    noise_gain_target: f32,
+    noise_params: NoiseParams,
     grain_on_target: f32,
     fm_on_target: f32,
+    noise_on_target: f32,
     material_on_target: f32,
     /// Whether the plain sample is scrubbed, and where its head is asked to be.
     scrub_target: f32,
@@ -293,6 +307,8 @@ pub(crate) struct Voice {
     granular: Granular,
     /// The third generator, which reads no material.
     fm: Fm,
+    /// The fourth, which reads none either.
+    noise: Noise,
     /// Every spawn the cloud makes, for the inspector. Shared out by
     /// `grain_log`; the audio thread only ever pushes to it.
     log: Arc<GrainLog>,
@@ -382,6 +398,7 @@ impl Voice {
             grain_gain: mk(defs[slots.grain_gain].smooth_ms),
             material_gain: mk(defs[slots.material_gain].smooth_ms),
             fm_gain: mk(defs[slots.fm_gain].smooth_ms),
+            noise_gain: mk(defs[slots.noise_gain].smooth_ms),
         };
         // Start settled at the defaults, otherwise every parameter glides up
         // from zero for the first few milliseconds after load.
@@ -397,6 +414,7 @@ impl Voice {
             .material_gain
             .reset(defs[slots.material_gain].default);
         smooth.fm_gain.reset(defs[slots.fm_gain].default);
+        smooth.noise_gain.reset(defs[slots.noise_gain].default);
 
         let log = Arc::new(GrainLog::new());
         let mut granular = Granular::seeded(sample_rate, max_grains, salt);
@@ -441,8 +459,11 @@ impl Voice {
                 drift: 0.0,
                 ty: FmType::from_value(0.0),
             },
+            noise_gain_target: 0.0,
+            noise_params: NoiseParams::default(),
             grain_on_target: 0.0,
             fm_on_target: 0.0,
+            noise_on_target: 0.0,
             material_on_target: 0.0,
             scrub_target: 0.0,
             scrub_position: 0.0,
@@ -480,6 +501,7 @@ impl Voice {
             scrub: Scrub::new(sample_rate),
             granular,
             fm: Fm::seeded(sample_rate, salt),
+            noise: Noise::seeded(sample_rate, salt),
             log,
             auditioning: false,
             active: index == 0,
@@ -814,11 +836,16 @@ impl Voice {
             drift: read(&self.mods, bank, self.slots.fm_drift),
             ty: FmType::from_value(bank.get(self.slots.fm_type)),
         };
+        let noise_gain_target = read(&self.mods, bank, self.slots.noise_gain);
+        let noise_params = NoiseParams {
+            color: read(&self.mods, bank, self.slots.noise_color),
+        };
         // Section switches, read as gates. Each one fades its section's mix
         // rather than cutting it.
         let gate = |slot: usize| if bank.get(slot) >= 0.5 { 1.0 } else { 0.0 };
         let grain_on_target = gate(self.slots.grain_on);
         let fm_on_target = gate(self.slots.fm_on);
+        let noise_on_target = gate(self.slots.noise_on);
         let material_on_target = gate(self.slots.material_on);
         let scrub_target = gate(self.slots.scrub);
         let scrub_position = read(&self.mods, bank, self.slots.scrub_position).clamp(0.0, 1.0);
@@ -846,16 +873,19 @@ impl Voice {
             s.grain_gain.reset(target.gain);
             s.material_gain.reset(material_gain_target);
             s.fm_gain.reset(fm_gain_target);
+            s.noise_gain.reset(noise_gain_target);
             self.fades.material.set(material_on_target);
             self.fades.scrub.set(scrub_target);
             self.scrub.snap(scrub_position);
             self.fades.grain.set(grain_on_target);
             self.fades.fm.set(fm_on_target);
+            self.fades.noise.set(noise_on_target);
             self.fades.env.set(env_on_target);
-            self.fades.fm_gate.set(if stepped { 0.0 } else { 1.0 });
+            self.fades.note_gate.set(if stepped { 0.0 } else { 1.0 });
             self.fx.forget(&fx);
             self.ladder.reset(&ladder);
             self.fm.settle(&fm_params);
+            self.noise.settle(&noise_params);
             self.granular.clear();
             self.tail_left = 0.0;
             if stepped {
@@ -983,8 +1013,11 @@ impl Voice {
             material_gain_target,
             fm_gain_target,
             fm_params,
+            noise_gain_target,
+            noise_params,
             grain_on_target,
             fm_on_target,
+            noise_on_target,
             material_on_target,
             scrub_target,
             scrub_position,
@@ -1158,10 +1191,11 @@ impl Voice {
             Length::Loop => true,
             Length::Hold => self.note.age < self.note.end,
         };
-        let fm_open = if note_sounding { 1.0 } else { 0.0 };
-        let fm_level = self.smooth.fm_gain.process(b.fm_gain_target)
-            * fm_on
-            * self.fades.fm_gate.process(fm_open);
+        let open = self
+            .fades
+            .note_gate
+            .process(if note_sounding { 1.0 } else { 0.0 });
+        let fm_level = self.smooth.fm_gain.process(b.fm_gain_target) * fm_on * open;
         let fm = if fm_on > 0.0 {
             self.fm
                 .process(&b.fm_params, self.pass_ratio * p.speed.abs())
@@ -1179,8 +1213,17 @@ impl Voice {
                 1.0
             },
         );
-        let l = (material + gl + fm) * note_level;
-        let r = (material + gr + fm) * note_level;
+        // Noise follows the notes as FM does, through the same gate. Added
+        // only while it sounds, so off leaves the sum exactly as it was.
+        let noise_on = self.fades.noise.process(b.noise_on_target);
+        let noise_level = self.smooth.noise_gain.process(b.noise_gain_target) * noise_on * open;
+        let (mut l, mut r) = (material + gl + fm, material + gr + fm);
+        if noise_on > 0.0 {
+            let (nl, nr) = self.noise.process(&b.noise_params);
+            l += nl * noise_level;
+            r += nr * noise_level;
+        }
+        let (l, r) = (l * note_level, r * note_level);
 
         // A step's velocity scales its note where it is made, before the
         // effects, so a soft step does not turn down the tails the loud
@@ -1275,6 +1318,10 @@ impl Voice {
         // FM likewise starts from the top of a cycle when switched back on.
         if self.fades.fm.value() == 0.0 {
             self.fm.reset();
+        }
+        // Noise's filters likewise start from rest.
+        if self.fades.noise.value() == 0.0 {
+            self.noise.reset();
         }
 
         // Faded out: idle from the next block, with nothing left running.

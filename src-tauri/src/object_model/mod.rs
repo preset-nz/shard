@@ -218,7 +218,7 @@ pub const PLAYED: &[&str] = &["arrangement.tape.brake", "arrangement.tape.revers
 
 /// A patch's fixed nodes, each a child named for its kind.
 pub const PATCH_NODES: &[&str] = &[
-    "material", "grain", "fm", "env", "tape", "filter", "ladder", "amp",
+    "material", "grain", "fm", "noise", "env", "tape", "filter", "ladder", "amp",
 ];
 
 /// The generators that read a material, through `<kind>.source`.

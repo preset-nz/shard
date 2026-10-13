@@ -149,6 +149,15 @@ export const NODES: NodeInfo[] = [
     table: 'fm',
     owns: under('fm'),
   },
+  // The fourth generator (epic 48): noise, its kind picked by Colour.
+  {
+    layer: 'patch',
+    id: 'noise',
+    label: 'Noise',
+    lane: 'generate',
+    table: 'noise',
+    owns: under('noise'),
+  },
   // The process lane's effects are the palette's: drawn from the chain's
   // order, below (`fxNodes`, `fxChain`). The envelope stays fixed.
   {

@@ -609,6 +609,35 @@ fn the_ladder_never_touches_the_allocator() {
 }
 
 #[test]
+fn noise_never_touches_the_allocator() {
+    // Noise switches in and out under fast steps, its Colour stepping through
+    // every pair of colours and its Gain moving, beside FM on the same gate.
+    let mut e = Engine::new(SR, 256);
+    e.set_source(tone(48_000));
+    let bank = ParamBank::new();
+    bank.set_by_id("fm.on", 1.0);
+    e.set_playing(true);
+    let mut out = vec![0.0f32; 512];
+
+    let ((), caught) = no_alloc(|| {
+        for block in 0..1_200 {
+            bank.set_by_id("noise.on", (block / 7 % 4 != 0) as u8 as f32);
+            bank.set_by_id("noise.color", (block % 9) as f32 / 4.0 - 1.0);
+            bank.set_by_id("noise.gain", (block % 20) as f32 / 10.0);
+            e.set_steps(StepParams {
+                on: block % 300 < 200,
+                tempo_bpm: 240.0,
+                pattern: 0x5555,
+                ..Default::default()
+            });
+            e.process_block(&mut out, &bank);
+        }
+    });
+    assert_eq!(caught, 0, "noise touched the allocator {caught} time(s)");
+    assert!(out.iter().all(|v| v.is_finite()));
+}
+
+#[test]
 fn held_steps_never_touch_the_allocator() {
     // Under Hold each step gates its own note: a trigger latches a different
     // gate, release and end every time. The patch's Length is Hold, the
@@ -856,6 +885,8 @@ fn every_voice_playing_never_touches_the_allocator() {
         bank.set_by_id("grain.on", 1.0);
         bank.set_by_id("fm.on", 1.0);
         bank.set_by_id("fm.drift", 0.5);
+        bank.set_by_id("noise.on", 1.0);
+        bank.set_by_id("noise.color", i as f32 / 4.0 - 1.0);
         // A different run of the palette on every voice, the second copies
         // included, so between them every instance in the pool is used.
         let mut order = Order::EMPTY;
