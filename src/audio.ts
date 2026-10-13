@@ -777,6 +777,8 @@ export const CHORUS_TYPES = ['Chorus', 'Ensemble', 'Choir'];
 export const REVERB_TYPES = ['Room', 'Hall', 'Plate'];
 /** `FmType::NAMES`, in stepped order. */
 export const FM_TYPES = ['Phase', 'Linear', 'Exponential'];
+/** Noise's Run, in stepped order: gated by the notes, or free past the envelope. */
+export const NOISE_RUN = ['Notes', 'Free'];
 /** `note::Length::NAMES`, in stepped order: what sets a note's length. */
 export const LENGTH_NAMES = ['Loop', 'Sample', 'Hold'];
 

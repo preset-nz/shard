@@ -36,6 +36,7 @@ import {
   FM_TYPES,
   format,
   LENGTH_NAMES,
+  NOISE_RUN,
   normalise,
   type ParamInfo,
   REVERB_TYPES,
@@ -363,6 +364,7 @@ const STEP_NAMES: Record<string, string[]> = {
   'reverb.type': REVERB_TYPES,
   'patch.length': LENGTH_NAMES,
   'fm.type': FM_TYPES,
+  'noise.run': NOISE_RUN,
 };
 
 function fieldFor(p: ParamInfo) {

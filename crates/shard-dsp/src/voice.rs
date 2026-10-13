@@ -80,6 +80,7 @@ struct Slots {
     noise_band: usize,
     noise_freq: usize,
     noise_width: usize,
+    noise_run: usize,
     /// The patch's drive, crush, ring, filter and output.
     fx: ChainSlots,
     /// The patch filter's key tracking. Not in `ChainSlots`: the arrangement
@@ -136,6 +137,7 @@ impl Slots {
             noise_band: at("noise.band"),
             noise_freq: at("noise.freq"),
             noise_width: at("noise.width"),
+            noise_run: at("noise.run"),
             fx: ChainSlots::resolve(at),
             filter_tracking: at("filter.tracking"),
             ladder: LadderSlots::resolve(at),
@@ -166,6 +168,9 @@ struct Fades {
     grain: Ramp,
     fm: Ramp,
     noise: Ramp,
+    /// Noise's Run: 0 follows the notes, 1 runs free past the envelope. The
+    /// two paths crossfade on this, so the switch does not click.
+    noise_run: Ramp,
     /// FM and noise have no pass of their own, so under the steps they
     /// follow the player's: this opens while one sounds and closes between
     /// them. One gate for both.
@@ -190,6 +195,7 @@ impl Fades {
             grain: ramp(slots.grain_on),
             fm: ramp(slots.fm_on),
             noise: ramp(slots.noise_on),
+            noise_run: ramp(slots.noise_run),
             note_gate: {
                 let mut r = Ramp::new(1.0);
                 r.set_time(BYPASS_MS, sample_rate);
@@ -263,6 +269,7 @@ struct Block {
     grain_on_target: f32,
     fm_on_target: f32,
     noise_on_target: f32,
+    noise_run_target: f32,
     material_on_target: f32,
     /// Whether the plain sample is scrubbed, and where its head is asked to be.
     scrub_target: f32,
@@ -470,6 +477,7 @@ impl Voice {
             grain_on_target: 0.0,
             fm_on_target: 0.0,
             noise_on_target: 0.0,
+            noise_run_target: 0.0,
             material_on_target: 0.0,
             scrub_target: 0.0,
             scrub_position: 0.0,
@@ -855,6 +863,7 @@ impl Voice {
         let grain_on_target = gate(self.slots.grain_on);
         let fm_on_target = gate(self.slots.fm_on);
         let noise_on_target = gate(self.slots.noise_on);
+        let noise_run_target = gate(self.slots.noise_run);
         let material_on_target = gate(self.slots.material_on);
         let scrub_target = gate(self.slots.scrub);
         let scrub_position = read(&self.mods, bank, self.slots.scrub_position).clamp(0.0, 1.0);
@@ -889,6 +898,7 @@ impl Voice {
             self.fades.grain.set(grain_on_target);
             self.fades.fm.set(fm_on_target);
             self.fades.noise.set(noise_on_target);
+            self.fades.noise_run.set(noise_run_target);
             self.fades.env.set(env_on_target);
             self.fades.note_gate.set(if stepped { 0.0 } else { 1.0 });
             self.fx.forget(&fx);
@@ -1027,6 +1037,7 @@ impl Voice {
             grain_on_target,
             fm_on_target,
             noise_on_target,
+            noise_run_target,
             material_on_target,
             scrub_target,
             scrub_position,
@@ -1224,15 +1235,30 @@ impl Voice {
         );
         // Noise follows the notes as FM does, through the same gate. Added
         // only while it sounds, so off leaves the sum exactly as it was.
+        //
+        // Run crossfades two paths of the one noise. Notes (run 0) is the
+        // path above, unchanged bit for bit: its weight is exactly one. Free
+        // (run 1) skips the gate, the note level and the amplitude envelope
+        // and is added after the envelope, below. The voice only renders
+        // while the transport plays, so Free sounds exactly that long. Its
+        // pitch is the last step's, held: `pass_ratio` is set when a step
+        // lands and kept until the next (one again with the steps off).
         let noise_on = self.fades.noise.process(b.noise_on_target);
-        let noise_level = self.smooth.noise_gain.process(b.noise_gain_target) * noise_on * open;
+        let run = self.fades.noise_run.process(b.noise_run_target);
+        let noise_gain = self.smooth.noise_gain.process(b.noise_gain_target) * noise_on;
+        let noise_level = noise_gain * open * (1.0 - run);
         let (mut l, mut r) = (material + gl + fm, material + gr + fm);
+        let mut free = (0.0, 0.0);
         if noise_on > 0.0 {
             let (nl, nr) = self
                 .noise
                 .process(&b.noise_params, self.pass_ratio * p.speed.abs());
             l += nl * noise_level;
             r += nr * noise_level;
+            if run > 0.0 {
+                let level = noise_gain * run;
+                free = (nl * level, nr * level);
+            }
         }
         let (l, r) = (l * note_level, r * note_level);
 
@@ -1272,6 +1298,15 @@ impl Voice {
             faded_env.gain_of(self.note.amp_shape)
         };
         let (l, r) = (l * e, r * e);
+        // Free noise joins here: past the note level, the velocity, the
+        // patch's process lane and the envelope, so it sounds through the
+        // envelope's zero and Hold's fall. The filter, the ladder and the
+        // output still shape it.
+        let (l, r) = if run > 0.0 {
+            (l + free.0, r + free.1)
+        } else {
+            (l, r)
+        };
 
         // The filter, on the master: after every generator, effect and
         // the envelope, then the master gain.

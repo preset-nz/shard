@@ -642,6 +642,9 @@ fn noise_never_touches_the_allocator() {
                 20.0 * 400.0f32.powf((block % 13) as f32 / 12.0),
             );
             bank.set_by_id("noise.width", (block % 7) as f32 / 6.0);
+            // Run flips between Notes and Free, across the steps coming and
+            // going.
+            bank.set_by_id("noise.run", (block / 5 % 3 == 0) as u8 as f32);
             e.set_steps(StepParams {
                 on: block % 300 < 200,
                 tempo_bpm: 240.0,

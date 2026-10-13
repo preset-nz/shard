@@ -469,6 +469,19 @@ const BASE: &[ParamDef] = &[
         unit: Unit::Percent,
         smooth_ms: 20.0,
     },
+    // 0 Notes: gated by the notes and shaped by the amplitude envelope like
+    // every generator. 1 Free: sounds for as long as the transport plays,
+    // past the envelope and Hold's fall, into the filter. See `voice.rs`.
+    ParamDef {
+        id: "noise.run",
+        name: "Run",
+        min: 0.0,
+        max: 1.0,
+        default: 0.0,
+        taper: Taper::Stepped(2),
+        unit: Unit::None,
+        smooth_ms: 0.0,
+    },
     ParamDef {
         id: "env.on",
         name: "Envelope",
