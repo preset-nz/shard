@@ -255,6 +255,13 @@ fn param_defs() -> Vec<ParamInfo> {
     infos(&PARAMS[..])
 }
 
+/// What each node kind is called and does, from its declaration, so the work
+/// area's names are not written a second time in the webview.
+#[tauri::command]
+fn node_words() -> Vec<object_model::NodeWords> {
+    object_model::node_words()
+}
+
 /// The arrangement's table, as `param_defs` gives the patch's.
 #[tauri::command]
 fn arrangement_defs() -> Vec<ParamInfo> {
@@ -2410,6 +2417,7 @@ pub fn run() {
             preset_app_kit::app_kit_document,
             preset_app_kit::app_kit_document_note,
             param_defs,
+            node_words,
             get_params,
             set_param,
             arrangement_defs,

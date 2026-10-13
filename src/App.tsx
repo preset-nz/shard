@@ -69,6 +69,7 @@ import {
   materialWave,
   modulatorsOf,
   newPatch,
+  nodeWords,
   type ParamInfo,
   type PatchInfo,
   type PatchPreview as PatchPreviewData,
@@ -149,6 +150,7 @@ import {
   nodeById,
   type ParamValues,
   registerParamScope,
+  setNodeWords,
 } from '@/scope';
 import { useSelection } from '@/stores/selection';
 import { FIT, minSpanFor, stepZoom, type View } from '@/waveView';
@@ -351,9 +353,10 @@ export default function App() {
         // One list of rows for the panels, patch and arrangement together.
         // Their ids never collide, since the arrangement's all start with
         // `arrangement.`, and `setParam` sends each to its own table.
-        const [pd, ad] = await Promise.all([paramDefs(), arrangementDefs()]);
+        const [pd, ad, words] = await Promise.all([paramDefs(), arrangementDefs(), nodeWords()]);
         if (cancelled) return;
         const d = [...pd, ...ad];
+        setNodeWords(words);
         registerParamScope(d);
         defsRef.current = d;
         patchRowsRef.current = pd.length;

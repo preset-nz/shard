@@ -761,6 +761,31 @@ fn none(_: &Node<'_>) -> std::result::Result<(), String> {
     Ok(())
 }
 
+/// A kind's words as the webview draws them: its id, and the label and
+/// summary its declaration carries (`design/node-documentation.md`).
+#[derive(serde::Serialize)]
+pub struct NodeWords {
+    pub id: String,
+    pub label: String,
+    pub summary: String,
+}
+
+/// The words of every kind that has a label, in registration order. The
+/// webview takes its node names from here, so a label is written once.
+pub fn node_words() -> Vec<NodeWords> {
+    kinds()
+        .iter()
+        .filter_map(|d| {
+            let t = &d.node_type;
+            Some(NodeWords {
+                id: t.name().to_string(),
+                label: t.label_text()?.to_string(),
+                summary: t.summary_text().unwrap_or_default().to_string(),
+            })
+        })
+        .collect()
+}
+
 /// Every kind Shard declares, in the order it registers them.
 pub fn kinds() -> Vec<KindDecl> {
     let mut out = Vec::new();

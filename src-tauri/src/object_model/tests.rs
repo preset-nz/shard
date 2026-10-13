@@ -466,3 +466,44 @@ fn a_session_saves_and_opens_as_rhizome_text() {
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(back.serialise(), text);
 }
+
+/// Every node the work area lists is named by its kind: the webview holds no
+/// label of its own. The expected words are what the cards have always shown.
+#[test]
+fn every_node_the_webview_lists_has_a_label() {
+    let words = node_words();
+    let label_of = |id: &str| {
+        words
+            .iter()
+            .find(|w| w.id == id)
+            .unwrap_or_else(|| panic!("{id} has no words"))
+    };
+    let shown = [
+        (PATCH, "Patch"),
+        ("material", "Sample"),
+        ("grain", "Granular"),
+        ("fm", "FM"),
+        ("noise", "Noise"),
+        ("dust", "Dust"),
+        ("env", "Envelope"),
+        ("filter", "Filter"),
+        ("ladder", "Ladder"),
+        ("amp", "Output"),
+        ("tape", "Tape"),
+        (MASTER, "Output"),
+    ];
+    for (id, label) in shown {
+        assert_eq!(label_of(id).label, label, "{id}");
+    }
+    for name in PATCH_NODES {
+        assert!(!label_of(name).label.is_empty(), "{name}");
+    }
+    for kind in Fx::ALL {
+        let w = label_of(kind.name());
+        assert_eq!(w.label, kind.label(), "{}", kind.name());
+    }
+    for w in &words {
+        assert!(!w.label.trim().is_empty(), "{} has an empty label", w.id);
+        assert!(!w.summary.trim().is_empty(), "{} has no summary", w.id);
+    }
+}

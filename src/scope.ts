@@ -29,6 +29,7 @@ import {
   ARRANGEMENT_PREFIX,
   denormalise,
   format,
+  type NodeWords,
   normalise,
   type ParamInfo,
   setParam,
@@ -70,7 +71,10 @@ export const ARRANGEMENT_LANES: Array<{ id: Lane; label: string }> = [
 
 export interface NodeInfo {
   id: string;
-  label: string;
+  /** What the node is called. Rust's: its kind's declaration (`setNodeWords`). */
+  readonly label: string;
+  /** One sentence on what it does, also from its kind. Empty until the words load. */
+  readonly summary: string;
   layer: Layer;
   /** Null for a node with no card: Tape, which lives in Settings. */
   lane: Lane | null;
@@ -94,6 +98,36 @@ export interface NodeInfo {
   fx?: { n: number; kind: string };
 }
 
+let nodeWords = new Map<string, NodeWords>();
+
+/** Takes the words from Rust, once, before any node is drawn. */
+export function setNodeWords(list: NodeWords[]): void {
+  nodeWords = new Map(list.map((w) => [w.id, w]));
+}
+
+/**
+ * The kind a node's id names: the arrangement's filter is a `filter` and its
+ * output the `master`; the rest are their own id.
+ */
+export function kindOfNode(id: string): string {
+  if (!id.startsWith(ARRANGEMENT_PREFIX)) return id;
+  const table = id.slice(ARRANGEMENT_PREFIX.length);
+  return table === 'amp' ? 'master' : table;
+}
+
+/** A node's layout facts with its words read from its kind, when asked. */
+function withWords(kind: string, n: Omit<NodeInfo, 'label' | 'summary'>): NodeInfo {
+  return {
+    ...n,
+    get label() {
+      return nodeWords.get(kind)?.label ?? '';
+    },
+    get summary() {
+      return nodeWords.get(kind)?.summary ?? '';
+    },
+  };
+}
+
 const under = (prefix: string) => (id: string) => id.startsWith(`${prefix}.`);
 
 /**
@@ -107,104 +141,95 @@ export const NODES: NodeInfo[] = [
   // The patch's settings, before the generators (Georg, 2026-09-27: "isn't
   // it before the generator, a setting for the patch?"), in the Generators
   // lane rather than a column of its own. Trial and error; may move.
-  {
+  withWords('patch', {
     layer: 'patch',
     id: 'patch',
-    label: 'Patch',
     lane: 'generate',
     table: 'patch',
     owns: under('patch'),
     setting: true,
-  },
-  {
+  }),
+  withWords('material', {
     layer: 'patch',
     id: 'material',
-    label: 'Sample',
     lane: 'generate',
     table: 'material',
     owns: under('material'),
-  },
-  {
+  }),
+  withWords('grain', {
     layer: 'patch',
     id: 'grain',
-    label: 'Granular',
     lane: 'generate',
     table: 'grain',
     owns: under('grain'),
-  },
-  {
+  }),
+  withWords('fm', {
     layer: 'patch',
     id: 'fm',
-    label: 'FM',
     lane: 'generate',
     table: 'fm',
     owns: under('fm'),
-  },
+  }),
   // The fourth generator (epic 48): noise, its kind picked by Colour.
-  {
+  withWords('noise', {
     layer: 'patch',
     id: 'noise',
-    label: 'Noise',
     lane: 'generate',
     table: 'noise',
     owns: under('noise'),
-  },
+  }),
   // The fifth generator (row 59): sparse random clicks, a tick to crackle.
-  {
+  withWords('dust', {
     layer: 'patch',
     id: 'dust',
-    label: 'Dust',
     lane: 'generate',
     table: 'dust',
     owns: under('dust'),
-  },
+  }),
   // The process lane's effects are the palette's: drawn from the chain's
   // order, below (`fxNodes`, `fxChain`). The envelope stays fixed.
-  {
+  withWords('env', {
     layer: 'patch',
     id: 'env',
-    label: 'Envelope',
     lane: 'process',
     table: 'env',
     owns: under('env'),
-  },
+  }),
   // On the master, after every effect (Georg, 2026-09-14): what takes away
   // the harmonics crush and ring add. An EQ, if one comes, sits here too.
-  {
+  withWords('filter', {
     layer: 'patch',
     id: 'filter',
-    label: 'Filter',
     lane: 'master',
     table: 'filter',
     owns: under('filter'),
-  },
+  }),
   // After the filter (epic 36, story 3): a driven 4-pole low-pass that
   // self-oscillates. The patch only; the arrangement keeps its one filter.
-  {
+  withWords('ladder', {
     layer: 'patch',
     id: 'ladder',
-    label: 'Ladder',
     lane: 'master',
     table: 'ladder',
     owns: under('ladder'),
-  },
-  { layer: 'patch', id: 'amp', label: 'Output', lane: 'master', table: 'amp', owns: under('amp') },
+  }),
+  withWords('amp', { layer: 'patch', id: 'amp', lane: 'master', table: 'amp', owns: under('amp') }),
   // The tape's feel, in Settings (Georg, 2026-09-14). Brake and reverse are
   // played from the header and slow every track, so they are the
   // arrangement's rows (`arrangement.tape.*`) and drawn on no card.
-  {
+  withWords('tape', {
     layer: 'patch',
     id: 'tape',
-    label: 'Tape',
     lane: null,
     table: null,
     owns: under('tape'),
-  },
+  }),
 ];
 
-const arrangementNode = (node: string, label: string, lane: Lane): NodeInfo => {
+const arrangementNode = (node: string, lane: Lane): NodeInfo => {
   const table = `arrangement.${node}`;
-  return { layer: 'arrangement', id: table, label, lane, table, owns: under(table) };
+  const id = table;
+  return withWords(kindOfNode(id), { layer: 'arrangement', id, lane, table, owns: under(table) });
 };
 
 /**
@@ -216,8 +241,8 @@ const arrangementNode = (node: string, label: string, lane: Lane): NodeInfo => {
 export const ARRANGEMENT_NODES: NodeInfo[] = [
   // No Drums card: each drums track's switch, fader, tune and decay are its
   // own card in the Patches lane, beside the melody tracks' (epic 28, story d).
-  arrangementNode('filter', 'Filter', 'master'),
-  arrangementNode('amp', 'Output', 'master'),
+  arrangementNode('filter', 'master'),
+  arrangementNode('amp', 'master'),
 ];
 
 export interface ParamValues {
@@ -254,15 +279,16 @@ export function fxNodes(defs: ParamInfo[], layer: Layer): NodeInfo[] {
     if (!m) continue;
     if ((layer === 'arrangement') !== Boolean(m[1])) continue;
     const table = d.id.slice(0, -'.on'.length);
-    out.push({
-      layer,
-      id: table,
-      label: d.name,
-      lane: 'process',
-      table,
-      owns: under(table),
-      fx: { n: Number(m[2]), kind: m[3] },
-    });
+    out.push(
+      withWords(m[3], {
+        layer,
+        id: table,
+        lane: 'process',
+        table,
+        owns: under(table),
+        fx: { n: Number(m[2]), kind: m[3] },
+      }),
+    );
   }
   return out;
 }

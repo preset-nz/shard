@@ -127,6 +127,15 @@ export interface GrainInfo {
 }
 
 export const paramDefs = () => invoke<ParamInfo[]>('param_defs');
+/** A node kind's words, as Rust declares them (`node_words`). */
+export interface NodeWords {
+  id: string;
+  label: string;
+  summary: string;
+}
+
+/** What each node kind is called and does, from Rust's kind declarations. */
+export const nodeWords = () => invoke<NodeWords[]>('node_words');
 export const getParams = () => invoke<number[]>('get_params');
 
 /**
