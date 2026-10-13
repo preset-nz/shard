@@ -1324,6 +1324,9 @@ export default function App() {
   const commandTable = useCommandTable();
   const selectedMute = meter.mix[selectedTrack]?.mute ?? false;
   const selectedSolo = meter.mix[selectedTrack]?.solo ?? false;
+  // Repeat Bar copies a bar into the ones after it, so a one-bar pattern has
+  // nowhere to repeat to.
+  const canRepeatBar = mode === 'tracker' && (tracker?.tracks[selectedTrack]?.length ?? 0) > 16;
   const bindings = useMemo(() => {
     const enabled: Record<string, boolean> = {
       'edit.rename': canRename,
@@ -1337,6 +1340,7 @@ export default function App() {
       'track.remove': mode === 'tracker' && canRemoveTrack,
       'track.mute': mode === 'tracker',
       'track.solo': mode === 'tracker',
+      'pattern-repeat': canRepeatBar,
     };
     // Checked as the selected track is pressed.
     const pressed: Record<string, boolean> = {
@@ -1365,6 +1369,7 @@ export default function App() {
     selectedMute,
     selectedSolo,
     waveZoomable,
+    canRepeatBar,
   ]);
   useCommands(bindings);
 
