@@ -516,3 +516,25 @@ fn a_drum_style_brings_its_tempo_unless_one_was_chosen() {
     assert!(out.contains("Kept the tempo at 140 bpm"), "{out}");
     assert_eq!(song(&mut d)["tempo"], 140.0);
 }
+
+#[test]
+fn a_revised_line_aimed_at_the_drone_leaves_one_new_track() {
+    let r = rig();
+    let mut d = Draft::of(&r.session).unwrap();
+    let bass = d.tools().get("make_bass").unwrap().clone();
+    let melody = |s: &crate::session::Session| s.tracker().melody().count();
+    let before = melody(&r.session);
+    for figure in ["ebm_pulse", "acid"] {
+        d.call(
+            &bass,
+            &json!({ "track": "Track 1", "key": "A", "feel": "dark", "figure": figure }),
+        )
+        .unwrap();
+    }
+    d.apply(&r.session, "Agent: bass").unwrap();
+    assert_eq!(
+        melody(&r.session),
+        before + 1,
+        "the revision replaced the first"
+    );
+}
