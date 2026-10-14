@@ -23,6 +23,17 @@ The worn counterpart of the delay: each repeat comes back darker, dirtier and sl
 
 ## Using it
 
+Echo repeats the sound like a loop of tape: every repeat comes back darker, dirtier and slightly unsteady. Where Delay stays clean, Echo ages.
+
+- **Mix** starts at 0%, so raise it first.
+- **Time** is the gap between echoes.
+- **Feedback** is how long they go on. Towards the top each echo feeds the next hard and the trail runs away, as in the Runaway example below.
+- **Tone** darkens the echoes. Lower is darker, and each pass loses more.
+- **Wobble** is how much the pitch of the echoes wanders.
+- **Grit** is how much saturation each echo picks up, so later echoes get dirtier.
+
+Use Delay when the repeats should stay clear, and Echo when they should sit behind the sound.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

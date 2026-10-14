@@ -23,6 +23,17 @@ A simulated space around the sound, from a small room to a long hall or plate ta
 
 ## Using it
 
+Reverb puts the sound in a space. The tail comes after the sound and blurs into it, from a small room to a long hall or a plate.
+
+- **Mix** starts at 0%, so raise it first. A little goes a long way; more pushes the sound further back.
+- **Type** is the kind of space. Room is small and close, Hall is large, and Plate is smooth and bright.
+- **Decay** is how long the tail lasts, up to 20 s.
+- **Size** is how big the space feels.
+- **Tone** is how quickly the highs die in the tail. Lower is darker.
+- **Pre-delay** is the gap before the tail begins. A longer gap keeps the dry sound clear of it, as in the Cathedral example below.
+
+Put the reverb late in the chain. An effect after it works on the tail as well.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

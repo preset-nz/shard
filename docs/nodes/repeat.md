@@ -22,6 +22,16 @@ Grabs the last slice of sound and loops it, for stutters and freezes.
 
 ## Using it
 
+Repeat captures the last slice of sound and loops it, for stutters and freezes. It needs to be played: nothing is held until Hold is raised.
+
+- **Mix** starts at 0%, so raise it first. At 100% the loop replaces the incoming sound while it holds.
+- **Hold** grabs the slice. Above halfway it loops what it grabbed, and each new rise grabs afresh. Hold it up for a freeze, or put an LFO on it for a stutter.
+- **Length** is the size of the slice, from a few milliseconds, where it buzzes at a pitch, to two seconds.
+- **Speed** plays the loop faster or slower in semitones, and the pitch moves with it.
+- **Reverse** plays the loop backwards.
+
+The three examples below are each a different use of Hold: a long freeze, a fast stutter and a slow backwards loop.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

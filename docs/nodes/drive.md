@@ -21,6 +21,15 @@ Bends the sound out of shape with a curve, then darkens it with a tone filter, f
 
 ## Using it
 
+Drive pushes the sound into a curve that flattens and bends its peaks. Low settings add warmth and body; high ones turn the sound harsh and buzzy. It is the usual first move for making something sound heavier.
+
+- **Mix** starts at 0%, so raise it first. Around 50% keeps the clean sound's shape under the grit; at 100% only the driven sound is heard.
+- **Amount** is how hard the sound hits the curve. Low is a gentle warmth, high is heavy distortion.
+- **Tone** darkens the result after the curve. Lower it when the distortion is fizzy; at the top the highs are left alone.
+- **Type** changes the character: Overdrive is soft, Distortion harder, Fuzz ragged, and Fold wraps the wave back on itself for a metallic edge.
+
+Put Drive before Crush, Ring or the Shifter and they get more harmonics to work on. See the Folded to metal example below.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

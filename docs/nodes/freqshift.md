@@ -21,6 +21,15 @@ Moves every frequency by the same number of hertz, so the sound turns inharmonic
 
 ## Using it
 
+The shifter moves every frequency by the same number of hertz. That breaks the harmonic relationships, so the sound goes inharmonic instead of changing pitch: clangs, spirals and detuned shimmer.
+
+- **Mix** starts at 0%, so raise it first.
+- **Shift** is the amount in hertz, up or down. A few hertz is a slow shimmer against the original. Hundreds of hertz is a clang, and the sound stops being pitched in a familiar way. It is at 0 Hz until you move it.
+- **Feedback** sends the shifted sound round again, so each pass moves it further. It spirals upward with a positive Shift and downward with a negative one.
+- **Spread** shifts left and right in opposite directions for width.
+
+The Shimmer example uses a very small Shift with full Spread. The Spiral example uses a larger Shift and high Feedback.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

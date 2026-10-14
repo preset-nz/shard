@@ -22,6 +22,16 @@ Shapes how each note swells in and dies away; at its neutral setting it passes t
 
 ## Using it
 
+The envelope is a section of the patch, not a chain effect. It shapes how each note swells in and dies away. At its neutral settings it leaves the sound untouched, so you only hear it once you move something.
+
+- **Mix** is how much of the shaped sound replaces the unshaped one. Zero leaves the sound as it is.
+- **Attack** is how long the sound takes to rise to full level. A long Attack is a slow swell, as in the Slow swell example.
+- **Decay** is how long it takes to fall from full level to Sustain.
+- **Sustain** is the level held until the note ends. At 0% the note dies after the Decay, giving plucks, as in Plucked words.
+- **Release** is the fade after the note ends. A short one cuts off; a long one lets notes run into each other.
+
+For generators that play from steps, such as FM, noise and dust, the envelope gives the note its length and shape.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

@@ -22,6 +22,16 @@ Clean, faithful repeats of the sound, darkened only by Tone.
 
 ## Using it
 
+Delay repeats the sound faithfully, with only Tone darkening the repeats. It is the clean one of the two; Echo is the worn one.
+
+- **Mix** starts at 0%, so raise it first.
+- **Time** is the gap between repeats. Moving it while sound plays bends the pitch of the repeats.
+- **Feedback** is how long the repeats go on. At the top they build into a long trail.
+- **Tone** darkens every pass, a little more each time. Lower it for repeats that sink into the background, as in the Dark repeats example below.
+- **Ping-pong** sends each repeat to the opposite side from the last. At 100% they alternate fully between left and right.
+
+Put the delay before a reverb, so the repeats sit in the space as well.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

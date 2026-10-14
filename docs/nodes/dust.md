@@ -22,6 +22,16 @@ Sparse random clicks, from the odd tick to a dense crackle, like dust on a recor
 
 ## Using it
 
+Dust is a generator of sparse random clicks, from the odd tick to a dense crackle, like dust on a record. It sounds alongside the other generators and starts off.
+
+- **Gain** is how loud the clicks are.
+- **Density** is the average number of clicks per second. Low gives separate ticks; in the hundreds it becomes rain, and higher it blurs into a hiss. Where the clicks land is random.
+- **Tone** is how bright each click is, from dark thuds to bright ticks.
+- **Decay** is how long each click lasts, from a needle tick to a short pop.
+- **Spread** scatters the clicks across the stereo field.
+
+For a crackle under a voice, keep Gain low and Density in the tens, as in the first example below.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

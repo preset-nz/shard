@@ -29,6 +29,19 @@ References: `grain.source`.
 
 ## Using it
 
+The grain generator cuts the sample into tiny grains and scatters them into a cloud. It ranges from a shimmer to a stuttering texture, and it sounds alongside the other generators. It starts off.
+
+- **Gain** is how loud the cloud is.
+- **Position** is where in the sample the grains come from, and **Jitter** is how far each strays from it. Without Jitter the cloud is a frozen moment; with a lot, it spreads across the sample.
+- **Size** is how long each grain is. Short grains buzz and blur. Long ones keep the sample recognisable.
+- **Density** is how many grains start each second. Sparse grains are heard one by one; dense ones fuse into a continuous sound.
+- **Pitch** shifts all the grains, and **Pitch spread** gives each a random pitch within a range.
+- **Pan spread** scatters the grains between left and right.
+- **Reverse** is the share of grains played backwards.
+- **Window** is the fade shape of each grain. Hann is smooth; Expodec clicks like a hit.
+
+A frozen shimmer takes a long Size, a high Density and some Pitch spread.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

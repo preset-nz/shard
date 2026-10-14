@@ -22,6 +22,15 @@ Two narrow boosted bands that ring like resonators on noise and whistle when swe
 
 ## Using it
 
+Peaks adds two narrow boosted bands that ring like resonators. On noise they whistle and, when swept, they sound like wind or a vocal formant moving.
+
+- **Mix** starts at 0%, so raise it first.
+- **Low** and **High** are the centres of the two bands. Move them apart for two separate resonances, or together for one strong one.
+- **Boost** is how far both bands are lifted. At high values the bands ring loudly.
+- **Width** is how wide they are. Narrow is a whistle, broad is a gentle emphasis.
+
+Peaks works best on sound that already has plenty in it, such as noise, a drum or a dense sample. Sweeping Low with an LFO is the Swept whistle example below.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

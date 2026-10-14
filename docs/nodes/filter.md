@@ -23,6 +23,17 @@ A resonant filter after all the effects, taking away the highs, the lows or ever
 
 ## Using it
 
+The filter is a section of the patch, not a chain effect. It comes after all the effects and takes away the highs, the lows, or everything outside a band. It starts off.
+
+- **Mix** is how much filtered sound is blended with the unfiltered. It starts at 100%, so it is all filtered once the filter is switched on.
+- **Cutoff** is where the filter starts to cut. Sweeping it is the main use.
+- **Resonance** emphasises the sound around the cutoff: a gentle bump at low settings, a ringing whistle at high ones.
+- **Type** sets what is kept: Low-pass keeps the lows, High-pass the highs, Band-pass a band around the cutoff.
+- **Slope** is how steeply it cuts. 12 dB is gentle, 24 dB is steep, as in the Behind a wall example.
+- **Tracking** makes the cutoff follow each step's pitch, so higher steps stay as bright as lower ones. Half follows half as far.
+
+The Ladder comes after this filter and has more bite.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

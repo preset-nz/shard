@@ -20,6 +20,14 @@ Degrades the sound by throwing away resolution and sample rate, for gritty lo-fi
 
 ## Using it
 
+Crush throws away detail. Fewer bits make the sound noisy and broken up; a lower sample rate adds a dull, metallic grain. It sounds like an old sampler or a bad digital connection.
+
+- **Mix** starts at 0%, so raise it first. At 100% the whole sound is crushed.
+- **Bits** is the resolution kept. Down to about 8 it sounds like vintage hardware; at 3 or fewer the sound is mostly noise and stepping, and at 1 little of it is left.
+- **Rate** is the sample rate the sound is reduced to. Lowering it folds the highs back down as aliasing, so the sound goes dull and inharmonic. At 48 kHz nothing is lost.
+
+Bits and Rate do different things, so set one at a time and then combine them. A Drive before Crush gives it harmonics to break up. Old sampler below is a starting point.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

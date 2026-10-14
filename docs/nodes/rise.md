@@ -23,6 +23,17 @@ Repeats that each climb in pitch from the last, so the trail rises like a siren.
 
 ## Using it
 
+Rise repeats the sound with each repeat higher in pitch than the last, so the trail climbs like a siren. A negative Shift makes it sink instead.
+
+- **Mix** starts at 0%, so raise it first.
+- **Time** is the gap between repeats.
+- **Feedback** is how many climbing repeats you hear. Higher is a longer climb.
+- **Shift** is how many semitones each repeat moves from the one before. 7 is a rising fifth each time; small values give a slow drift; negative values sink, as in the Sinking example below.
+- **Wobble** makes the shift wander, so the climb is unsteady.
+- **Tone** rolls off the highs so the top of the climb does not turn to glass.
+
+A longer Time with a high Feedback leaves room to hear each step of the climb.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

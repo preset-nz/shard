@@ -25,6 +25,18 @@ Mixes in gently detuned, swept copies of the sound to widen and thicken it.
 
 ## Using it
 
+Chorus mixes in slightly detuned, slowly swept copies of the sound. It widens and thickens it without changing the notes.
+
+- **Mix** starts at 0%, so raise it first. Around 30 to 50% is thick; higher moves the copies forward.
+- **Type** is the voicing. Chorus is plain, Ensemble is wider and more string-machine, and Choir holds copies sharp and flat so a single voice sounds like several.
+- **Rate** and **Depth** set how fast and how far the copies sweep. Slow and shallow is a gentle shimmer; fast and deep is a seasick wobble.
+- **Voices** is how many copies there are. Few of them beat against each other; many blur into a wall.
+- **Spread** moves the copies closer or further apart.
+- **Low cut** keeps the bass out of the copies so the low end stays solid.
+- **EQ** brightens or darkens the copies, not the original.
+
+The Choir example below uses eight voices.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

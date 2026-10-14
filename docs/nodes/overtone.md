@@ -22,6 +22,16 @@ Adds layers made from the sound itself: an octave down, an octave up and a fifth
 
 ## Using it
 
+Overtone builds new layers from the sound itself: one an octave down, one an octave up and one a fifth up. It adds weight underneath, brightness on top, or an organ-like stack of pitches.
+
+- **Mix** starts at 0%, so raise it first.
+- **Sub** is the octave down. Raise it to put a bass under a voice or a thin sound.
+- **Octave** is the layer an octave up, which adds air and presence.
+- **Fifth** is the layer a fifth up. It starts off, and brings an organ or power-chord quality.
+- **Tone** rolls off the highs of the added layers. Lower it to keep them from getting harsh.
+
+Each layer is its own fader, so use only the ones you want. The Organ example below uses all three.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

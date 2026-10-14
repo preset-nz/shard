@@ -22,6 +22,16 @@ A very short swept delay mixed with the dry sound, so notches sweep through it w
 
 ## Using it
 
+A flanger mixes the sound with a very short delay that sweeps, so notches move through the sound with a jet-like whoosh. Small delays are bright and thin; with feedback it rings like metal.
+
+- **Mix** starts at 0%, so raise it first. The notches are deepest at full Mix.
+- **Manual** is the delay the sweep centres on. Short is bright and thin, longer is deeper and hollower.
+- **Rate** is the speed of the sweep. Slow is a jet passing; fast is a warble.
+- **Depth** is how far the sweep travels. At a low Depth with a short Manual the delay barely moves and the flanger becomes a fixed comb filter.
+- **Feedback** sends the output back in. Positive rings, negative sounds hollow, and either way it gets more extreme towards the ends.
+
+See Slow jet and Metal comb below.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

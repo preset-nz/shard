@@ -18,6 +18,13 @@ How the tape slows, stops or runs backwards when a brake or reverse is played.
 
 ## Using it
 
+Tape is a section of the patch, not a chain effect. It has no sound of its own. It sets how the tape slows, stops or runs backwards when you play Brake or Reverse, and both are played by holding them.
+
+- **Time** is how quickly the tape slows down or comes back up to speed. Short is a snap, as in the Reverse example; long is a slow wind, as in the Brake example.
+- **Flick** is how long a quick tap on Reverse plays backwards. Hold Reverse for longer than Flick and it lasts until you let go.
+
+Brake and Reverse slow every track together. Nothing happens in Tape until one of them is played.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

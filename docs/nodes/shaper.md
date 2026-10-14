@@ -21,6 +21,15 @@ Pushes the attack and the tail of a sound up or down, by how fast it changes rat
 
 ## Using it
 
+The transient shaper changes the attack and the tail of a sound, and tells them apart by how fast the sound changes rather than how loud it is. It sharpens or softens hits, and brings out or dries up the tail.
+
+- **Mix** starts at 0%, so raise it first. A full Mix is usual here.
+- **Attack** sharpens the start of each sound when positive and softens it when negative.
+- **Sustain** lifts the tail when positive and dries it up when negative.
+- **Speed** is how long counts as the attack. Short catches only the snap; longer takes in more of the onset.
+
+Use it on drums and spoken material to make them punchier or tighter. See the Sharper consonants and Dried up examples below.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

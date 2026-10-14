@@ -24,6 +24,18 @@ A two-operator FM voice: a pitched tone that one oscillator bends with another, 
 
 ## Using it
 
+FM is a generator: a pitched tone where one oscillator bends another. It runs from a soft bell to harsh metal. It plays from the tracker's steps, so a step's pitch moves it, and it sounds alongside the other generators. It starts off.
+
+- **Gain** is how loud the tone is.
+- **Frequency** is the pitch. A step's pitch moves it.
+- **Ratio** relates the second oscillator's pitch to the first. Whole numbers sound harmonic; anything else is clangy and bell-like.
+- **Index** is how hard one oscillator bends the other. Low is a soft tone, high is bright and buzzy.
+- **Feedback** thickens the tone to a rasp and, near the top, towards noise.
+- **Drift** lets the oscillators wander off their pitch, from exact to loose.
+- **Type** changes how the oscillators bend each other. Phase holds its pitch at any Index; Exponential goes sharp as Index rises.
+
+Shape the note with the envelope: the Struck bell example needs a short Decay and no Sustain.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

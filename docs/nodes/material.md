@@ -22,6 +22,14 @@ References: `material.source`.
 
 ## Using it
 
+Material is the loaded sample played as it is, ahead of the effects. The other generators sound alongside it, and generators are summed.
+
+- **Gain** is how loud the sample goes into the effects, from silence to double. Above 100% it pushes harder into Drive and other effects that react to level.
+- **Scrub** swaps normal playback for a head that glides to Position, so you can drag through the sample like a record. Turn it on and move Position to hear the sample at the speed you move.
+- **Position** is where the scrub head sits, from the start of the sample at the left to the end at the right. It has no effect unless Scrub is on.
+
+Without Scrub, each step starts the sample at its own pitch, as in the Played from a line example. Use Gain to balance it against the other generators.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

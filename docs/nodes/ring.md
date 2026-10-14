@@ -19,6 +19,13 @@ Multiplies the sound by a tone, adding metallic, bell-like frequencies that do n
 
 ## Using it
 
+Ring modulation multiplies the sound by a tone. The result has frequencies that do not follow the original harmonics, so a voice turns into a robot and a pitched sound turns into a bell or a clang.
+
+- **Mix** starts at 0%, so raise it first. A lower Mix keeps the original recognisable with metal laid over it; at 100% only the ring-modulated sound is heard.
+- **Frequency** is the pitch of the tone. Below about 50 Hz the sound wobbles or growls. In the hundreds of hertz it clangs, and higher it becomes thin and bright.
+
+The added frequencies do not line up with the sound's own harmonics, which is why the result sounds metallic rather than musical. See the Robot and Clang examples below.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->

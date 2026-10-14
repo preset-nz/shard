@@ -22,6 +22,16 @@ Splits the sound into low, mid and high and gives each band its own echo, at tim
 
 ## Using it
 
+Band Delay splits the sound into low, mid and high and gives each band its own echo. The echo times sit in a harmonic series, so the repeats come back at related times instead of together, and moving Time bends their pitch.
+
+- **Mix** starts at 0%, so raise it first.
+- **Time** is the low band's echo time, and the others are measured from it. Moving it bends the pitch of the repeats, as in the Bent by time example.
+- **Harmonic** is how far apart the bands' times sit. At 0% all three echo together. At 100% the mid comes back at half the low band's time and the high at a third, which gives a rolling, rhythmic echo.
+- **Feedback** is how long each band's echoes keep going.
+- **Split** is where the low band meets the mid. The mid meets the high three octaves above.
+
+Compare it with Delay: the same Time there is one echo, here it is three.
+
 ## Examples
 
 <!-- examples:begin — `just examples` rewrites this block; write outside it -->
