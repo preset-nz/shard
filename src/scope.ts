@@ -187,7 +187,8 @@ export const NODES: NodeInfo[] = [
     owns: under('dust'),
   }),
   // The process lane's effects are the palette's: drawn from the chain's
-  // order, below (`fxNodes`, `fxChain`). The envelope stays fixed.
+  // order, below (`fxNodes`, `fxChain`), after the envelope, the filter and
+  // the ladder, which stay fixed.
   withWords('env', {
     layer: 'patch',
     id: 'env',
@@ -195,12 +196,12 @@ export const NODES: NodeInfo[] = [
     table: 'env',
     owns: under('env'),
   }),
-  // On the master, after every effect (Georg, 2026-09-14): what takes away
-  // the harmonics crush and ring add. An EQ, if one comes, sits here too.
+  // Before the effects, as a synth's filter is (Georg, 2026-10-15), so a
+  // drive or a crusher after it is heard; it was after them, on the master.
   withWords('filter', {
     layer: 'patch',
     id: 'filter',
-    lane: 'master',
+    lane: 'process',
     table: 'filter',
     owns: under('filter'),
   }),
@@ -209,7 +210,7 @@ export const NODES: NodeInfo[] = [
   withWords('ladder', {
     layer: 'patch',
     id: 'ladder',
-    lane: 'master',
+    lane: 'process',
     table: 'ladder',
     owns: under('ladder'),
   }),

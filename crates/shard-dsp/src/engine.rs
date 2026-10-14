@@ -3321,19 +3321,17 @@ mod tests {
     }
 
     #[test]
-    fn under_hold_the_amplitude_envelope_decides_whether_the_tails_of_effects_are_heard() {
-        // KNOWN, AND OPEN FOR GEORG (handover-effects.md): the envelope sits
-        // after the effect chain, as it did before the time-based effects, so
-        // under Hold it closes on the whole signal when the note ends, tails
-        // included. With the envelope off, the delay's repeats ring on.
+    fn under_hold_the_tails_of_effects_ring_past_the_amplitude_envelope() {
+        // The effects follow the envelope (Georg, 2026-10-15), so when Hold
+        // closes it on the note, a delay's repeats ring on as they do with
+        // the envelope off. They used to close with it.
         let tail = |v: &[f32]| v[40..80].iter().fold(0.0f32, |m, p| m.max(*p));
         let without = tail(&note_through_a_delay(0.0));
         let with = tail(&note_through_a_delay(1.0));
         assert!(without > 0.05, "no repeats to measure: {without}");
         assert!(
-            with < 0.1 * without,
-            "the envelope no longer cuts the tails ({with} against {without}): \
-             if that is on purpose, update this test and the handover"
+            with > 0.5 * without,
+            "the envelope cuts the tails again ({with} against {without})"
         );
     }
 
@@ -3879,7 +3877,8 @@ mod tests {
 
     #[test]
     fn switching_between_the_patch_alone_and_arranged_does_not_click() {
-        let worst_step = |toggle: bool| {
+        // `None` switches every 25 blocks; `Some(alone)` stays put.
+        let worst_step = |stay: Option<bool>| {
             let mut e = Engine::new(48_000.0, 128);
             e.set_source(tone(48_000));
             e.set_playing(true);
@@ -3889,7 +3888,7 @@ mod tests {
             let mut out = vec![0.0; 256];
             let (mut prev, mut worst) = (0.0f32, 0.0f32);
             for block in 0..400 {
-                let alone = toggle && (block / 25) % 2 == 1;
+                let alone = stay.unwrap_or((block / 25) % 2 == 1);
                 e.set_arrangement(&arr, alone);
                 e.process_block(&mut out, &bank);
                 for s in out.iter().step_by(2) {
@@ -3901,8 +3900,11 @@ mod tests {
             }
             worst
         };
-        let steady = worst_step(false);
-        let switched = worst_step(true);
+        // Steady is the rougher of the two paths held: the patch alone has
+        // no arrangement filter after its crusher, so its own steps are
+        // larger than the arranged mix's.
+        let steady = worst_step(Some(false)).max(worst_step(Some(true)));
+        let switched = worst_step(None);
         assert!(
             switched < steady * 2.0 + 0.02,
             "switching jumped by {switched} against a steady {steady}"

@@ -1105,7 +1105,7 @@ impl Voice {
     /// One frame of this voice, after the patch's chain and before the
     /// arrangement: the step clock ticked at `beat` on the transport (which
     /// swings by `swing`), the generators summed at the tape's speed, the
-    /// patch's effects, envelope, filter and output, and the voice's own
+    /// patch's envelope, filter, ladder, effects and output, and the voice's own
     /// fade in or out.
     #[inline]
     pub(crate) fn frame(&mut self, tape: Tape, beat: &Beat, swing: f32) -> (f32, f32) {
@@ -1317,7 +1317,6 @@ impl Voice {
         // one before it left in a delay or a reverb.
         let vel = self.vel.process(self.vel_target);
         let (l, r) = (l * vel, r * vel);
-        let (l, r) = self.fx.front(l, r, fx);
 
         // A stopping reel loses level as well as pitch, because the head
         // stops seeing tape. Without this the last of the brake is a cloud
@@ -1348,18 +1347,17 @@ impl Voice {
             faded_env.gain_of(self.note.amp_shape)
         };
         let (l, r) = (l * e, r * e);
-        // Free noise joins here: past the note level, the velocity, the
-        // patch's process lane and the envelope, so it sounds through the
-        // envelope's zero and Hold's fall. The filter, the ladder and the
-        // output still shape it.
+        // Free noise joins here: past the note level, the velocity and the
+        // envelope, so it sounds through the envelope's zero and Hold's
+        // fall. The filter, the ladder, the effects and the output still
+        // shape it.
         let (l, r) = if run > 0.0 {
             (l + free.0, r + free.1)
         } else {
             (l, r)
         };
 
-        // The filter, on the master: after every generator, effect and
-        // the envelope, then the master gain.
+        // The filter, after every generator and the envelope.
         // The cutoff follows the step's pitch from the frame it lands on; the
         // filter's own cutoff smoother glides it. Off multiplies by exactly 1.
         let follow = |tracking: f32| {
@@ -1370,13 +1368,18 @@ impl Voice {
             }
         };
         let (l, r) = self.fx.filter_tracked(l, r, fx, follow(b.filter_tracking));
-        // The ladder, after the filter and before the output gain; its own
-        // tracking, so the clean filter can stay put while it follows.
+        // The ladder, after the filter; its own tracking, so the clean
+        // filter can stay put while it follows.
         let ladder = LadderParams {
             cutoff_hz: b.ladder.cutoff_hz * follow(b.ladder_tracking),
             ..b.ladder
         };
         let (l, r) = self.ladder.process(l, r, &ladder);
+        // The process lane last, before the master gain, as a synth's
+        // effects follow its filter (Georg, 2026-10-15): a drive or a
+        // crusher is heard, not darkened by a filter after it, and a delay
+        // or a reverb rings past the note instead of closing with it.
+        let (l, r) = self.fx.front(l, r, fx);
         let (l, r) = self.fx.output(l, r, fx);
 
         // The note clock runs on tape time, as the grain scheduler does:

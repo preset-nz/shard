@@ -2087,15 +2087,21 @@ export default function App() {
                           }
                         />
                       ))}
-                    {[
-                      // The chain first, in its order; then the sections, drawn
-                      // at their defaults until a write makes them.
-                      ...(lane.id === 'process' ? chain : []),
-                      ...(mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
+                    {(() => {
+                      // The sections, drawn at their defaults until a write
+                      // makes them, and the chain in its order: in signal
+                      // order, so a patch's envelope, filter and ladder come
+                      // before its effects, and the arrangement's chain
+                      // before its filter.
+                      const sections = (mode === 'tracker' ? ARRANGEMENT_NODES : NODES)
                         .filter((n: NodeInfo) => n.lane === lane.id && !n.fx)
                         // A generator the patch lacks has no card; the tree adds it.
-                        .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id)),
-                    ].map((node) => (
+                        .filter((n: NodeInfo) => mode === 'tracker' || !absent.has(n.id));
+                      const effects = lane.id === 'process' ? chain : [];
+                      return mode === 'tracker'
+                        ? [...effects, ...sections]
+                        : [...sections, ...effects];
+                    })().map((node) => (
                       <NodeCard
                         key={node.id}
                         node={node}
