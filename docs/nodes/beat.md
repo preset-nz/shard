@@ -17,4 +17,4 @@ One position in a drums track's grid: how hard each drum hits there.
 | Hat | 0 to 127 | 0 | How hard the hat hits on this step; 0 is silent. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

@@ -21,4 +21,4 @@ A resonant filter after all the effects, taking away the highs, the lows or ever
 | Tracking | Off, Half, Full | Off | How far the cutoff follows each step's pitch: off, half, or a full octave for every octave. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

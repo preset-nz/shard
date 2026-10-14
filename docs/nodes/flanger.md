@@ -20,4 +20,4 @@ A very short swept delay mixed with the dry sound, so notches sweep through it w
 | Feedback | -95% to 95% | 50% | Sends the output back in: negative gives a hollow comb, positive a ringing one. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

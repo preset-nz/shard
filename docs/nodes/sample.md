@@ -21,4 +21,4 @@ A WAV file, or the built-in drone, that a generator reads and plays.
 | Regions | structured | empty | Marked stretches of the file, as fractions of its length. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

@@ -19,4 +19,4 @@ Bends the sound out of shape with a curve, then darkens it with a tone filter, f
 | Type | Overdrive, Distortion, Fuzz, Fold | Overdrive | The shape of the curve: Overdrive is soft, Distortion is harder, Fuzz is ragged, and Fold wraps the wave back on itself. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

@@ -21,4 +21,4 @@ Repeats that each climb in pitch from the last, so the trail rises like a siren.
 | Tone | 800 Hz to 14 kHz | 6 kHz | Rolls off the highs so the climbing repeats do not turn to glass. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

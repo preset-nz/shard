@@ -20,7 +20,7 @@ A driven four-pole low-pass after the patch filter, modelled on the Moog ladder:
 | Tracking | Off, Half, Full | Off | How far the ladder's cutoff follows each step's pitch: off, half, or full, separate from the filter's own. |
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 The patch has two filters. The first is clean and exact. The Ladder comes after it and is neither: it is the second, analogue half of a digital-then-analogue pair, so an FM body and a sampled top can go through one dirty low-pass together.
 

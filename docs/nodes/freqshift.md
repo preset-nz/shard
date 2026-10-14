@@ -19,4 +19,4 @@ Moves every frequency by the same number of hertz, so the sound turns inharmonic
 | Spread | 0% to 100% | 0% | Shifts the left and right sides in opposite directions, for width. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

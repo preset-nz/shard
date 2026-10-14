@@ -26,4 +26,4 @@ A drum kit played by a grid of kick, snare and hat hits.
 References: `drums.duck`.
 <!-- generated:end -->
 
-## What it's for
+## Using it

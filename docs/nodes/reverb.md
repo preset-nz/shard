@@ -21,4 +21,4 @@ A simulated space around the sound, from a small room to a long hall or plate ta
 | Pre-delay | 0 ms to 200 ms | 12 ms | The gap before the tail starts, which keeps the dry sound clear of it. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

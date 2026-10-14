@@ -20,4 +20,4 @@ Adds layers made from the sound itself: an octave down, an octave up and a fifth
 | Tone | 500 Hz to 16 kHz | 5 kHz | Where the highs of the layers are rolled off. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

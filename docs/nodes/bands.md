@@ -20,4 +20,4 @@ Splits the sound into low, mid and high and gives each band its own echo, at tim
 | Split | 100 Hz to 5 kHz | 800 Hz | Where the low band meets the mid; the mid meets the high three octaves above. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

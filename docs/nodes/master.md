@@ -17,4 +17,4 @@ The arrangement's master level and limiter, after every track and effect.
 | Ceiling | 50% to 100% | 95% | The level the limiter holds the mix under. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

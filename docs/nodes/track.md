@@ -23,4 +23,4 @@ A row of steps that plays one patch as a melody.
 References: `track.patch`, `track.duck`.
 <!-- generated:end -->
 
-## What it's for
+## Using it

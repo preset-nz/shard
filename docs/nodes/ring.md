@@ -17,4 +17,4 @@ Multiplies the sound by a tone, adding metallic, bell-like frequencies that do n
 | Frequency | 1 Hz to 5 kHz | 140 Hz | The pitch of the tone the sound is multiplied by: low values wobble, high values clang. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

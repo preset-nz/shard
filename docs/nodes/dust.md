@@ -20,4 +20,4 @@ Sparse random clicks, from the odd tick to a dense crackle, like dust on a recor
 | Spread | 0% to 100% | 50% | How widely the clicks scatter across the stereo field; none puts every click in the centre. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

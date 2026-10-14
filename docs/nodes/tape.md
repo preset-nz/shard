@@ -16,4 +16,4 @@ How the tape slows, stops or runs backwards when a brake or reverse is played.
 | Flick | 50 ms to 500 ms | 150 ms | How long a quick tap on reverse plays backwards; hold it longer and the reverse lasts until you let go. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

@@ -19,4 +19,4 @@ One position in a track's row: whether it plays, and how.
 | Nudge | -50 ms to 50 ms | 0 ms | Moves the note earlier or later than the grid. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

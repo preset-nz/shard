@@ -20,4 +20,4 @@ Grabs the last slice of sound and loops it, for stutters and freezes.
 | Reverse | 0 to 1 | 0 | Plays the loop backwards. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

@@ -22,4 +22,4 @@ A two-operator FM voice: a pitched tone that one oscillator bends with another, 
 | Type | Phase, Linear, Exponential | Phase | How the oscillators bend each other: Phase holds its pitch at any Index, Linear drifts in pitch once Feedback is up, and Exponential goes sharp as Index rises, as an analogue VCO does. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

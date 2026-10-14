@@ -19,4 +19,4 @@ Pushes the attack and the tail of a sound up or down, by how fast it changes rat
 | Speed | 1 ms to 50 ms | 10 ms | How long counts as the attack, from snappy to slow. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

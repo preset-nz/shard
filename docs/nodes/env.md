@@ -20,4 +20,4 @@ Shapes how each note swells in and dies away; at its neutral setting it passes t
 | Release | 0 ms to 4 s | 0 ms | How long the sound takes to fade to silence once the note ends. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

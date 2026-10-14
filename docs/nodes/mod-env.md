@@ -24,4 +24,4 @@ A binding from it carries:
 | High | 0 to 1 | 1 | Where the linked control sits when the modulator is at its highest, from the bottom to the top of its range. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

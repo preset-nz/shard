@@ -18,4 +18,4 @@ One sound: its generators, effects and settings, played by one or more tracks.
 | Controller map | structured | empty | The controller map this patch plays with, by its id in the app's own list. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

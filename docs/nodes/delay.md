@@ -20,4 +20,4 @@ Clean, faithful repeats of the sound, darkened only by Tone.
 | Ping-pong | 0% to 100% | 0% | Sends each repeat to the opposite side from the last. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

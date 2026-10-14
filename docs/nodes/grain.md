@@ -27,4 +27,4 @@ Cuts the sample into tiny grains and scatters them into a cloud, anywhere from a
 References: `grain.source`.
 <!-- generated:end -->
 
-## What it's for
+## Using it

@@ -21,4 +21,4 @@ The worn counterpart of the delay: each repeat comes back darker, dirtier and sl
 | Grit | 0% to 100% | 30% | How much saturation each echo picks up. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

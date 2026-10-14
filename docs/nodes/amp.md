@@ -15,4 +15,4 @@ The patch's master level, after every generator and effect.
 | Gain | 0% to 200% | 100% | The master level, after every generator and effect; 100% leaves the sound as it is. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

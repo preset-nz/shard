@@ -21,7 +21,7 @@ A continuous noise generator, from low rumble to bright hiss, with an optional p
 | Run | Notes, Free | Notes | Whether the noise follows the notes (Notes) or sounds for as long as the transport plays, past the envelope (Free). |
 <!-- generated:end -->
 
-## What it's for
+## Using it
 
 Both glitch techniques this was built from start the same way: take noise, put it through something unstable, record what happens, and harvest the takes. Noise is the raw material that has every frequency in it, so whatever comes after it decides what you hear.
 

@@ -21,4 +21,4 @@ Tape that has been looked after badly: pitch wobble, lurching, level dropouts an
 | Dull | 0% to 100% | 40% | Closes a low-pass that follows the level, so quiet parts go muffled. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

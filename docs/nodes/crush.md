@@ -18,4 +18,4 @@ Degrades the sound by throwing away resolution and sample rate, for gritty lo-fi
 | Rate | 200 Hz to 48 kHz | 48 kHz | The sample rate the sound is reduced to; lower adds aliasing and a dull, metallic grain. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

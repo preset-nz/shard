@@ -16,4 +16,4 @@ The level above the patches: tempo, swing and the tracks of steps that play them
 | Swing | 0 to 0.5 | 0 | How far the even steps are pushed late, as a fraction of a sixteenth; 0 is straight. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

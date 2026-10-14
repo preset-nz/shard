@@ -20,4 +20,4 @@ Two narrow boosted bands that ring like resonators on noise and whistle when swe
 | Width | 0% to 100% | 20% | How wide the bands are, from narrow and whistling to broad. |
 <!-- generated:end -->
 
-## What it's for
+## Using it

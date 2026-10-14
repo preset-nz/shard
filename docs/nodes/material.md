@@ -20,4 +20,4 @@ The loaded sample played as it is, ahead of the effects; the other generators so
 References: `material.source`.
 <!-- generated:end -->
 
-## What it's for
+## Using it

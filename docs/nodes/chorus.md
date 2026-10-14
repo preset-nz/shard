@@ -23,4 +23,4 @@ Mixes in gently detuned, swept copies of the sound to widen and thicken it.
 | EQ | -12 dB to 12 dB | 0 dB | Tilts the copies darker or brighter without touching the original sound. |
 <!-- generated:end -->
 
-## What it's for
+## Using it
