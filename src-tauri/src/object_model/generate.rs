@@ -22,6 +22,7 @@ use super::Shard;
 use crate::music::drums::{self, STYLES};
 use crate::music::line::{self, Figure, Harmony, Pattern, OCTAVES_MAX, RATES};
 use crate::music::{self, Mode, Progression, Register, PROGRESSIONS};
+use shard_dsp::VOICES;
 
 pub const MAKE_DRUMS: &str = "shard.make_drums";
 pub const MAKE_BASS: &str = "shard.make_bass";
@@ -297,7 +298,9 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         }
     };
 
-    // Which track, before writing, to say if it plays the drone.
+    // A line never lands on the built-in drone: one aimed at a track that
+    // plays it goes to a new track with a sound of its own, while there is
+    // room for one.
     let tracker = d.projection().tracker.clone();
     let target = commands::resolve(&tracker, p, false)?;
     let drone = match target {
@@ -307,13 +310,19 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         }
         Target::New => None,
     };
+    let moved = drone.is_some() && tracker.melody().count() < VOICES;
+    let track = if moved {
+        json!("new")
+    } else {
+        p.get("track").cloned().unwrap_or(Json::Null)
+    };
 
     let steps: Vec<Json> = notes
         .iter()
         .map(|n| json!({ "step": n.step + 1, "note": n.note, "velocity": n.velocity, "hold": n.hold }))
         .collect();
     let payload = json!({
-        "track": p.get("track").cloned().unwrap_or(Json::Null),
+        "track": track,
         "length": length,
         "steps": steps,
     });
@@ -349,11 +358,19 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
             if bars == 1 { "" } else { "s" }
         );
     }
-    if let Some(track) = drone {
-        out += &format!(
-            ". {track} plays the built-in drone, not a {} sound; send track \"new\" for a track with a sound of its own",
-            if role == Role::Arp { "arp" } else { "bass" }
-        );
+    let sound = if role == Role::Arp { "arp" } else { "bass" };
+    match drone {
+        Some(track) if moved => {
+            out = format!(
+                "{track} plays the built-in drone, so the {sound} went on a new track instead. {out}"
+            );
+        }
+        Some(track) => {
+            out += &format!(
+                ". {track} plays the built-in drone, not a {sound} sound, and the song has no room for another track"
+            );
+        }
+        None => {}
     }
     Ok(out)
 }

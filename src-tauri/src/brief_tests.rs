@@ -163,19 +163,32 @@ fn a_new_bass_gets_a_driven_fm_patch_and_an_arp_a_brighter_one() {
 }
 
 #[test]
-fn a_line_over_a_drone_track_is_written_and_says_so() {
+fn a_line_aimed_at_a_drone_track_goes_to_a_new_track_and_says_so() {
     let mut d = doc();
+    let before = song(&mut d);
     let out = run(
         &mut d,
         MAKE_BASS,
         json!({ "track": "Track 1", "key": "E", "progression": "i-bVI", "figure": "sparse" }),
     )
     .unwrap();
-    assert!(out.starts_with("Wrote Track 1:"), "{out}");
-    assert!(out.contains("Track 1 plays the built-in drone"), "{out}");
-    assert!(out.contains("send track \"new\""), "{out}");
+    assert!(
+        out.starts_with("Track 1 plays the built-in drone, so the bass went on a new track instead. Wrote Track 2:"),
+        "{out}"
+    );
+    assert!(out.contains("on a new FM bass patch of its own"), "{out}");
     let s = song(&mut d);
-    assert!(!track(&s, "Track 1")["steps"].as_array().unwrap().is_empty());
+    assert_eq!(track(&s, "Track 1"), track(&before, "Track 1"), "untouched");
+    assert!(!track(&s, "Track 2")["steps"].as_array().unwrap().is_empty());
+
+    // On a track with a sound of its own, the line goes where it was sent.
+    let out = run(
+        &mut d,
+        MAKE_BASS,
+        json!({ "track": "Track 2", "key": "E", "progression": "i", "figure": "gallop" }),
+    )
+    .unwrap();
+    assert!(out.starts_with("Wrote Track 2:"), "{out}");
 }
 
 #[test]
