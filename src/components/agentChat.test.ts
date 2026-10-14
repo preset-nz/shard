@@ -3,7 +3,7 @@ import type { AgentEvent } from '@/lib/agent';
 import { emptyConversation, isStreaming, reduceChat, type Turn, transcript } from './agentChat';
 
 const run = (events: AgentEvent[]) => events.reduce(reduceChat, emptyConversation);
-const start: AgentEvent = { kind: 'start', prompt: 'a beat', model: 'qwen' };
+const start: AgentEvent = { kind: 'start', prompt: 'a beat', model: 'qwen', considered: false };
 const assistant = (turns: Turn[]) => {
   const t = turns[turns.length - 1];
   if (t?.from !== 'assistant') throw new Error('no assistant turn');
@@ -115,7 +115,12 @@ describe('reduceChat', () => {
 
 describe('transcript', () => {
   it('writes every turn with tool arguments and results', () => {
-    let chat = reduceChat(emptyConversation, { kind: 'start', prompt: 'a bass', model: 'qwen' });
+    let chat = reduceChat(emptyConversation, {
+      kind: 'start',
+      prompt: 'a bass',
+      model: 'qwen',
+      considered: false,
+    });
     chat = reduceChat(chat, { kind: 'text', delta: 'Here it is.' });
     chat = reduceChat(chat, {
       kind: 'tool',

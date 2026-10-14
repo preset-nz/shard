@@ -1042,6 +1042,16 @@ fn agent_dump(
         serde_json::to_string(&settings.sampling).unwrap_or_default()
     );
     write("agent.log", header + &log.render())?;
+    // The same, for `evals/agent/agent_logs.py`. `model` here is the
+    // setting ("" is auto); each `start` names the model asked.
+    let head = serde_json::json!({
+        "kind": "header",
+        "version": env!("CARGO_PKG_VERSION"),
+        "base_url": settings.base_url,
+        "model": settings.model,
+        "sampling": settings.sampling,
+    });
+    write("agent.jsonl", format!("{head}\n{}", log.jsonl()))?;
     Ok(dir.display().to_string())
 }
 

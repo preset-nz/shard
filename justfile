@@ -159,6 +159,12 @@ package: build
 eval-agent *args:
     python3 evals/agent/agent_eval.py {{args}}
 
+# Example: just agent-logs search 'kind:tool refused'
+# Index File > Save Agent Session's folders: digests, a table, full-text search
+[group('eval')]
+agent-logs *args="build":
+    python3 evals/agent/agent_logs.py {{args}}
+
 # Take every dependency update the version ranges allow into the lockfiles,
 # and rescan the licence lock. `release` runs it first.
 [group('build')]

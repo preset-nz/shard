@@ -30,7 +30,7 @@ export type AgentStopReason = 'cancelled' | 'time' | 'tokens' | 'turns' | 'loopi
  */
 export type AgentEvent =
   /** `model` is the model asked, or empty when none could be (an `error` follows). */
-  | { kind: 'start'; prompt: string; model: string }
+  | { kind: 'start'; prompt: string; model: string; considered: boolean }
   | { kind: 'text'; delta: string }
   | { kind: 'reasoning'; delta: string }
   | {

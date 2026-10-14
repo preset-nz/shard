@@ -32,37 +32,56 @@ impl Log {
         self.lines.is_empty()
     }
 
-    /// The log as text. Streamed deltas of one kind run together into one
-    /// block, so a reply reads as what was said.
+    /// The events with streamed deltas of one kind run together into one,
+    /// so a reply reads as what was said. Each keeps the seconds its first
+    /// delta arrived at.
+    fn blocks(&self) -> Vec<(f64, Event)> {
+        let mut out: Vec<(f64, Event)> = Vec::new();
+        for (at, event) in &self.lines {
+            if let Some((_, last)) = out.last_mut() {
+                match (last, event) {
+                    (Event::Text { delta: d }, Event::Text { delta })
+                    | (Event::Reasoning { delta: d }, Event::Reasoning { delta }) => {
+                        d.push_str(delta);
+                        continue;
+                    }
+                    _ => {}
+                }
+            }
+            out.push((*at, event.clone()));
+        }
+        out
+    }
+
+    /// The log as JSON lines, for `evals/agent/agent_logs.py`: one event a
+    /// line, tagged as it crossed to the webview, with `at` in seconds.
+    pub fn jsonl(&self) -> String {
+        let mut out = String::new();
+        for (at, event) in self.blocks() {
+            let mut line = serde_json::to_value(&event).unwrap_or_default();
+            line["at"] = serde_json::json!((at * 100.0).round() / 100.0);
+            out.push_str(&line.to_string());
+            out.push('\n');
+        }
+        out
+    }
+
+    /// The log as text.
     pub fn render(&self) -> String {
         let mut out = String::new();
-        // Which streamed block is open, so the next delta of that kind joins it.
-        let mut open: Option<&str> = None;
-        for (at, event) in &self.lines {
-            let (kind, delta) = match event {
-                Event::Text { delta } => ("text", Some(delta)),
-                Event::Reasoning { delta } => ("reasoning", Some(delta)),
-                _ => ("", None),
-            };
-            if let Some(delta) = delta {
-                if open != Some(kind) {
-                    if open.is_some() {
-                        out.push('\n');
-                    }
-                    out.push_str(&format!("[{at:8.2}s] {kind}:\n"));
-                    open = Some(kind);
-                }
-                out.push_str(delta);
-                continue;
-            }
-            if open.take().is_some() {
-                out.push('\n');
-            }
+        for (at, event) in self.blocks() {
             out.push_str(&format!("[{at:8.2}s] "));
             match event {
-                Event::Start { prompt, model } => {
-                    out.push_str(&format!("start, model {model:?}\nprompt: {prompt}\n"))
-                }
+                Event::Text { delta } => out.push_str(&format!("text:\n{delta}\n")),
+                Event::Reasoning { delta } => out.push_str(&format!("reasoning:\n{delta}\n")),
+                Event::Start {
+                    prompt,
+                    model,
+                    considered,
+                } => out.push_str(&format!(
+                    "start, {}, model {model:?}\nprompt: {prompt}\n",
+                    if considered { "considered" } else { "quick" }
+                )),
                 Event::Tool {
                     name,
                     args,
@@ -70,7 +89,7 @@ impl Log {
                     ok,
                 } => out.push_str(&format!(
                     "tool {name} {}\nargs: {args}\nresult: {result}\n",
-                    if *ok { "ok" } else { "refused" }
+                    if ok { "ok" } else { "refused" }
                 )),
                 Event::Stopped { reason } => out.push_str(&format!("stopped: {reason:?}\n")),
                 Event::Note { text } => out.push_str(&format!("note: {text}\n")),
@@ -78,11 +97,7 @@ impl Log {
                 Event::Done { applied, label } => {
                     out.push_str(&format!("done, applied {applied}, undo step {label:?}\n\n"))
                 }
-                Event::Text { .. } | Event::Reasoning { .. } => {}
             }
-        }
-        if open.is_some() {
-            out.push('\n');
         }
         out
     }
@@ -101,6 +116,7 @@ mod tests {
             Event::Start {
                 prompt: "a beat".into(),
                 model: "m".into(),
+                considered: true,
             },
             Event::Reasoning {
                 delta: "Four on ".into(),
@@ -129,5 +145,17 @@ mod tests {
         assert!(text.contains("tool set_tempo ok"));
         assert!(text.contains("text:\nDone.\n"));
         assert!(text.contains("prompt: a beat"));
+        assert!(text.contains("start, considered"));
+
+        let lines: Vec<serde_json::Value> = log
+            .jsonl()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect();
+        let kinds: Vec<&str> = lines.iter().map(|l| l["kind"].as_str().unwrap()).collect();
+        assert_eq!(kinds, ["start", "reasoning", "tool", "text", "done"]);
+        assert_eq!(lines[1]["delta"], "Four on the floor.");
+        assert_eq!(lines[0]["considered"], true);
+        assert!(lines.iter().all(|l| l["at"].is_number()));
     }
 }

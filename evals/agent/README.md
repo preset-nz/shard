@@ -20,6 +20,13 @@ towards the agent player; the design and the results live in the guidance repo
   reasoning setting, appending to `results/` (not in git) as it goes.
   `agent_eval.py report` summarises.
 
+- `agent_logs.py` reads what the app saved rather than asking a model:
+  every folder File > Save Agent Session wrote. `just agent-logs` writes a
+  `digest.md` per session (each reply's tool calls, stops, retries, how much
+  of its reasoning repeats, the reasoning in full), an `index.md` across them
+  and an `index.sqlite` with full-text search, all beside the folders in app
+  data. `just agent-logs search 'drone'`, `just agent-logs replies`.
+
 ```sh
 just eval-agent run --model qwen/qwen3.6-35b-a3b --variant fewshot schema --think off on --reps 3
 just eval-agent report evals/agent/results/*.jsonl

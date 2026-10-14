@@ -468,6 +468,7 @@ pub fn respond_with(
     emit(Event::Start {
         prompt: prompt.to_string(),
         model: chosen.clone().unwrap_or_default(),
+        considered,
     });
     let name = match chosen {
         Ok(name) => name,

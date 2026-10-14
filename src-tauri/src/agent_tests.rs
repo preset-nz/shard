@@ -408,6 +408,7 @@ fn a_whole_reply_is_one_undo_step_that_takes_new_tracks_and_patches_with_it() {
         Some(&Event::Start {
             prompt: "a  dark bassline and a beat".into(),
             model: String::new(),
+            considered: false,
         })
     );
     assert_eq!(
@@ -710,7 +711,8 @@ fn a_model_that_cant_be_chosen_stops_the_reply_before_it_starts() {
         vec![
             Event::Start {
                 prompt: "a beat".into(),
-                model: String::new()
+                model: String::new(),
+                considered: false,
             },
             Event::Error {
                 message: "No model loaded in LM Studio. Load one there, then ask again.".into()

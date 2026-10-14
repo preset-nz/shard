@@ -65,6 +65,8 @@ pub enum Event {
         prompt: String,
         /// The model asked, or empty when none could be.
         model: String,
+        /// Reasoning on (Considered), not Quick.
+        considered: bool,
     },
     Text {
         delta: String,
