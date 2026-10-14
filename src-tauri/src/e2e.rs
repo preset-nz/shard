@@ -48,6 +48,17 @@ fn silent((mut grid, params, gain): Drums) -> Drums {
 fn open(path: &str) -> (Loaded, crate::session::LoadReport) {
     let rig = rig();
     let report = rig.session.open(Path::new(path)).expect("the file opens");
+    // The first melody track's patch made current, so the bank and the
+    // modulation rendered are what that track plays, not the first patch.
+    let first = rig
+        .session
+        .tracker()
+        .slots()
+        .iter()
+        .position(|s| matches!(s, crate::tracker::Slot::Melody(_)));
+    if let Some(place) = first {
+        rig.session.select_track(place).expect("the track selects");
+    }
     // What the first melody track's voice plays, its steps on the
     // transport, and the first drums track's kit; none, a silent one.
     let plan = rig.session.plan();
