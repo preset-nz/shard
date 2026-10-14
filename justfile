@@ -159,6 +159,14 @@ package: build
 eval-agent *args:
     python3 evals/agent/agent_eval.py {{args}}
 
+# Start `just run` fresh first; `--rehearse` runs it unrecorded, in Quick.
+# A scripted, recorded demo: a prompt to the agent, then shaping the bass
+[group('eval')]
+demo *args:
+    mkdir -p target/demo
+    for t in rec ui ax; do swiftc -O scripts/demo/$t.swift -o target/demo/$t; done
+    python3 scripts/demo/shard_demo.py {{args}}
+
 # Example: just agent-logs search 'kind:tool refused'
 # Index File > Save Agent Session's folders: digests, a table, full-text search
 [group('eval')]
