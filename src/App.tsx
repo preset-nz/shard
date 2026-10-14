@@ -155,6 +155,7 @@ import {
 } from '@/scope';
 import { useSelection } from '@/stores/selection';
 import { FIT, minSpanFor, stepZoom, type View } from '@/waveView';
+import { agentDump } from './lib/agent';
 
 /**
  * How many spawns the inspector keeps.
@@ -639,7 +640,7 @@ export default function App() {
   // The document's name and unsaved mark, from app-kit, which owns File's
   // New, Open, Open Recent, Save and Revert, reopens the last document at
   // launch and takes documents from Finder.
-  const document_ = useDocument();
+  useDocument();
   useDocumentNotes(setNote);
 
   // A document replaced the one on screen: opened, reverted, restored at
@@ -1282,6 +1283,12 @@ export default function App() {
           setNote('Select a region in the waveform first (click its numbered tab), then Extract.');
         }
         break;
+      case 'file-save-agent-session':
+        void agentDump().then(
+          (dir) => setNote(`Saved the session and agent log to ${dir}`),
+          (e) => setNote(String(e)),
+        );
+        break;
       case 'file-detect-regions':
         if (shownRecord) void findRegions(shownRecord.id, detectSensitivity);
         break;
@@ -1589,9 +1596,6 @@ export default function App() {
           >
             Rewind
           </button>
-
-          <span className="text-sm font-semibold tracking-tight">Shard</span>
-          <span className="text-xs text-muted-foreground">{document_?.title ?? 'Untitled-1'}</span>
         </header>
 
         <div className="flex min-h-0 flex-1">

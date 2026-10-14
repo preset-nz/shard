@@ -2439,6 +2439,14 @@ impl Session {
         saved
     }
 
+    /// The session as a file would hold it, mute and solo included, without
+    /// saving: the document's path and its unsaved mark are untouched.
+    pub fn snapshot(&self) -> Result<String, String> {
+        let doc = lock(&self.doc);
+        let sent = lock(&self.sent);
+        with_mix(doc.tree(), &sent.mix)
+    }
+
     /// The file the session was opened from or last saved to.
     pub fn path(&self) -> Option<PathBuf> {
         self.read(|d| d.path().map(Path::to_path_buf))

@@ -24,6 +24,9 @@ pub const TRACK_ADD_DRUMS: &str = "track.add:drums";
 /// View > Agent: the agent panel, shown or hidden (roadmap row 24).
 pub const VIEW_AGENT: &str = "view-agent";
 
+/// File > Save Agent Session: dumps the session and the agent's log.
+pub const SAVE_AGENT_SESSION: &str = "file-save-agent-session";
+
 /// File > Record Take (epic 44). The title reads `STOP_TITLE` while a take runs.
 pub const RECORD_TAKE: &str = "file-record-take";
 const RECORD_TITLE: &str = "Record Take";
@@ -175,6 +178,8 @@ pub fn commands() -> Vec<Command> {
         // transients. Shift+Cmd+E is the menu standard's Export.
         file("file-extract-region", "Extract Region", 1),
         file("file-detect-regions", "Detect Regions", 1),
+        // The session and the agent's log, in a folder, for looking into a run.
+        file(SAVE_AGENT_SESSION, "Save Agent Session", 1),
         // The menu standard's Edit-level commands, ids reserved there (and
         // Rename beside them), on the selection. Delete has no key in the menu: a bare Backspace there
         // would be taken from every text field. The scene view's patch row

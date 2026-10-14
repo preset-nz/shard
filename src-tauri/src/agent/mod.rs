@@ -8,6 +8,7 @@
 //! the tools run are the object model's (`object_model::commands`).
 
 pub mod client;
+pub mod log;
 pub mod run;
 pub mod shard;
 pub mod tools;

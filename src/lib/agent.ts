@@ -74,6 +74,11 @@ export function agentCancel(): Promise<void> {
   return invoke('agent_cancel');
 }
 
+/** File > Save Agent Session: writes the session and the agent log to a new folder; answers it. */
+export function agentDump(): Promise<string> {
+  return invoke('agent_dump');
+}
+
 /**
  * Puts text on the clipboard, through Rust: `navigator.clipboard` fails
  * silently in the macOS webview. Rejects with a message to show.

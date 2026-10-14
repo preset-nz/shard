@@ -918,6 +918,8 @@ struct AgentState {
     running: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     settings: Mutex<agent::client::Settings>,
+    /// Every event of every reply this run, for File > Save Agent Session.
+    log: Arc<Mutex<agent::log::Log>>,
     /// `agent.json` in the app config directory: the model's address
     /// belongs to this machine, like `controllers.json`.
     path: std::path::PathBuf,
@@ -933,6 +935,7 @@ impl AgentState {
             running: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
             settings: Mutex::new(settings),
+            log: Arc::new(Mutex::new(agent::log::Log::default())),
             path,
         }
     }
@@ -972,6 +975,7 @@ fn agent_send(
     agent.cancel.store(false, Ordering::Release);
     let running = Running(Arc::clone(&agent.running));
     let cancel = Arc::clone(&agent.cancel);
+    let log = Arc::clone(&agent.log);
     let session = Arc::clone(&audio.session);
     let settings = agent
         .settings
@@ -991,12 +995,78 @@ fn agent_send(
                 considered,
                 &cancel,
                 &mut |e| {
+                    log.lock().unwrap_or_else(|p| p.into_inner()).push(&e);
                     let _ = app.emit(AGENT_EVENT, &e);
                 },
             );
         })
         .map(|_| ())
         .map_err(|e| format!("the reply couldn't start: {e}"))
+}
+
+/// File > Save Agent Session: the open session and the agent's log, in a
+/// new folder under the app data directory, for looking into what a model did.
+/// Answers the folder. The session is a snapshot, so the open document keeps
+/// its path and its unsaved mark.
+#[tauri::command]
+fn agent_dump(
+    app: tauri::AppHandle,
+    audio: tauri::State<'_, Audio>,
+    agent: tauri::State<'_, AgentState>,
+) -> Result<String, String> {
+    use tauri::Manager;
+    let log = agent.log.lock().unwrap_or_else(|e| e.into_inner());
+    if log.is_empty() {
+        return Err("the agent hasn't been asked anything yet".into());
+    }
+    let settings = agent
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let dir = app
+        .path()
+        .app_data_dir()
+        .map_err(|e| e.to_string())?
+        .join("agent-sessions")
+        .join(stamp());
+    std::fs::create_dir_all(&dir).map_err(|e| format!("couldn't make {}: {e}", dir.display()))?;
+    let write = |name: &str, text: String| {
+        std::fs::write(dir.join(name), text).map_err(|e| format!("couldn't write {name}: {e}"))
+    };
+    write("session.shard", audio.session.snapshot()?)?;
+    let header = format!(
+        "base url: {}\nmodel: {}\nsampling: {}\n\n",
+        settings.base_url,
+        settings.model,
+        serde_json::to_string(&settings.sampling).unwrap_or_default()
+    );
+    write("agent.log", header + &log.render())?;
+    Ok(dir.display().to_string())
+}
+
+/// `YYYYMMDD-HHMMSS` in UTC, for a folder name.
+fn stamp() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs()) as i64;
+    let (days, rest) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (Hinnant's algorithm).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}{month:02}{day:02}-{:02}{:02}{:02}",
+        rest / 3600,
+        rest % 3600 / 60,
+        rest % 60
+    )
 }
 
 /// Stops the running reply, if any: what it wrote so far is applied, as
@@ -2677,6 +2747,7 @@ pub fn run() {
             rename_map,
             agent_send,
             agent_cancel,
+            agent_dump,
             copy_text,
             agent_settings,
             set_agent_settings,
