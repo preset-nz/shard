@@ -2,8 +2,16 @@
 """A scripted demo of Shard: a prompt to the agent, the result, then shaping the bass.
 
     just demo                 # record ~/rhizomatic-preset/renders/shard-demo-<date>.mov,
-                              # and an edit (-edit.mp4) with the model's wait at 6x
+                              # an edit (-edit.mp4, 1920x1200 H.264) with the model's
+                              # wait at 6x and labelled so, and a poster (-poster.jpg)
     just demo --rehearse      # the same moves, Quick mode, no recording
+    just demo --recut A B     # the edit again from today's take; A and B are the
+                              # wait's start and end, as a take prints them
+
+The take is the window, not the screen: the display switches to 2056x1329
+points ("More Space"), Shard's window to 1920x1200 points in the middle of it,
+and the recording, at 2x, halves to 1920x1200 with every point one pixel. The
+display goes back to what it was when the run ends, however it ends.
 
 Shard must be running (`just run`) on a freshly launched, empty session.
 Don't save a file under the repo while it runs: Vite reloads the webview.
@@ -24,6 +32,9 @@ import time
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BIN = ROOT / "target" / "demo"
 PROMPT = "a dark industrial beat and a driving bass line in D minor, 125 bpm"
+SCREEN = (2056, 1329)  # points; More Space on a 16-inch MacBook Pro
+WINDOW = (1920, 1200)
+MENU_BAR = 38  # points, with the notch
 
 
 def ax(*args) -> list[int]:
@@ -64,17 +75,26 @@ def menu(bar, item):
     )
 
 
-def full_screen():
-    """macOS full screen, before the recording starts, so the take doesn't
-    open on the animation."""
-    subprocess.run(
-        ["osascript",
-         "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true',
-         "-e", 'tell application "System Events" to tell process "shard" to set value of attribute '
-               '"AXFullScreen" of window 1 to true'],
-        check=True, capture_output=True,
-    )
-    time.sleep(2.5)
+def display(*size) -> list[int]:
+    out = subprocess.run([BIN / "display", *map(str, size)], capture_output=True, text=True)
+    if out.returncode:
+        raise SystemExit(f"display {' '.join(map(str, size))}: {out.stderr.strip()}")
+    return [int(v) for v in out.stdout.split()]
+
+
+def stage() -> list[int]:
+    """The display at SCREEN, Shard's window at WINDOW in the middle of it,
+    before the recording starts. Returns the window's frame, x y w h."""
+    display(*SCREEN)
+    time.sleep(2.5)  # the display settles, and windows move to fit
+    w, h = WINDOW
+    x, y = (SCREEN[0] - w) // 2, (SCREEN[1] - h + MENU_BAR) // 2
+    frame = ax("window", x, y, w, h)
+    if frame[2:] != list(WINDOW):
+        raise SystemExit(f"the window is {frame[2]}x{frame[3]}, not {w}x{h}")
+    subprocess.run(["osascript", "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true'])
+    time.sleep(1)
+    return frame
 
 
 def agent_panel(shown: bool):
@@ -193,39 +213,64 @@ def run(considered: bool):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rehearse", action="store_true", help="Quick mode, no recording")
+    ap.add_argument("--recut", nargs=2, type=float, metavar=("A", "B"), help="edit today's take again")
     a = ap.parse_args()
-    if a.rehearse:
-        full_screen()
-        run(considered=False)
-        return
-    full_screen()
     out = pathlib.Path.home() / "rhizomatic-preset" / "renders" / f"shard-demo-{datetime.date.today():%Y%m%d}.mov"
-    rec = subprocess.Popen([BIN / "rec", out, "600"], stdout=subprocess.PIPE, text=True)
-    rec.stdout.readline()  # "recording"
-    t0 = time.monotonic()
+    if a.recut:
+        edit(out, *a.recut)
+        return
+    before = display()
     try:
-        marks = run(considered=True)
+        frame = stage()
+        if a.rehearse:
+            run(considered=False)
+            return
+        rec = subprocess.Popen([BIN / "rec", out, "600", *map(str, frame)], stdout=subprocess.PIPE, text=True)
+        rec.stdout.readline()  # "recording"
+        t0 = time.monotonic()
+        try:
+            marks = run(considered=True)
+        finally:
+            rec.send_signal(signal.SIGINT)
+            rec.wait(timeout=30)
     finally:
-        rec.send_signal(signal.SIGINT)
-        rec.wait(timeout=30)
-    edit(out, marks["sent"] - t0 + 2, marks["answered"] - t0 - 1)
+        display(*before[:2])
+    a_, b_ = marks["sent"] - t0 + 2, marks["answered"] - t0 - 1
+    print(f"wait: {a_:.1f} to {b_:.1f} s (for --recut)")
+    edit(out, a_, b_)
 
 
 def edit(raw: pathlib.Path, a: float, b: float, speed: int = 6):
-    """The take with the model's wait, `a` to `b` seconds in, `speed` times faster."""
+    """The take with the model's wait, `a` to `b` seconds in, `speed` times
+    faster and labelled so in the title bar's right end; halved, as H.264 for
+    every browser, with a poster from the result playing."""
     out = raw.with_name(raw.stem + "-edit.mp4")
+    label = BIN / f"label-{speed}x.png"
+    # At the take's 2x: the title bar is 56 px high.
+    subprocess.run([BIN / "label", f"{speed}×", label, "40"], check=True)
     v = (f"[0:v]trim=0:{a},setpts=PTS-STARTPTS[v0];[0:a]atrim=0:{a},asetpts=PTS-STARTPTS[a0];"
-         f"[0:v]trim={a}:{b},setpts=(PTS-STARTPTS)/{speed}[v1];"
+         f"[0:v]trim={a}:{b},setpts=(PTS-STARTPTS)/{speed}[v1r];"
+         "[v1r][1:v]overlay=x=W-w-24:y=8[v1];"
          f"[0:a]atrim={a}:{b},asetpts=PTS-STARTPTS,atempo=2,atempo={speed / 2}[a1];"
          f"[0:v]trim={b},setpts=PTS-STARTPTS[v2];[0:a]atrim={b},asetpts=PTS-STARTPTS[a2];"
-         "[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[v][a]")
+         "[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[vc][a];"
+         "[vc]scale=trunc(iw/4)*2:trunc(ih/4)*2:flags=lanczos,fps=60,format=yuv420p[v]")
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, "-filter_complex", v,
-         "-map", "[v]", "-map", "[a]", "-c:v", "hevc_videotoolbox", "-q:v", "60", "-tag:v", "hvc1",
-         "-c:a", "aac", "-b:a", "192k", out],
+        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, "-i", label, "-filter_complex", v,
+         "-map", "[v]", "-map", "[a]",
+         "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-profile:v", "high",
+         "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out],
         check=True,
     )
-    print(f"{raw}\n{out}")
+    # The result playing: the answer, the 3 s hold, then 4 s of Play.
+    poster = raw.with_name(raw.stem + "-poster.jpg")
+    at = a + (b - a) / speed + 7
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-ss", f"{at:.2f}", "-i", out,
+         "-frames:v", "1", "-q:v", "3", poster],
+        check=True,
+    )
+    print(f"{raw}\n{out} ({out.stat().st_size / 1e6:.1f} MB)\n{poster}")
     quiet(out)
 
 

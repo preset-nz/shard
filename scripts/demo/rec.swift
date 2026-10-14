@@ -1,4 +1,6 @@
-// rec <out.mov> <seconds>: records the main display with system audio.
+// rec <out.mov> <seconds> [x y w h]: records the main display with system
+// audio, or only the rectangle x y w h (points, from the top left) of it, at
+// the display's pixel density: a 1920×1200 window on a 2× screen is 3840×2400.
 import Foundation
 import ScreenCaptureKit
 import AVFoundation
@@ -7,6 +9,9 @@ import AppKit
 let args = CommandLine.arguments
 let out = URL(fileURLWithPath: args[1])
 let seconds = Double(args[2]) ?? 60
+let region: CGRect? = args.count >= 7
+    ? CGRect(x: Double(args[3])!, y: Double(args[4])!, width: Double(args[5])!, height: Double(args[6])!)
+    : nil
 
 final class Delegate: NSObject, SCRecordingOutputDelegate, SCStreamDelegate {
     func recordingOutputDidStartRecording(_ r: SCRecordingOutput) { print("recording"); fflush(stdout) }
@@ -22,9 +27,11 @@ DispatchQueue.main.async { Task { @MainActor in
         guard let display = content.displays.first else { print("no display"); exit(1) }
         let filter = SCContentFilter(display: display, excludingWindows: [])
         let cfg = SCStreamConfiguration()
-        cfg.width = display.width * 2
-        cfg.height = display.height * 2
-        cfg.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        let r = region ?? CGRect(x: 0, y: 0, width: display.width, height: display.height)
+        if region != nil { cfg.sourceRect = r }
+        cfg.width = Int(r.width) * 2
+        cfg.height = Int(r.height) * 2
+        cfg.minimumFrameInterval = CMTime(value: 1, timescale: 60)
         cfg.capturesAudio = true
         cfg.sampleRate = 48000
         cfg.channelCount = 2

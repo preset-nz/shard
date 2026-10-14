@@ -159,13 +159,13 @@ package: build
 eval-agent *args:
     python3 evals/agent/agent_eval.py {{args}}
 
-# Start `just run` fresh first; `--rehearse` runs it unrecorded, in Quick.
+# Start `just run` fresh first; `--rehearse` runs it unrecorded, in Quick. Switches the display to More Space and back.
 # A scripted, recorded demo: a prompt to the agent, then shaping the bass
 [group('eval')]
 demo *args:
     mkdir -p target/demo
     # Only what changed: a write under the repo mid-run reloads the webview.
-    for t in rec ui ax; do [ target/demo/$t -nt scripts/demo/$t.swift ] || swiftc -O scripts/demo/$t.swift -o target/demo/$t; done
+    for t in rec ui ax display label; do [ target/demo/$t -nt scripts/demo/$t.swift ] || swiftc -O scripts/demo/$t.swift -o target/demo/$t; done
     python3 scripts/demo/shard_demo.py {{args}}
 
 # Example: just window 100 100 1280 720 (points; a 2× screen records 2560×1440)
