@@ -131,6 +131,12 @@ pub const PATCH_ORDER: &str = "order";
 /// A patch's name, as the scene view shows it. Empty in a file written
 /// before patches had names, which shows the patch's place instead.
 pub const PATCH_LABEL: &str = "patch.label";
+/// A track's name, "Sub bass", as the scene view and the agent show it.
+/// Absent or empty, the track shows its place ("Track 2", "Drums 1"). A
+/// tree value, so a rename is an undo step, unlike mute and solo.
+pub const TRACK_LABEL: &str = "track.label";
+/// A drums track's, the same way.
+pub const DRUMS_LABEL: &str = "drums.label";
 /// The patch a track plays, a reference to it. Unset, or naming a patch that
 /// has gone, the track plays the first patch.
 pub const TRACK_PATCH: &str = "track.patch";
@@ -1029,6 +1035,8 @@ pub fn kinds() -> Vec<KindDecl> {
             "How many steps the track plays before it goes round again.",
         )
         .unit("steps")
+        .text(TRACK_LABEL, "")
+        .described("Name", "What the track is called; empty shows its place.")
         .bool(TRACK_MUTE, false)
         .described(
             "Mute",
@@ -1146,6 +1154,8 @@ pub fn kinds() -> Vec<KindDecl> {
             "How many steps the track plays before it goes round again.",
         )
         .unit("steps")
+        .text(DRUMS_LABEL, "")
+        .described("Name", "What the track is called; empty shows its place.")
         .bool(DRUMS_MUTE, false)
         .described(
             "Mute",
@@ -1329,6 +1339,7 @@ impl ObjectModel for Shard {
                         .skip(|key| {
                             key.ends_with(".on")
                                 || key == PATCH_LABEL
+                                || key == DRUMS_LABEL
                                 || key == DRUMS_MUTE
                                 || key == DRUMS_SOLO
                                 || key == DRUMS_DUCK.depth
@@ -1411,6 +1422,10 @@ pub trait ShardEdit {
     /// before one was added) is skipped. What a track plays is
     /// `track.patch`'s, never written here.
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()>;
+    /// Names track `node` (a melody or drums track): `label` trimmed, an
+    /// empty one clearing it back to the track's place. Writes only what
+    /// differs.
+    fn set_track_label(&mut self, node: NodeId, label: &str) -> Result<()>;
     /// One track's steps or grid, length, fader and kit, writing only what
     /// differs.
     fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()>;
@@ -1589,7 +1604,18 @@ impl ShardEdit for Edit<'_> {
         let node = self.add_unique(arr, kind, kind)?;
         self.append_to_order(arr, TRACKS, node)?;
         self.write_track(node, track)?;
+        // A name is the track's own, never `write_track`'s.
+        self.set_track_label(node, &track.label)?;
         Ok(node)
+    }
+
+    fn set_track_label(&mut self, node: NodeId, label: &str) -> Result<()> {
+        let key = match self.at(node).map(|n| n.type_name() == DRUMS) {
+            Some(true) => DRUMS_LABEL,
+            Some(false) => TRACK_LABEL,
+            None => return Ok(()),
+        };
+        self.put(node, key, Value::Text(label.trim().to_string()))
     }
 
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()> {

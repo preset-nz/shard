@@ -17,6 +17,7 @@ A drum kit played by a grid of kick, snare and hat hits.
 | Tune | -12 st to 12 st | 0 st | Moves the whole kit up or down in pitch. |
 | Decay | 0.25 to 4 | 1 | How long each drum rings; below 1 is tighter, above is longer. |
 | Length | 4 steps to 64 steps | 16 steps | How many steps the track plays before it goes round again. |
+| Name | text | empty | What the track is called; empty shows its place. |
 | Mute | on or off | off | Silences the track. Kept in the file, not in the undo history. |
 | Solo | on or off | off | Plays only the soloed tracks. Kept in the file, not in the undo history. |
 | Duck depth | 0 to 1 | 0.75 | How far a full-strength step on the key track dips this track; 1 is silence. |

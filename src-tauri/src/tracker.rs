@@ -221,6 +221,11 @@ pub struct Track {
     /// The runtime id of the patch it plays, as the session compiled it.
     /// Read only: a pick goes through `Session::set_track_patch`.
     pub patch: Option<u64>,
+    /// Its own name ("Sub bass"), trimmed; empty when it has none and shows
+    /// its place ("Track 2"). Read only: a rename goes through
+    /// `Session::rename_track`, and `write_tracker` never writes it, so a
+    /// stale tracker sent back can't undo a rename.
+    pub label: String,
     /// Every step the track can hold, `STEPS` of them, step one first. Steps
     /// past `length` are kept, so shortening a track and lengthening it again
     /// gives them back. Blank on a drums track.
@@ -282,6 +287,7 @@ impl Default for Track {
             length: p.length,
             gain: TRACK_GAIN_DEFAULT,
             patch: None,
+            label: String::new(),
             steps: (0..STEPS)
                 .map(|i| Step {
                     on: (p.pattern >> i) & 1 == 1,
@@ -304,6 +310,7 @@ impl Track {
             length: 16,
             gain: TRACK_GAIN_DEFAULT,
             patch: None,
+            label: String::new(),
             steps: vec![Step::default(); STEPS],
             drums: None,
             duck: Duck::default(),
@@ -417,6 +424,61 @@ impl Tracker {
             }
         }
         self
+    }
+
+    /// Each track's name by its place, "Track 2" and "Drums 1": what the
+    /// agent's queue and a saved payload say, whatever the labels.
+    pub fn place_names(&self) -> Vec<String> {
+        self.slots().into_iter().map(Slot::name).collect()
+    }
+
+    /// Each track's name as Shard shows it: its label, else its place.
+    pub fn names(&self) -> Vec<String> {
+        self.place_names()
+            .into_iter()
+            .zip(&self.tracks)
+            .map(|(place, t)| {
+                if t.label.is_empty() {
+                    place
+                } else {
+                    t.label.clone()
+                }
+            })
+            .collect()
+    }
+
+    /// Why `name` can't be track `track`'s label (none for a track about to
+    /// be made), or none when it can: a name has to say one track, so it may
+    /// not be another's label or place, nor "new" nor a number, which name a
+    /// new track and a place in a write. Case doesn't tell names apart.
+    pub fn label_refusal(&self, track: Option<usize>, name: &str) -> Option<String> {
+        let name = name.trim();
+        if name.eq_ignore_ascii_case("new") || name.parse::<f64>().is_ok() {
+            return Some(format!(
+                "\"{name}\" can't be a track's name: \"new\" and numbers name tracks in a write"
+            ));
+        }
+        let shown = self.names();
+        let places = self.place_names();
+        let other = (0..self.tracks.len())
+            .filter(|i| Some(*i) != track)
+            .find(|&i| places[i].eq_ignore_ascii_case(name) || shown[i].eq_ignore_ascii_case(name));
+        other.map(|i| {
+            format!(
+                "\"{name}\" is already the name of {}; name this track something else",
+                self.describe(i)
+            )
+        })
+    }
+
+    /// A track as the agent is told of it: "Sub bass (Track 2)", or just
+    /// "Track 2" when it has no label.
+    pub fn describe(&self, track: usize) -> String {
+        let place = self.place_names().swap_remove(track);
+        match self.tracks.get(track).map(|t| t.label.as_str()) {
+            Some(l) if !l.is_empty() => format!("{l} ({place})"),
+            _ => place,
+        }
     }
 
     /// Each track's slot, in order: which voice or kit plays it.

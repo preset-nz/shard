@@ -1242,3 +1242,157 @@ fn live_fill_by_variant() {
         );
     }
 }
+
+#[test]
+fn make_bass_with_a_name_labels_the_new_track_and_its_patch_in_one_undo_step() {
+    let r = rig();
+    let before = text(&r);
+    let mut model = Script::new(vec![
+        turn_calling(
+            "make_bass",
+            json!({ "key": "F", "figure": "sparse", "name": "  Witch Bass " }),
+        ),
+        turn_calling(
+            "make_drums",
+            json!({ "style": "ebm_straight", "name": "Witch hats" }),
+        ),
+        done_turn(),
+    ]);
+    let events = reply(&r, &mut model, "a witchy bass and hats");
+    let said: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Tool {
+                ok: true, result, ..
+            } => Some(result.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        said[0].contains("Named the track and its patch \"Witch Bass\""),
+        "{}",
+        said[0]
+    );
+    assert!(
+        said[1].contains("Named the track \"Witch hats\""),
+        "{}",
+        said[1]
+    );
+
+    let t = r.session.tracker();
+    assert_eq!(
+        t.names(),
+        ["Track 1", "Drums 1", "Witch Bass", "Witch hats"]
+    );
+    let patches = r.session.patches();
+    assert_eq!(patches.last().unwrap().name, "Witch Bass");
+    assert!(patches.last().unwrap().played, "the new track plays it");
+    let (undo, _) = r.session.history_labels();
+    assert_eq!(undo.len(), 1, "one step for the whole reply");
+
+    r.session.undo().unwrap();
+    assert_eq!(text(&r), before, "the names go with the tracks");
+    assert_eq!(r.session.tracker().names(), ["Track 1", "Drums 1"]);
+}
+
+#[test]
+fn a_track_is_written_over_by_its_name_and_the_queue_keeps_its_place() {
+    let r = rig();
+    r.session.add_track(false).unwrap();
+    r.session.rename_track(2, "Sub bass").unwrap();
+    let mut d = Draft::of(&r.session).unwrap();
+    let out = call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "sub BASS", "steps": [{ "step": 3, "note": 40, "velocity": 100, "hold": 1 }] }),
+    )
+    .unwrap();
+    assert!(out.starts_with("Wrote Track 2:"), "{out}");
+    assert_eq!(
+        d.queue()[0].1["track"],
+        "Track 2",
+        "a label is resolved to its place"
+    );
+    // A rename in one write survives a later write that leaves the name out.
+    call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "Track 2", "name": "Low end", "steps": [{ "step": 5, "note": 40, "velocity": 100, "hold": 1 }] }),
+    )
+    .unwrap();
+    call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "Low end", "steps": [{ "step": 7, "note": 40, "velocity": 100, "hold": 1 }] }),
+    )
+    .unwrap();
+    assert_eq!(d.queue().len(), 1);
+    assert_eq!(d.queue()[0].1["name"], "Low end");
+    d.apply(&r.session, "Agent: a line").unwrap();
+    let t = r.session.tracker();
+    assert_eq!(t.names(), ["Track 1", "Drums 1", "Low end"]);
+    assert!(t.tracks[2].steps[6].on && !t.tracks[2].steps[4].on);
+}
+
+#[test]
+fn a_name_that_is_another_tracks_is_refused_and_a_bad_track_lists_the_tracks() {
+    let r = rig();
+    r.session.add_track(false).unwrap();
+    r.session.rename_track(0, "Sub bass").unwrap();
+    let mut d = Draft::of(&r.session).unwrap();
+    let steps = json!([{ "step": 1, "note": 40, "velocity": 100, "hold": 1 }]);
+
+    for taken in ["sub bass", "Track 1", "Drums 1", "new"] {
+        let e = call(
+            &mut d,
+            "set_melody",
+            json!({ "track": "Track 2", "name": taken, "steps": steps }),
+        )
+        .unwrap_err();
+        assert!(
+            e.contains("name this track something else") || e.contains("can't be a track's name"),
+            "{taken}: {e}"
+        );
+    }
+    // A new track can't take one either.
+    let e = call(
+        &mut d,
+        "set_melody",
+        json!({ "name": "Sub bass", "steps": steps }),
+    )
+    .unwrap_err();
+    assert!(e.contains("Sub bass (Track 1)"), "{e}");
+    assert!(d.queue().is_empty(), "a refused write is not queued");
+
+    let e = call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "Nope", "steps": steps }),
+    )
+    .unwrap_err();
+    assert!(e.contains("Sub bass (Track 1), Drums 1, Track 2"), "{e}");
+}
+
+#[test]
+fn read_song_gives_the_place_and_the_label_and_every_write_takes_a_name() {
+    let r = rig();
+    r.session.rename_track(0, "Sub bass").unwrap();
+    let d = Draft::of(&r.session).unwrap();
+    let song = d.song();
+    assert_eq!(song["tracks"][0]["name"], "Track 1");
+    assert_eq!(song["tracks"][0]["label"], "Sub bass");
+    assert!(song["tracks"][1].get("label").is_none());
+    for which in [
+        "make_drums",
+        "make_bass",
+        "make_arp",
+        "set_drums",
+        "set_melody",
+    ] {
+        let t = tool(&d, which);
+        assert_eq!(
+            t.parameters["properties"]["name"]["type"], "string",
+            "{which} takes a name"
+        );
+    }
+}

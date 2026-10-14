@@ -37,10 +37,11 @@ import {
  * cursor through the tracks and the patches and Return selects the row under
  * it. Moving the cursor does not select, because selecting a patch changes
  * what you hear. Return on the patch already selected renames it, as Return
- * on a selected item does in the Finder, and so does a double-click. Delete
+ * on a selected item does in the Finder, and so does a double-click; a track
+ * renames the same way, and an empty name puts back its place ("Track 2"). Delete
  * takes the track or patch under the cursor, when it may go. M and S mute
  * and solo the track under it. Right-click a patch for Rename, Duplicate and
- * Delete, a track for Mute, Solo and Remove.
+ * Delete, a track for Rename, Mute, Solo and Remove.
  *
  * Each track has M and S switches (story c). A press lands on the next bar
  * while playing, and blinks until it does; a track not heard is dimmed. They
@@ -67,6 +68,9 @@ export function SceneView({
   renaming,
   onRenaming,
   onRename,
+  renamingTrack,
+  onRenamingTrack,
+  onRenameTrack,
   onDuplicate,
   onDelete,
   patchChildren,
@@ -99,6 +103,12 @@ export function SceneView({
   onRenaming: (id: number | null) => void;
   /** A patch's new name, as typed. Rust trims it and ignores an empty one. */
   onRename: (id: number, name: string) => void;
+  /** The track whose name is being edited in place, by place. */
+  renamingTrack: number | null;
+  /** Opens the name field on a track, or closes it with null. */
+  onRenamingTrack: (track: number | null) => void;
+  /** A track's new name, as typed. Rust trims it; an empty one puts back its place. */
+  onRenameTrack: (track: number, name: string) => void;
   onDuplicate: (id: number) => void;
   /** Only offered for a patch whose `deletable` is set. */
   onDelete: (id: number) => void;
@@ -183,9 +193,13 @@ export function SceneView({
           e.preventDefault();
           const patch = here >= t ? patches[here - t] : undefined;
           // On the selection, Return renames; elsewhere it selects.
-          if (patch && patch.id === selectedPatch && (cursor === null || cursor === selectedRow)) {
+          const onSelection = cursor === null || cursor === selectedRow;
+          if (patch && patch.id === selectedPatch && onSelection) {
             setCursor(null);
             onRenaming(patch.id);
+          } else if (here < t && here === selectedTrack && onSelection) {
+            setCursor(null);
+            onRenamingTrack(here);
           } else {
             selectRow(here);
           }
@@ -239,6 +253,22 @@ export function SceneView({
         {tracks.map((track, i) => {
           const name = trackName(tracks, i);
           const drums = track.drums != null;
+          if (renamingTrack === i) {
+            return (
+              <RenameField
+                // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
+                key={i}
+                label="Track name"
+                name={name}
+                className={rowClass(i, selectedTrack === i)}
+                onDone={(typed) => {
+                  onRenamingTrack(null);
+                  navRef.current?.focus();
+                  if (typed !== null) onRenameTrack(i, typed);
+                }}
+              />
+            );
+          }
           return (
             <ContextMenu
               // biome-ignore lint/suspicious/noArrayIndexKey: a track is its place
@@ -247,11 +277,12 @@ export function SceneView({
               <ContextMenuTrigger render={<div className={rowClass(i, selectedTrack === i)} />}>
                 <button
                   type="button"
-                  title={`Show this track's ${drums ? 'drums' : 'steps'}${
-                    audible(mix, i) ? '' : '. Not heard: muted, or another track is soloed.'
+                  title={`Show this track's ${drums ? 'drums' : 'steps'}. Double-click to rename.${
+                    audible(mix, i) ? '' : ' Not heard: muted, or another track is soloed.'
                   }`}
                   onMouseDown={focusPanel}
                   onClick={() => selectRow(i)}
+                  onDoubleClick={() => onRenamingTrack(i)}
                   className={`min-w-0 flex-1 truncate text-left ${audible(mix, i) ? '' : 'opacity-50'}`}
                 >
                   {name}
@@ -293,7 +324,9 @@ export function SceneView({
                   />
                 )}
               </ContextMenuTrigger>
+              {/* Closing leaves focus where it is, so Rename's field keeps it. */}
               <ContextMenuContent className="w-48" finalFocus={false}>
+                <ContextMenuItem onClick={() => onRenamingTrack(i)}>Rename</ContextMenuItem>
                 <ContextMenuItem onClick={() => onMute(i)}>
                   {mix[i]?.mute ? 'Unmute' : 'Mute'} {name}
                 </ContextMenuItem>
@@ -391,16 +424,19 @@ export function SceneView({
 }
 
 /**
- * A patch's name, being edited in place. Return or leaving the field keeps
+ * A patch's or track's name, being edited in place. Return or leaving the field keeps
  * it; Escape puts it back. Keys stay in the field, so Return doesn't select
  * a row and Delete doesn't delete one.
  */
 function RenameField({
   name,
+  label = 'Patch name',
   className,
   onDone,
 }: {
   name: string;
+  /** What the field is called to a screen reader. */
+  label?: string;
   className: string;
   /** The name typed, or null when cancelled. Called once. */
   onDone: (name: string | null) => void;
@@ -415,7 +451,7 @@ function RenameField({
   return (
     <div className={className}>
       <input
-        aria-label="Patch name"
+        aria-label={label}
         // biome-ignore lint/a11y/noAutofocus: the field opens because the user asked to rename
         autoFocus
         onFocus={(e) => e.currentTarget.select()}

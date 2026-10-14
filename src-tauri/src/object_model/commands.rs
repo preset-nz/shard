@@ -11,7 +11,8 @@
 //! - `shard.set_tempo`: tempo, and swing as a percentage.
 //!
 //! **One vocabulary: the one Shard shows.** A payload names its track as the
-//! UI does, "Track 1" or "Drums 2" (any case), or by a bare number counting
+//! UI does, by its place, "Track 1" or "Drums 2", or by its own name, "Sub
+//! bass" (`track.label`), in any case, or by a bare number counting
 //! that command's kind from 1, or `"new"`; steps count from 1 to the track's
 //! length, as the step strip shows them. A model, a script and a person
 //! looking at the app all say "step 1 of Track 1" and mean the same thing,
@@ -19,7 +20,9 @@
 //! conversion is here, at the payload, and `read_song` answers in the same
 //! terms. What the selected track is belongs to the session, not the
 //! document, so a caller that wants "the selected one" resolves it first.
-//! Left out, a write makes a new track.
+//! Left out, a write makes a new track. A write may also send `name`: it
+//! becomes the track's label and, when the write makes a new melody track's
+//! patch, that patch's too, in the same undo step. Left out, the label stays.
 //!
 //! **A refusal is text for whoever sent it.** Every command is always
 //! enabled, and refuses inside `run` with `Error::Payload`, whose message
@@ -38,7 +41,7 @@ use shard_dsp::params::PARAMS;
 use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::{KITS, VOICES};
 
-use super::{arrangement_node, spec, to_value, Shard, ShardEdit, TRACK_PATCH};
+use super::{arrangement_node, spec, to_value, Shard, ShardEdit, PATCH_LABEL, TRACKS, TRACK_PATCH};
 use crate::tracker::{Kit, Slot, Step, Track, Tracker, LENGTHS, SWING_MAX};
 
 pub const READ_SONG: &str = "shard.read_song";
@@ -106,9 +109,43 @@ pub enum Target {
     New,
 }
 
-/// Every track's name as Shard shows it, in order.
+/// Every track's name by its place ("Track 2"), in order. What a queued
+/// payload says, so the same track is always the same payload; a label is
+/// resolved to its place before it is queued.
 pub fn track_names(t: &Tracker) -> Vec<String> {
-    t.slots().into_iter().map(Slot::name).collect()
+    t.place_names()
+}
+
+/// The `name` a write sends: trimmed, none when absent or empty, refused when
+/// too long or when it would not say one track (`Tracker::label_refusal`).
+/// `track` is the place it goes to, none for a new track.
+fn name_of(t: &Tracker, p: &Json, track: Option<usize>) -> Result<Option<String>, String> {
+    let Some(name) = p.get("name").and_then(Json::as_str).map(str::trim) else {
+        return Ok(None);
+    };
+    if name.is_empty() {
+        return Ok(None);
+    }
+    let name = crate::modulation::valid_name(name, "a track")?;
+    match t.label_refusal(track, &name) {
+        Some(why) => Err(why),
+        None => Ok(Some(name)),
+    }
+}
+
+/// What a write's answer says about the name it gave.
+fn named(label: &Option<String>, patch: bool) -> String {
+    match label {
+        Some(l) if patch => format!(". Named the track and its patch \"{l}\""),
+        Some(l) => format!(". Named the track \"{l}\""),
+        None => String::new(),
+    }
+}
+
+/// The node at place `i` in the arrangement's tracks.
+fn track_node(tx: &Edit<'_>, arr: NodeId, i: usize) -> Option<NodeId> {
+    tx.at(arr)
+        .and_then(|a| a.order(TRACKS).get(i).map(|n| n.id()))
 }
 
 /// The name of the track a write of this kind would add.
@@ -128,18 +165,20 @@ fn kind(drums: bool) -> &'static str {
     }
 }
 
-/// The track a write of drums (or melody) names in `track`: its name as
-/// Shard shows it, in any case ("Track 1", "drums 2"), a bare number
-/// counting tracks of that kind from 1, `"new"`, or nothing for a new one.
-/// Refused, saying which tracks there are, when it names none, or names one
-/// of the other kind.
+/// The track a write of drums (or melody) names in `track`: its place as
+/// Shard shows it ("Track 1", "drums 2") or its own name ("Sub bass"), in
+/// any case, a bare number counting tracks of that kind from 1, `"new"`, or
+/// nothing for a new one. Refused, saying which tracks there are (each by its
+/// name and its place), when it names none, names one of the other kind, or
+/// names more than one (two share a name, or a name is another's place).
 pub fn resolve(t: &Tracker, p: &Json, drums: bool) -> Result<Target, String> {
-    let names = track_names(t);
+    let places = t.place_names();
     let have = || {
-        if names.is_empty() {
+        if places.is_empty() {
             "the song has no tracks".to_string()
         } else {
-            format!("the song has {}", names.join(", "))
+            let all: Vec<String> = (0..places.len()).map(|i| t.describe(i)).collect();
+            format!("the song has {}", all.join(", "))
         }
     };
     let wrong = |sent: &str| {
@@ -176,16 +215,36 @@ pub fn resolve(t: &Tracker, p: &Json, drums: bool) -> Result<Target, String> {
         Ok(_) => return Err(wrong(&text)),
         Err(_) => text.clone(),
     };
-    let Some(place) = names.iter().position(|n| n.eq_ignore_ascii_case(&wanted)) else {
-        let looks = wanted.to_ascii_lowercase();
-        if looks.starts_with("track ") || looks.starts_with("drums ") {
-            return Err(format!(
-                "there is no {wanted}; {}. Leave track out to write a new {} track",
-                have(),
-                kind(drums)
-            ));
+    let same = |a: &str| {
+        a.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .eq_ignore_ascii_case(&wanted)
+    };
+    let found: Vec<usize> = (0..places.len())
+        .filter(|&i| {
+            same(&places[i]) || (!t.tracks[i].label.is_empty() && same(&t.tracks[i].label))
+        })
+        .collect();
+    let place = match found.as_slice() {
+        [one] => *one,
+        [] => {
+            let looks = wanted.to_ascii_lowercase();
+            if looks.starts_with("track ") || looks.starts_with("drums ") {
+                return Err(format!(
+                    "there is no {wanted}; {}. Leave track out to write a new {} track",
+                    have(),
+                    kind(drums)
+                ));
+            }
+            return Err(wrong(&format!("\"{text}\"")));
         }
-        return Err(wrong(&format!("\"{text}\"")));
+        _ => {
+            return Err(format!(
+                "\"{wanted}\" names more than one track; {}. Name each track differently in Shard, then try again",
+                have()
+            ))
+        }
     };
     if t.tracks[place].is_drums() != drums {
         let (other, tool) = if drums {
@@ -195,7 +254,7 @@ pub fn resolve(t: &Tracker, p: &Json, drums: bool) -> Result<Target, String> {
         };
         return Err(format!(
             "{} is a {other} track; use {tool} for it, or leave track out to write a new {} track",
-            names[place],
+            t.describe(place),
             kind(drums)
         ));
     }
@@ -346,6 +405,7 @@ pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, Str
         }
     };
     let name = place.map_or_else(|| new_name(&now, true), |i| track_names(&now)[i].clone());
+    let label = name_of(&now, p, place)?;
 
     let mut grid = [[0u8; STEPS]; 3];
     let (mut ignored_notes, mut bad, mut odd_lanes, mut past) =
@@ -415,12 +475,19 @@ pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, Str
             t.drums = Some(kit_of(t.drums.as_ref()));
             t.length = length;
             let next = next.sanitised();
-            d.edit("Set Drums", |tx| tx.write_tracker(arr, &next))
-                .map_err(|e| e.to_string())?;
+            d.edit("Set Drums", |tx| {
+                tx.write_tracker(arr, &next)?;
+                match (&label, track_node(tx, arr, i)) {
+                    (Some(l), Some(node)) => tx.set_track_label(node, l),
+                    _ => Ok(()),
+                }
+            })
+            .map_err(|e| e.to_string())?;
         }
         None => {
             let track = Track {
                 length,
+                label: label.clone().unwrap_or_default(),
                 drums: Some(kit_of(None)),
                 ..Track::blank()
             };
@@ -439,6 +506,7 @@ pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, Str
         "Wrote {name}, switched on: {length} steps, {}",
         counts.join(", ")
     );
+    out += &named(&label, false);
     ignored_notes.sort_unstable();
     ignored_notes.dedup();
     let notes: Vec<String> = ignored_notes.iter().map(i64::to_string).collect();
@@ -683,6 +751,7 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
         }
     };
     let name = place.map_or_else(|| new_name(&now, false), |i| track_names(&now)[i].clone());
+    let label = name_of(&now, p, place)?;
 
     let mut bad = 0usize;
     let mut read: Vec<(usize, i32, u8, u8)> = Vec::new();
@@ -746,13 +815,20 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
             next.tracks[i].steps = steps;
             next.tracks[i].length = length;
             let next = next.sanitised();
-            d.edit("Set Melody", |tx| tx.write_tracker(arr, &next))
-                .map_err(|e| e.to_string())?;
+            d.edit("Set Melody", |tx| {
+                tx.write_tracker(arr, &next)?;
+                match (&label, track_node(tx, arr, i)) {
+                    (Some(l), Some(node)) => tx.set_track_label(node, l),
+                    _ => Ok(()),
+                }
+            })
+            .map_err(|e| e.to_string())?;
         }
         None => {
             let track = Track {
                 length,
                 steps,
+                label: label.clone().unwrap_or_default(),
                 ..Track::blank()
             };
             let r = root.0;
@@ -761,6 +837,9 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
                 // Its own patch, so a sound for it never changes a track
                 // already playing: the material taken out, FM in.
                 let patch = tx.new_patch()?;
+                if let Some(l) = &label {
+                    tx.set_value(patch, PATCH_LABEL, Value::Text(l.clone()))?;
+                }
                 let material = tx
                     .at(patch)
                     .and_then(|n| n.child("material"))
@@ -803,6 +882,7 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
             ""
         }
     );
+    out += &named(&label, target == Target::New);
     if root.1 {
         out += " (the sample's root isn't known, so C4 is assumed)";
     }
@@ -878,7 +958,7 @@ pub fn song(d: &Document<Shard>) -> Json {
     let plan = d.projection();
     let t = &plan.tracker;
     let names = track_names(t);
-    let tracks: Vec<Json> = t
+    let mut tracks: Vec<Json> = t
         .tracks
         .iter()
         .enumerate()
@@ -930,6 +1010,12 @@ pub fn song(d: &Document<Shard>) -> Json {
             }
         })
         .collect();
+    // Only a track that has a name of its own says so.
+    for (json, track) in tracks.iter_mut().zip(&t.tracks) {
+        if !track.label.is_empty() {
+            json["label"] = json!(track.label);
+        }
+    }
     json!({
         "tempo": t.tempo,
         "swing": swing_percent(t.swing),

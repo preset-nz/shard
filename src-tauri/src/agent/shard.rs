@@ -40,13 +40,15 @@ Translate themes and moods into dark electronic textures: EBM (driving sixteenth
 
 For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Notes are MIDI numbers, middle C is C4 = 60: so E1 = 28, G1 = 31, A1 = 33, G2 = 43, G3 = 55. A bar is 16 steps, and a track holds at most 64 steps (4 bars): for more, write 64 and say they loop. When the user counts in steps, send steps, not bars. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
 
-Tracks are named as Shard shows them: melody tracks Track 1, Track 2 and on, drums tracks Drums 1, Drums 2 and on. The song as it is now comes with each request. Give a track's name to write over that track; leave track out to write a new one.
+Tracks have a place and may have a name. A place is Track 1, Track 2 and on for melody tracks, Drums 1, Drums 2 and on for drums tracks; a name is what the track is called, like "Sub bass". The song as it is now comes with each request, each track by its place and, when it has one, its name. Give a track's place or name as track to write over that track; leave track out to write a new one. Give every new track a short name of two or three words with name, like "Sub bass" or "Witch hats"; a new bass or melody track's sound gets the same name. Leave name out when writing over a track that already has the name you want.
 
 Example. User: "A heavy, gritty Trip-Hop bass line that feels like a rainy night in Bristol"
 set_tempo {"bpm": 85}
 make_bass {"key": "F", "mode": "minor", "feel": "sad", "figure": "sparse", "register": "sub"}"#;
 
-const TRACK: &str = "The track to write over, by its name as Shard shows it (\"Track 1\", \"Drums 2\"), or \"new\". Leave it out to write a new track, or the selected one when it is of this kind.";
+const TRACK: &str = "The track to write over, by its place (\"Track 1\", \"Drums 2\") or its name (\"Sub bass\"), or \"new\". Leave it out to write a new track, or the selected one when it is of this kind.";
+
+const NAME: &str = "What the track is called: two or three words (\"Sub bass\", \"Witch hats\"). Give every new track one; a new bass or melody track's sound gets it too. Leave it out to keep the track's name. Not another track's name or place, nor \"new\".";
 
 const STEP: &str = "counted from 1 to the track's length, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13";
 
@@ -85,6 +87,7 @@ pub fn tools() -> Tools {
                 "type": "object",
                 "properties": {
                     "track": { "description": TRACK },
+                    "name": { "type": "string", "description": NAME },
                     "style": { "type": "string", "enum": styles, "description": "ebm_straight and ebm_shuffle for EBM, glitch_sparse and glitch_broken for glitch; list_drum_styles describes each" },
                     "bars": { "type": "integer", "description": BARS },
                     "steps": { "type": "integer", "description": LENGTH },
@@ -104,6 +107,7 @@ pub fn tools() -> Tools {
                 "type": "object",
                 "properties": {
                     "track": { "description": TRACK },
+                    "name": { "type": "string", "description": NAME },
                     "key": key,
                     "mode": mode,
                     "feel": feel,
@@ -127,6 +131,7 @@ pub fn tools() -> Tools {
                 "type": "object",
                 "properties": {
                     "track": { "description": TRACK },
+                    "name": { "type": "string", "description": NAME },
                     "key": key,
                     "mode": mode,
                     "feel": feel,
@@ -187,6 +192,7 @@ pub fn tools() -> Tools {
                 "type": "object",
                 "properties": {
                     "track": { "description": TRACK },
+                    "name": { "type": "string", "description": NAME },
                     "length": { "type": "integer", "description": "steps: 16, 32 or 64" },
                     "hits": {
                         "type": "array",
@@ -213,6 +219,7 @@ pub fn tools() -> Tools {
                 "type": "object",
                 "properties": {
                     "track": { "description": TRACK },
+                    "name": { "type": "string", "description": NAME },
                     "length": { "type": "integer", "description": "steps: 16, 32 or 64" },
                     "steps": {
                         "type": "array",
@@ -235,7 +242,7 @@ pub fn tools() -> Tools {
         Tool {
             name: "read_song",
             command: commands::READ_SONG,
-            description: "Read the song as it is now: tempo, swing and every track by its name, steps counted from 1.",
+            description: "Read the song as it is now: tempo, swing and every track by its place and, when it has one, its name, steps counted from 1.",
             parameters: json!({ "type": "object", "properties": {}, "required": [] }),
             access: Access::Read,
         },
@@ -383,6 +390,23 @@ impl Toolbox for Draft {
                 Target::Place(i) => json!(commands::track_names(tracker)[i]),
                 Target::New => json!("new"),
             };
+        }
+        // A write of a track replaces the earlier one on replay, so a name the
+        // earlier one gave must not go with it.
+        let nameless = payload
+            .get("name")
+            .and_then(Json::as_str)
+            .is_none_or(|n| n.trim().is_empty());
+        if drums.is_some() && nameless && payload["track"] != json!("new") {
+            let earlier = self
+                .queue
+                .iter()
+                .rev()
+                .find(|(c, p)| *c == tool.command && p.get("track") == payload.get("track"))
+                .and_then(|(_, p)| p.get("name").cloned());
+            if let Some(name) = earlier {
+                payload["name"] = name;
+            }
         }
         // A reasoning model checking its work writes the same track again
         // and again until the turn cap; tell it nothing changed.

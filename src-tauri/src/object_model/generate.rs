@@ -163,7 +163,7 @@ fn seed_of(p: &Json) -> (u32, bool) {
         .as_object()
         .map(|o| {
             o.iter()
-                .filter(|(k, _)| *k != "seed" && *k != "track")
+                .filter(|(k, _)| !matches!(k.as_str(), "seed" | "track" | "name"))
                 .collect()
         })
         .unwrap_or_default();
@@ -206,6 +206,7 @@ fn make_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     }
     let payload = json!({
         "track": p.get("track").cloned().unwrap_or(Json::Null),
+        "name": p.get("name").cloned().unwrap_or(Json::Null),
         "length": length,
         "hits": hits,
     });
@@ -409,6 +410,7 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         .collect();
     let payload = json!({
         "track": track,
+        "name": p.get("name").cloned().unwrap_or(Json::Null),
         "length": length,
         "steps": steps,
     });

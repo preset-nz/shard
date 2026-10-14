@@ -519,6 +519,7 @@ fn read_drums(t: Node<'_>) -> Track {
     Track {
         length: int(&t, "drums.length") as u32,
         gain: float(&t, "drums.gain"),
+        label: text(&t, DRUMS_LABEL).trim().to_string(),
         drums: Some(kit),
         ..Track::blank()
     }
@@ -553,6 +554,7 @@ pub fn read_tracker(arr: Node<'_>) -> Tracker {
                 gain: float(&t, TRACK_GAIN),
                 // A runtime id, which `compile` fills in.
                 patch: None,
+                label: text(&t, TRACK_LABEL).trim().to_string(),
                 steps,
                 drums: None,
                 duck,

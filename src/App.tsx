@@ -100,6 +100,7 @@ import {
   removeRegion,
   removeTrack,
   renamePatch,
+  renameTrack,
   resetSound,
   type SourceInfo,
   selectPatch,
@@ -1201,6 +1202,15 @@ export default function App() {
   // reread of the list (selecting emits `document-opened`) keeps the field
   // open, and Edit › Rename can open it.
   const [renaming, setRenaming] = useState<number | null>(null);
+  // The same for a track, by place.
+  const [renamingTrack, setRenamingTrack] = useState<number | null>(null);
+  const renameTrackRow = async (track: number, name: string) => {
+    try {
+      showTracker(await renameTrack(track, name));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   // Story d's patch commands. Each is one undo step named for the patch.
   // Duplicate and a Delete of the current patch move the engine, and Rust
   // says so along `document-opened`; the list is read again here either way.
@@ -1239,7 +1249,7 @@ export default function App() {
   const deletablePatch = selection === null && patchSelected?.deletable ? patchSelected : null;
   // Cmd+D reaches the menu even while a name is being typed.
   const typing = useTextFocus();
-  const canRename = !typing && patchSelected !== null;
+  const canRename = !typing && (patchSelected !== null || (mode === 'tracker' && tracker != null));
   const canDuplicate = !typing && (mode === 'tracker' ? tracker !== null : patchSelected !== null);
   // With a track showing and nothing in it selected, Delete removes the track.
   const deletableTrack = mode === 'tracker' && selection === null && canRemoveTrack;
@@ -1324,6 +1334,7 @@ export default function App() {
         break;
       case 'edit.rename':
         if (patchSelected) setRenaming(patchSelected.id);
+        else if (mode === 'tracker') setRenamingTrack(selectedTrack);
         break;
       case 'edit.delete':
         if (node?.fx) removeEffect(node);
@@ -1634,6 +1645,9 @@ export default function App() {
             renaming={renaming}
             onRenaming={setRenaming}
             onRename={(id, name) => void renamePatchRow(id, name)}
+            renamingTrack={renamingTrack}
+            onRenamingTrack={setRenamingTrack}
+            onRenameTrack={(track, name) => void renameTrackRow(track, name)}
             onDuplicate={(id) => void duplicatePatchRow(id)}
             onDelete={(id) => void deletePatchRow(id)}
             patchChildren={

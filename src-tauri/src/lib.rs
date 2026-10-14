@@ -59,6 +59,8 @@ mod recorder;
 pub mod session;
 #[cfg(test)]
 mod session_tests;
+#[cfg(test)]
+mod track_name_tests;
 // Writes a `.shard` from a flat sketch, for `just shard-write`.
 #[cfg(test)]
 mod play_mode_tests;
@@ -1267,6 +1269,19 @@ fn remove_track(state: tauri::State<'_, Audio>, track: usize) -> Result<(), Stri
 #[tauri::command]
 fn rename_patch(state: tauri::State<'_, Audio>, id: u64, name: String) -> Result<bool, String> {
     state.session.rename_patch(id, &name)
+}
+
+/// Renames a track. One step of Undo, "Rename Track"; an empty name clears it
+/// back to its place ("Track 2"), an unchanged one makes no step. Answers the
+/// tracker as it now is.
+#[tauri::command]
+fn rename_track(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    name: String,
+) -> Result<tracker::Tracker, String> {
+    state.session.rename_track(track, &name)?;
+    Ok(state.session.tracker())
 }
 
 /// Deletes a patch, refused for the last one and one a track plays.
@@ -2691,6 +2706,7 @@ pub fn run() {
             set_track_patch,
             set_track_duck,
             rename_patch,
+            rename_track,
             delete_patch,
             duplicate_patch,
             meters,

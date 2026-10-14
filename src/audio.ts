@@ -263,6 +263,14 @@ export const setTrackDuck = (track: number, key: number | null) =>
   invoke<Tracker>('set_track_duck', { track, key });
 
 /**
+ * Rename a track. One step of Undo, "Rename Track". An empty name, or the
+ * track's place ("Track 2"), clears it back to its place; a name another
+ * track has, by name or place, is refused. Answers the tracker as it now is.
+ */
+export const renameTrack = (track: number, name: string) =>
+  invoke<Tracker>('rename_track', { track, name });
+
+/**
  * Rename a patch. One step of Undo, "Rename Patch 2"; an empty or unchanged
  * name makes none. Answers whether it changed. Reread `listPatches` after.
  */
@@ -689,6 +697,8 @@ export interface Track {
   gain: number;
   /** The patch it plays, by id; null on a drums track. Read only: a pick goes through `setTrackPatch`. */
   patch: number | null;
+  /** Its own name ("Sub bass"); empty shows its place. Read only: a rename goes through `renameTrack`. */
+  label: string;
   /** Sixty-four steps, step one first. Those past `length` are kept, not played. Blank on a drums track. */
   steps: Step[];
   /** A drums track's kit; null on a melody track. */
@@ -730,8 +740,15 @@ export interface Tracker {
   tracks: Track[];
 }
 
-/** A track's name by its place among its own kind: "Track 2", "Drums 1". */
+/** A track's name as Shard shows it: its own name, else its place ("Track 2", "Drums 1"). */
 export function trackName(tracks: Track[], i: number): string {
+  const label = tracks[i]?.label?.trim();
+  if (label) return label;
+  return trackPlace(tracks, i);
+}
+
+/** A track's place among its own kind: "Track 2", "Drums 1". */
+export function trackPlace(tracks: Track[], i: number): string {
   const drums = tracks[i]?.drums != null;
   const nth = tracks.slice(0, i + 1).filter((t) => (t.drums != null) === drums).length;
   return `${drums ? 'Drums' : 'Track'} ${Math.max(1, nth)}`;

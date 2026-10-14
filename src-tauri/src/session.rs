@@ -2249,6 +2249,36 @@ impl Session {
         Ok(changed)
     }
 
+    /// Renames track `track`: its `track.label` (or `drums.label`), trimmed.
+    /// One undo step, "Rename Track". An empty name, or the track's place
+    /// ("Track 2"), clears the label so the track shows its place again. A
+    /// name that is already another track's name or place is refused, since
+    /// the agent addresses tracks by either. A name it already shows changes
+    /// nothing and makes no step. Answers whether it changed.
+    pub fn rename_track(&self, track: usize, name: &str) -> Result<bool, String> {
+        let now = self.tracker();
+        let node = self.read(|d| om::tracks(d.tree()).get(track).map(|n| n.id()));
+        let (Some(node), Some(old)) = (node, now.tracks.get(track).map(|t| t.label.clone())) else {
+            return Err(format!("there is no track {}", track + 1));
+        };
+        let name = name.trim();
+        let place = now.place_names().swap_remove(track);
+        let want = if name.is_empty() || name.eq_ignore_ascii_case(&place) {
+            String::new()
+        } else {
+            let name = modulation::valid_name(name, "a track")?;
+            if let Some(why) = now.label_refusal(Some(track), &name) {
+                return Err(why);
+            }
+            name
+        };
+        if want == old {
+            return Ok(false);
+        }
+        let (_, changed) = self.edit("Rename Track", None, |tx| tx.set_track_label(node, &want))?;
+        Ok(changed)
+    }
+
     /// Deletes a patch and everything in it: its chain, modulators and links.
     /// One undo step, "Delete Patch 2", and undo brings it back as it was, in
     /// its place. Refused for the last patch and for one a track plays.
