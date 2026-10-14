@@ -336,10 +336,10 @@ def edit(raw: pathlib.Path, a: float, b: float, captions=(), meta=None, speed: i
         last = f"o{i}"
     mark = BIN / "labels" / "mark.png"
     mark.parent.mkdir(exist_ok=True)
-    # 44 px at the take's 2x: 22 px high in the edit, 24 px in from the corner.
-    subprocess.run([BIN / "label", MARK[0], mark, "44", "-", MARK[1], MARK[2]], check=True)
+    # 154 px at the take's 2x: 77 px high in the edit, 40 px in from the corner.
+    subprocess.run([BIN / "label", MARK[0], mark, "154", "-", MARK[1], MARK[2]], check=True)
     inputs += ["-i", mark]
-    chain += f"[{last}][{len(plates) + 1}:v]overlay=x=48:y=H-h-48[mk];"
+    chain += f"[{last}][{len(plates) + 1}:v]overlay=x=80:y=H-h-80[mk];"
     last = "mk"
     v = (f"[0:v]trim=0:{a},setpts=PTS-STARTPTS[v0];[0:a]atrim=0:{a},asetpts=PTS-STARTPTS[a0];"
          f"[0:v]trim={a}:{b},setpts=(PTS-STARTPTS)/{speed}[v1];"
