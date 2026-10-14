@@ -23,7 +23,8 @@ use super::Shard;
 use crate::music::drums::{self, STYLES};
 use crate::music::line::{self, Figure, Harmony, Pattern, OCTAVES_MAX, RATES};
 use crate::music::{self, Mode, Progression, Register, PROGRESSIONS};
-use crate::tracker::Tracker;
+use crate::tracker::{Tracker, LENGTHS};
+use shard_dsp::steps::STEPS;
 use shard_dsp::VOICES;
 
 pub const MAKE_DRUMS: &str = "shard.make_drums";
@@ -113,15 +114,43 @@ fn bars_of(p: &Json) -> Option<usize> {
     })
 }
 
-/// What to say when more bars were asked for than a track holds: the
-/// model can't write them, so it must not claim to have.
-fn too_long(p: &Json, bars: usize) -> String {
-    match p.get("bars").and_then(number) {
-        Some(n) if n > bars as f64 => format!(
-            ". {n} bars were asked for, but a track holds at most 4 (64 steps): wrote {bars}, which loop. Tell the user it is {bars} bars, not {n}"
-        ),
-        _ => String::new(),
+/// The steps asked for, as `steps`, snapped up to a track's length (4, 8,
+/// 16, 32 or 64); people count in steps as often as in bars.
+fn steps_of(p: &Json) -> Option<usize> {
+    p.get("steps").and_then(number).map(|n| {
+        LENGTHS
+            .iter()
+            .map(|l| *l as usize)
+            .find(|l| *l as f64 >= n)
+            .unwrap_or(STEPS)
+    })
+}
+
+/// A track's length in words: "8 steps", "1 bar", "4 bars".
+fn span(length: usize) -> String {
+    match length {
+        l if l % 16 != 0 => format!("{l} steps"),
+        16 => "1 bar".into(),
+        l => format!("{} bars", l / 16),
     }
+}
+
+/// What to say when more was asked for than a track holds: the model
+/// can't write it, so it must not claim to have.
+fn too_long(p: &Json, length: usize) -> String {
+    let asked = match (
+        p.get("steps").and_then(number),
+        p.get("bars").and_then(number),
+    ) {
+        (Some(n), _) if n > length as f64 => format!("{n} steps"),
+        (None, Some(n)) if n * 16.0 > length as f64 => format!("{n} bars"),
+        _ => return String::new(),
+    };
+    format!(
+        ". {asked} were asked for, but a track holds at most 64 steps (4 bars): wrote {}, which loop. Tell the user it is {}, not {asked}",
+        span(length),
+        span(length)
+    )
 }
 
 /// The seed sent, or one made from the rest of the request: its fields in
@@ -160,13 +189,14 @@ fn names<T>(all: &[T], name: impl Fn(&T) -> &'static str) -> Vec<&'static str> {
 fn make_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     let style_names = names(STYLES, |s| s.name);
     let style = choice(p, "style", drums::style, &style_names, None)?;
-    let bars = bars_of(p).unwrap_or(2);
+    let length = steps_of(p).unwrap_or_else(|| bars_of(p).unwrap_or(2) * 16);
+    let bars = length.div_ceil(16);
     let density = amount(p, "density").unwrap_or(0.5);
     let glitch = amount(p, "glitch").unwrap_or(style.glitch);
     let (seed, sent) = seed_of(p);
     let lanes = drums::generate(style, bars, density, glitch, seed);
     let mut hits = Vec::new();
-    for step in 0..bars * 16 {
+    for step in 0..length {
         for (l, lane) in drums::LANES.iter().enumerate() {
             let v = lanes.lane(l)[step];
             if v > 0 {
@@ -176,7 +206,7 @@ fn make_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     }
     let payload = json!({
         "track": p.get("track").cloned().unwrap_or(Json::Null),
-        "length": bars * 16,
+        "length": length,
         "hits": hits,
     });
     // The style's tempo, while the song is still at the default one: a
@@ -188,12 +218,12 @@ fn make_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     }
     let wrote = commands::set_drums(d, &payload)?;
     let mut out = format!(
-        "{wrote}. Played {} over {bars} bar{}, density {density:.2}, glitch {glitch:.2}, {}",
+        "{wrote}. Played {} over {}, density {density:.2}, glitch {glitch:.2}, {}",
         style.name,
-        if bars == 1 { "" } else { "s" },
+        span(length),
         seed_text(seed, sent),
     );
-    out += &too_long(p, bars);
+    out += &too_long(p, length);
     if at_default {
         out += &format!(
             ". Set the tempo to {} bpm, the style's; call set_tempo if another was asked for",
@@ -286,12 +316,13 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
                 .unwrap_or(1.0)
         })
         .unwrap_or(if degrees.len() <= 4 { 1.0 } else { 0.5 });
-    let bars = bars_of(p).unwrap_or_else(|| {
-        let need = (degrees.len() as f64 * chord_bars).ceil() as usize;
-        BARS.iter().copied().find(|b| *b >= need).unwrap_or(4)
+    let length = steps_of(p).unwrap_or_else(|| {
+        16 * bars_of(p).unwrap_or_else(|| {
+            let need = (degrees.len() as f64 * chord_bars).ceil() as usize;
+            BARS.iter().copied().find(|b| *b >= need).unwrap_or(4)
+        })
     });
-    let chord_steps = (chord_bars * 16.0) as usize;
-    let length = bars * 16;
+    let chord_steps = ((chord_bars * 16.0) as usize).min(length);
     let heard = length.div_ceil(chord_steps).min(degrees.len());
     let h = Harmony {
         key,
@@ -416,12 +447,12 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         music::note_name(hi),
         seed_text(seed, sent),
     );
-    out += &too_long(p, bars);
+    out += &too_long(p, length);
     if heard < degrees.len() {
         out += &format!(
-            ". Only the first {heard} of its {} chords fit in {bars} bar{}; send chord_bars 0.5 or more bars for all of them",
+            ". Only the first {heard} of its {} chords fit in {}; send chord_bars 0.5 or more bars for all of them",
             degrees.len(),
-            if bars == 1 { "" } else { "s" }
+            span(length)
         );
     }
     let sound = if role == Role::Arp { "arp" } else { "bass" };

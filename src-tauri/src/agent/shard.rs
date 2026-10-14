@@ -38,7 +38,7 @@ pub const SYSTEM: &str = r#"You are the groove engine inside a step sequencer. Y
 
 Translate themes and moods into dark electronic textures: EBM (driving sixteenth bass pulse, four-on-the-floor, 120-135 BPM), Glitch (broken, sparse, displaced hits), Trip-Hop (slow, smoky, heavy syncopation, lazy swing), Trap (skittering hi-hats, massive sub-bass, rapid rolls), Tricky/Illbient (offset patterns, industrial clanks, unpredictable rests), Dark Metal D&B (relentless 170+ BPM syncopated breakbeats, distorted driving basslines).
 
-For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Notes are MIDI numbers, middle C is C4 = 60: so E1 = 28, G1 = 31, A1 = 33, G2 = 43, G3 = 55. A track holds at most 4 bars (64 steps): for more, write 4 and say they loop. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
+For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Notes are MIDI numbers, middle C is C4 = 60: so E1 = 28, G1 = 31, A1 = 33, G2 = 43, G3 = 55. A bar is 16 steps, and a track holds at most 64 steps (4 bars): for more, write 64 and say they loop. When the user counts in steps, send steps, not bars. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
 
 Tracks are named as Shard shows them: melody tracks Track 1, Track 2 and on, drums tracks Drums 1, Drums 2 and on. The song as it is now comes with each request. Give a track's name to write over that track; leave track out to write a new one.
 
@@ -57,8 +57,9 @@ const FINISHED: &str =
 
 const SEED: &str = "Any whole number. Leave it out the first time; send a different one for another take of the same request.";
 
-const BARS: &str =
-    "1, 2 or 4: a track holds at most 4 bars (64 steps), so a longer request gets 4 that loop";
+const BARS: &str = "1, 2 or 4; a bar is 16 steps, and a track holds at most 4 bars, so a longer request gets 4 that loop";
+
+const LENGTH: &str = "the track's length in steps, 4, 8, 16, 32 or 64, when the user counts in steps (\"8 steps\"); send it instead of bars";
 
 /// Shard's tools: the brief tools (whole tracks from a few choices, written
 /// by `crate::music`'s generators) and what they choose from, then the
@@ -86,6 +87,7 @@ pub fn tools() -> Tools {
                     "track": { "description": TRACK },
                     "style": { "type": "string", "enum": styles, "description": "ebm_straight and ebm_shuffle for EBM, glitch_sparse and glitch_broken for glitch; list_drum_styles describes each" },
                     "bars": { "type": "integer", "description": BARS },
+                    "steps": { "type": "integer", "description": LENGTH },
                     "density": { "type": "number", "description": "0 to 1: 0.5 as the style is written, lower thinner, higher adds hats and ghost notes" },
                     "glitch": { "type": "number", "description": "0 to 1: 0 clean; higher drops, displaces and stutters hits" },
                     "seed": { "type": "integer", "description": SEED },
@@ -109,6 +111,7 @@ pub fn tools() -> Tools {
                     "figure": { "type": "string", "enum": generate::figure_names(), "description": "ebm_pulse: sixteenths on the root with gaps; rolling: three sixteenths after each beat, resting on the kick; octave_pulse: root and octave; acid: a new line each bar with accents, jumps and ties; offbeat: eighths between the kicks; root_fifth; gallop: an eighth and two sixteenths; sparse: long notes and space" },
                     "register": { "type": "string", "enum": registers, "description": "sub, low (the default), mid or high" },
                     "bars": { "type": "integer", "description": BARS },
+                    "steps": { "type": "integer", "description": LENGTH },
                     "chord_bars": chord_bars,
                     "seed": { "type": "integer", "description": SEED },
                 },
@@ -133,6 +136,7 @@ pub fn tools() -> Tools {
                     "octaves": { "type": "integer", "enum": [1, 2] },
                     "register": { "type": "string", "enum": registers, "description": "mid is the default" },
                     "bars": { "type": "integer", "description": BARS },
+                    "steps": { "type": "integer", "description": LENGTH },
                     "chord_bars": chord_bars,
                     "seed": { "type": "integer", "description": SEED },
                 },

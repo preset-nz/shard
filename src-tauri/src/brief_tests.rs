@@ -378,6 +378,7 @@ fn live_brief_prompts() {
         "an EBM beat with a pulsing bass in A minor, dark",
         "glitchy broken drums, sparse",
         "a phrygian arp over a dark progression in E",
+        "8 steps of fast funny drums",
     ];
     for prompt in prompts {
         let r = rig();
@@ -549,17 +550,20 @@ fn more_bars_than_a_track_holds_writes_four_and_says_so() {
     )
     .unwrap();
     assert!(
-        out.contains("8 bars were asked for, but a track holds at most 4"),
+        out.contains("8 bars were asked for, but a track holds at most 64 steps"),
         "{out}"
     );
-    assert!(out.contains("Tell the user it is 4 bars, not 8"), "{out}");
+    assert!(
+        out.contains("Tell the user it is 4 bars, not 8 bars"),
+        "{out}"
+    );
     let out = run(
         &mut d,
         MAKE_BASS,
         json!({ "key": "A", "feel": "dark", "figure": "acid", "bars": 8 }),
     )
     .unwrap();
-    assert!(out.contains("wrote 4, which loop"), "{out}");
+    assert!(out.contains("wrote 4 bars, which loop"), "{out}");
     assert_eq!(track(&song(&mut d), "Track 2")["length"], 64);
     let fits = run(
         &mut d,
@@ -568,4 +572,44 @@ fn more_bars_than_a_track_holds_writes_four_and_says_so() {
     )
     .unwrap();
     assert!(!fits.contains("asked for"), "{fits}");
+}
+
+#[test]
+fn a_length_in_steps_writes_that_many() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        MAKE_DRUMS,
+        json!({ "style": "ebm_straight", "steps": 8 }),
+    )
+    .unwrap();
+    assert!(out.contains("Played ebm_straight over 8 steps"), "{out}");
+    let s = song(&mut d);
+    let drums = track(&s, "Drums 2");
+    assert_eq!(drums["length"], 8);
+    assert!(drums["hits"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|h| h["step"].as_i64().unwrap() <= 8));
+
+    let out = run(
+        &mut d,
+        MAKE_BASS,
+        json!({ "key": "A", "feel": "dark", "figure": "rolling", "steps": 8 }),
+    )
+    .unwrap();
+    assert!(!out.contains("asked for"), "{out}");
+    let s = song(&mut d);
+    let bass = track(&s, "Track 2");
+    assert_eq!(bass["length"], 8);
+    assert!(!bass["steps"].as_array().unwrap().is_empty());
+
+    let out = run(
+        &mut d,
+        MAKE_ARP,
+        json!({ "key": "A", "pattern": "up", "steps": 100 }),
+    )
+    .unwrap();
+    assert!(out.contains("100 steps were asked for"), "{out}");
 }
