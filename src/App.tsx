@@ -8,9 +8,17 @@ import {
   useDocumentNotes,
   useTextFocus,
 } from '@preset.nz/app-kit/core';
-import { dismissNotification, notify, SnackbarProvider, SnackbarViewport } from '@preset.nz/ux-kit';
+import {
+  dismissNotification,
+  Icons,
+  notify,
+  type SnackbarOptions,
+  SnackbarProvider,
+  SnackbarViewport,
+} from '@preset.nz/ux-kit';
 import { listen } from '@tauri-apps/api/event';
 import { open } from '@tauri-apps/plugin-dialog';
+import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ARRANGEMENT_PREFIX,
@@ -155,7 +163,7 @@ import {
 } from '@/scope';
 import { useSelection } from '@/stores/selection';
 import { FIT, minSpanFor, stepZoom, type View } from '@/waveView';
-import { agentDump } from './lib/agent';
+import { agentDump, copyText } from './lib/agent';
 
 /**
  * How many spawns the inspector keeps.
@@ -1285,7 +1293,12 @@ export default function App() {
         break;
       case 'file-save-agent-session':
         void agentDump().then(
-          (dir) => setNote(`Saved the session and agent log to ${dir}`),
+          (dir) =>
+            setNote('Saved the session and agent log', {
+              description: <SavedFolder dir={dir} />,
+              action: { label: 'Show in Finder', onClick: () => void revealItemInDir(dir) },
+              timeout: 15000,
+            }),
           (e) => setNote(String(e)),
         );
         break;
@@ -2229,10 +2242,32 @@ export default function App() {
  * until dismissed. Module-level: they hold no React state. */
 function message(kind: 'plain' | 'error') {
   let last: string | null = null;
-  return (text: string | null) => {
+  return (
+    text: string | null,
+    more?: Pick<SnackbarOptions, 'description' | 'action' | 'timeout'>,
+  ) => {
     if (last) dismissNotification(last);
-    last = text ? notify({ message: text, kind, persistent: kind === 'error' }) : null;
+    last = text ? notify({ message: text, kind, persistent: kind === 'error', ...more }) : null;
   };
+}
+
+/** A saved folder's path in a snackbar, with a button that copies it. */
+function SavedFolder({ dir }: { dir: string }) {
+  const [copied, setCopied] = useState(false);
+  return (
+    <span className="flex items-start gap-1">
+      <span className="min-w-0 break-all select-text">{dir}</span>
+      <button
+        type="button"
+        aria-label="Copy the folder's path"
+        title="Copy path"
+        className="inline-flex size-4 shrink-0 items-center justify-center rounded-sm opacity-70 hover:bg-foreground/10 hover:opacity-100"
+        onClick={() => void copyText(dir).then(() => setCopied(true))}
+      >
+        {copied ? <Icons.CheckIcon size={12} /> : <Icons.CopyIcon size={12} />}
+      </button>
+    </span>
+  );
 }
 const setNote = message('plain');
 const setError = message('error');
