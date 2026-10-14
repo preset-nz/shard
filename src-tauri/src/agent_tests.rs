@@ -1396,3 +1396,44 @@ fn read_song_gives_the_place_and_the_label_and_every_write_takes_a_name() {
         );
     }
 }
+
+#[test]
+fn a_track_the_model_leaves_nameless_gets_a_name_of_shards_and_the_answer_says_so() {
+    let r = rig();
+    let bass = json!({ "key": "D", "figure": "ebm_pulse", "track": "new" });
+    let mut model = Script::new(vec![
+        turn_calling("make_bass", bass.clone()),
+        turn_calling("make_bass", bass),
+        turn_calling(
+            "make_arp",
+            json!({ "key": "D", "pattern": "up", "track": "new" }),
+        ),
+        turn_calling(
+            "make_drums",
+            json!({ "style": "ebm_straight", "track": "Drums 1" }),
+        ),
+        done_turn(),
+    ]);
+    let events = reply(&r, &mut model, "industrial bass, arp and beat");
+    let said: Vec<&str> = events
+        .iter()
+        .filter_map(|e| match e {
+            Event::Tool {
+                ok: true, result, ..
+            } => Some(result.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(said[0].contains("\"Bass\""), "{}", said[0]);
+    assert!(said[0].contains("Shard chose the name"), "{}", said[0]);
+    assert!(
+        said[1].starts_with("nothing changed"),
+        "the same write again is still the same write: {}",
+        said[1]
+    );
+    assert_eq!(
+        r.session.tracker().names(),
+        ["Track 1", "EBM beat", "Bass", "Arp"]
+    );
+    assert_eq!(r.session.patches().last().unwrap().name, "Arp");
+}

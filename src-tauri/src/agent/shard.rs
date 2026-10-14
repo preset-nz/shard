@@ -267,9 +267,20 @@ pub struct Draft {
     /// the earlier, which it would overwrite whole anyway. A write that made
     /// a track (`"new"`) stays, since replaying it makes the track.
     queue: Vec<(&'static str, Json)>,
+    /// The document as the reply found it, to rebuild the draft from when a
+    /// write replaces an earlier one, so the draft holds what the replay
+    /// will: the earlier write's new track gone with it.
+    origin: String,
 }
 
 const DRAFT: &str = "draft.shard";
+
+fn open(text: &str) -> Result<Document<Shard>, String> {
+    let store = MemoryStore::default();
+    store.put(DRAFT, text);
+    let (doc, _) = Document::<Shard>::open(store, DRAFT).map_err(|e| e.to_string())?;
+    Ok(doc)
+}
 
 fn kinds(session: &Session) -> Vec<bool> {
     session
@@ -283,17 +294,26 @@ fn kinds(session: &Session) -> Vec<bool> {
 impl Draft {
     pub fn of(session: &Session) -> Result<Self, String> {
         let text = session.read(|d| d.tree().serialise());
-        let store = MemoryStore::default();
-        store.put(DRAFT, &text);
-        let (doc, _) = Document::<Shard>::open(store, DRAFT).map_err(|e| e.to_string())?;
         Ok(Self {
-            doc,
+            doc: open(&text)?,
+            origin: text,
             tools: tools(),
             selected: session.selected_track(),
             muted: session.mix().iter().map(|m| m.heard_mute).collect(),
             kinds: kinds(session),
             queue: Vec::new(),
         })
+    }
+
+    /// The draft made again from the reply's start and `queue`.
+    fn rebuild(&mut self, queue: Vec<(&'static str, Json)>) -> Result<(), String> {
+        let mut doc = open(&self.origin)?;
+        for (command, payload) in &queue {
+            doc.run(command, payload).map_err(|e| e.to_string())?;
+        }
+        self.doc = doc;
+        self.queue = queue;
+        Ok(())
     }
 
     /// The song as `read_song` answers: the command's, plus which track is
@@ -408,6 +428,32 @@ impl Toolbox for Draft {
                 payload["name"] = name;
             }
         }
+        // A track the model left nameless, new or never named, gets one of
+        // Shard's, in the payload so the replay names it the same; the
+        // answer says so, so the model sends its own next time.
+        let mut chose = false;
+        if drums.is_some()
+            && payload
+                .get("name")
+                .and_then(Json::as_str)
+                .is_none_or(|n| n.trim().is_empty())
+        {
+            let tracker = &self.doc.projection().tracker;
+            let place = commands::track_names(tracker)
+                .iter()
+                .position(|n| Some(n.as_str()) == payload["track"].as_str());
+            let unnamed = place.is_none_or(|i| tracker.tracks[i].label.is_empty());
+            if unnamed {
+                let base = fallback_name(tool.command, &payload);
+                let name = std::iter::once(base.to_string())
+                    .chain((2..10).map(|k| format!("{base} {k}")))
+                    .find(|n| tracker.label_refusal(place, n).is_none());
+                if let Some(name) = name {
+                    payload["name"] = json!(name);
+                    chose = true;
+                }
+            }
+        }
         // A reasoning model checking its work writes the same track again
         // and again until the turn cap; tell it nothing changed.
         let same_target = |(c, p): &&(&'static str, Json)| {
@@ -418,36 +464,95 @@ impl Toolbox for Draft {
             .iter()
             .rev()
             .find(same_target)
-            .is_some_and(|(_, p)| *p == payload)
+            .is_some_and(|(_, p)| {
+                // A name Shard chose differs from the last one it chose for
+                // the same write ("Bass 2"), so it doesn't count.
+                let mut p = p.clone();
+                let mut now = payload.clone();
+                if chose {
+                    for j in [&mut p, &mut now] {
+                        if let Some(o) = j.as_object_mut() {
+                            o.remove("name");
+                        }
+                    }
+                }
+                p == now
+            })
         {
             return Ok(
                 "nothing changed: the song already holds exactly this. If the song is done, stop calling tools and reply in one sentence."
                     .into(),
             );
         }
+        // It overwrites the track whole, so an earlier write of it would only
+        // be undone on replay: drop it, and the draft with it, first.
+        let track = payload.get("track").and_then(Json::as_str);
+        let earlier = self.queue.clone();
+        if drums.is_some()
+            && track != Some("new")
+            && self
+                .queue
+                .iter()
+                .any(same_target_of(tool.command, &payload))
+        {
+            let kept = earlier
+                .iter()
+                .filter(|q| !same_target_of(tool.command, &payload)(q))
+                .cloned()
+                .collect();
+            self.rebuild(kept)?;
+        }
         match self.doc.run(tool.command, &payload) {
             Ok(out) => {
-                let track = payload.get("track").and_then(Json::as_str);
-                if drums.is_some() && track != Some("new") {
-                    // It overwrites the track whole, so the earlier write
-                    // of it would only be undone on replay.
-                    self.queue.retain(|(c, p)| {
-                        !(*c == tool.command && p.get("track") == payload.get("track"))
-                    });
-                }
                 self.queue.push((tool.command, payload));
                 let mut text = match out {
                     Outcome::Text(t) => t,
                     _ => "done".into(),
                 };
+                if chose {
+                    text += " (Shard chose the name, since none was sent: give every new track one with name)";
+                }
                 if drums.is_some() {
                     text += FINISHED;
                 }
                 Ok(text)
             }
-            Err(PomError::Payload(m)) => Err(m),
-            Err(e) => Err(e.to_string()),
+            Err(e) => {
+                // Refused: the earlier write stands, as it was.
+                if self.queue != earlier {
+                    self.rebuild(earlier)?;
+                }
+                match e {
+                    PomError::Payload(m) => Err(m),
+                    e => Err(e.to_string()),
+                }
+            }
         }
+    }
+}
+
+/// Whether a queued write is by `command` to `payload`'s track.
+fn same_target_of<'a>(
+    command: &'a str,
+    payload: &'a Json,
+) -> impl Fn(&(&'static str, Json)) -> bool + 'a {
+    move |(c, p)| *c == command && p.get("track") == payload.get("track")
+}
+
+/// The name a nameless write's track gets: what the tool makes, and for
+/// drums the style's family ("EBM beat").
+fn fallback_name(command: &str, payload: &Json) -> &'static str {
+    match command {
+        generate::MAKE_BASS => "Bass",
+        generate::MAKE_ARP => "Arp",
+        generate::MAKE_DRUMS => match payload.get("style").and_then(Json::as_str) {
+            Some(s) if s.starts_with("ebm") => "EBM beat",
+            Some(s) if s.starts_with("glitch") => "Glitch beat",
+            Some("half_time") => "Half-time beat",
+            _ => "Beat",
+        },
+        commands::SET_DRUMS => "Beat",
+        _ => "Melody",
     }
 }
 
