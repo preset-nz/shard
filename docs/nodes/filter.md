@@ -2,17 +2,17 @@
 title: Filter
 node: filter
 group: effect
-summary: A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.
+summary: A resonant filter that takes away the highs, the lows or everything outside a band.
 ---
 
 # Filter
 
 <!-- generated:begin — preset-docs rewrites this block; write outside it -->
-A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.
+A resonant filter that takes away the highs, the lows or everything outside a band.
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
-| Filter | on or off | off | A resonant filter after all the effects, taking away the highs, the lows or everything outside a band. |
+| Filter | on or off | off | A resonant filter that takes away the highs, the lows or everything outside a band. |
 | Mix | 0% to 100% | 100% | How much filtered sound is blended with the unfiltered; full is all filtered. |
 | Cutoff | 20 Hz to 20 kHz | 2 kHz | The frequency where the filter starts to cut. |
 | Resonance | 0% to 100% | 20% | Emphasis around the cutoff: a gentle bump at low settings, a ringing whistle at high ones. |
@@ -23,7 +23,7 @@ A resonant filter after all the effects, taking away the highs, the lows or ever
 
 ## Using it
 
-The filter is a section of the patch, not a chain effect. It comes after all the effects and takes away the highs, the lows, or everything outside a band. It starts off.
+The filter is a section of the patch, not a chain effect. It comes after the envelope and before the ladder and the effects, so a drive or a crusher after it is heard in full. It takes away the highs, the lows, or everything outside a band. It starts off.
 
 - **Mix** is how much filtered sound is blended with the unfiltered. It starts at 100%, so it is all filtered once the filter is switched on.
 - **Cutoff** is where the filter starts to cut. Sweeping it is the main use.

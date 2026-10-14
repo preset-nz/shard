@@ -747,13 +747,13 @@ const BASE: &[ParamDef] = &[
         smooth_ms: 0.0,
         steps: &[],
     },
-    // The filter, on the master after every effect (Georg, 2026-09-14). What
-    // takes the harmonics away that crush and ring add. Type is stepped, and
+    // The filter: in a patch before the effects (Georg, 2026-10-15), in the
+    // arrangement after its chain, which borrows these rows. Type is stepped, and
     // the UI names its steps from `FilterType::NAMES`.
     ParamDef {
         id: "filter.on",
         name: "Filter",
-        description: "A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.",
+        description: "A resonant filter that takes away the highs, the lows or everything outside a band.",
         min: 0.0,
         max: 1.0,
         default: 0.0,

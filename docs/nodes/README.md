@@ -24,7 +24,7 @@ title: Shard nodes
 - [Drive](drive.md): Bends the sound out of shape with a curve, then darkens it with a tone filter, from warm overdrive to harsh fold.
 - [Echo](echo.md): The worn counterpart of the delay: each repeat comes back darker, dirtier and slightly wandering, like a loop of tape.
 - [Envelope](env.md): Shapes how each note swells in and dies away; at its neutral setting it passes the sound untouched.
-- [Filter](filter.md): A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.
+- [Filter](filter.md): A resonant filter that takes away the highs, the lows or everything outside a band.
 - [Flanger](flanger.md): A very short swept delay mixed with the dry sound, so notches sweep through it with a jet-like whoosh.
 - [Shifter](freqshift.md): Moves every frequency by the same number of hertz, so the sound turns inharmonic: clangs, spirals and detuned shimmer.
 - [Ladder](ladder.md): A driven four-pole low-pass after the patch filter, modelled on the Moog ladder: growls when pushed, whistles at full resonance.
