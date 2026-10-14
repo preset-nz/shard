@@ -834,7 +834,7 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
 
 // Tempo.
 
-fn set_tempo(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
+pub(super) fn set_tempo(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     let bpm = p
         .get("bpm")
         .and_then(number)

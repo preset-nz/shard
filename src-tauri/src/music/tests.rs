@@ -274,9 +274,8 @@ fn sparse_leaves_at_least_half_the_steps_empty() {
 fn rests(notes: &[line::Note], length: usize) -> usize {
     let mut covered = vec![false; length];
     for n in notes {
-        for s in n.step..(n.step + n.hold as usize).min(length) {
-            covered[s] = true;
-        }
+        let end = (n.step + n.hold as usize).min(length);
+        covered[n.step..end].fill(true);
     }
     covered.iter().filter(|c| !**c).count()
 }

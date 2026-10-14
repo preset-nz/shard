@@ -23,6 +23,7 @@ use super::Shard;
 use crate::music::drums::{self, STYLES};
 use crate::music::line::{self, Figure, Harmony, Pattern, OCTAVES_MAX, RATES};
 use crate::music::{self, Mode, Progression, Register, PROGRESSIONS};
+use crate::tracker::Tracker;
 use shard_dsp::VOICES;
 
 pub const MAKE_DRUMS: &str = "shard.make_drums";
@@ -167,14 +168,32 @@ fn make_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
         "length": bars * 16,
         "hits": hits,
     });
+    // The style's tempo, while the song is still at the default one: a
+    // tempo anyone chose, set_tempo's included, is kept.
+    let tempo = d.projection().tracker.tempo;
+    let at_default = (tempo - Tracker::default().tempo).abs() < 0.01;
+    if at_default {
+        commands::set_tempo(d, &json!({ "bpm": style.bpm }))?;
+    }
     let wrote = commands::set_drums(d, &payload)?;
-    Ok(format!(
-        "{wrote}. Played {} over {bars} bar{}, density {density:.2}, glitch {glitch:.2}, {}; it is written for about {} bpm",
+    let mut out = format!(
+        "{wrote}. Played {} over {bars} bar{}, density {density:.2}, glitch {glitch:.2}, {}",
         style.name,
         if bars == 1 { "" } else { "s" },
         seed_text(seed, sent),
-        style.bpm,
-    ))
+    );
+    if at_default {
+        out += &format!(
+            ". Set the tempo to {} bpm, the style's; call set_tempo if another was asked for",
+            style.bpm
+        );
+    } else {
+        out += &format!(
+            ". Kept the tempo at {tempo} bpm; the style is written for about {}",
+            style.bpm
+        );
+    }
+    Ok(out)
 }
 
 pub fn drum_styles() -> Json {

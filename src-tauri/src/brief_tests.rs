@@ -222,7 +222,7 @@ fn the_same_brief_writes_the_same_track_and_says_its_seed() {
     with_seed["seed"] = json!(7);
     let mut c = doc();
     let tc = run(&mut c, MAKE_DRUMS, with_seed).unwrap();
-    assert!(tc.contains("seed 7;"), "{tc}");
+    assert!(tc.contains("seed 7."), "{tc}");
     assert_ne!(song(&mut a), song(&mut c));
 }
 
@@ -498,4 +498,21 @@ fn a_brief_without_chords_picks_a_progression_with_its_feel_by_seed() {
     )
     .unwrap_err();
     assert!(refused.contains("not a feel; send one of"), "{refused}");
+}
+
+#[test]
+fn a_drum_style_brings_its_tempo_unless_one_was_chosen() {
+    let mut d = doc();
+    let out = run(&mut d, MAKE_DRUMS, json!({ "style": "ebm_straight" })).unwrap();
+    assert!(
+        out.contains("Set the tempo to 128 bpm, the style's"),
+        "{out}"
+    );
+    assert_eq!(song(&mut d)["tempo"], 128.0);
+
+    let mut d = doc();
+    run(&mut d, commands::SET_TEMPO, json!({ "bpm": 140 })).unwrap();
+    let out = run(&mut d, MAKE_DRUMS, json!({ "style": "ebm_straight" })).unwrap();
+    assert!(out.contains("Kept the tempo at 140 bpm"), "{out}");
+    assert_eq!(song(&mut d)["tempo"], 140.0);
 }
