@@ -88,12 +88,16 @@ pub enum Figure {
     RootFifth,
     Gallop,
     Sparse,
+    Rolling,
+    Acid,
 }
 
 impl Figure {
-    pub const ALL: [Figure; 6] = [
+    pub const ALL: [Figure; 8] = [
         Figure::EbmPulse,
+        Figure::Rolling,
         Figure::OctavePulse,
+        Figure::Acid,
         Figure::Offbeat,
         Figure::RootFifth,
         Figure::Gallop,
@@ -108,19 +112,27 @@ impl Figure {
             Figure::RootFifth => "root_fifth",
             Figure::Gallop => "gallop",
             Figure::Sparse => "sparse",
+            Figure::Rolling => "rolling",
+            Figure::Acid => "acid",
         }
     }
 
     pub const fn describe(self) -> &'static str {
         match self {
             Figure::EbmPulse => {
-                "straight sixteenths on the root, accented on the beat (DAF, Nitzer Ebb)"
+                "sixteenths on the root with a few gaps, accented on the beat (DAF, Nitzer Ebb)"
             }
             Figure::OctavePulse => "sixteenths alternating root and octave",
             Figure::Offbeat => "eighths on the offbeats, between the kicks",
             Figure::RootFifth => "root on beats 1 and 3, fifth on 2 and 4",
             Figure::Gallop => "an eighth and two sixteenths on every beat",
             Figure::Sparse => "long roots with space between, dub-like",
+            Figure::Rolling => {
+                "three sixteenths after every beat, rests where the kick lands (Front 242)"
+            }
+            Figure::Acid => {
+                "a different sixteenth line every bar: rests, accents, octave jumps and ties (303)"
+            }
         }
     }
 
@@ -171,26 +183,110 @@ fn bar_of(figure: Figure) -> Vec<(usize, Tone, u8, u8)> {
             })
             .collect(),
         Figure::Sparse => vec![(0, Tone::Root, 6, ACCENT)],
+        Figure::Rolling => (0..16)
+            .filter(|s| s % 4 != 0)
+            .map(|s| (s, Tone::Root, 1, if s % 4 == 1 { NORMAL } else { SOFT }))
+            .collect(),
+        // Drawn per bar in `bass`.
+        Figure::Acid => Vec::new(),
     }
+}
+
+/// The draws a bar makes, all of them every bar, whatever the figure uses.
+struct BarDraws {
+    turn: f32,
+    pickup: f32,
+    late: f32,
+    which: f32,
+    /// Per step: whether a pulse leaves it out, or acid plays it.
+    gap: [f32; 16],
+    /// Per step: acid's tone.
+    tone: [f32; 16],
+    /// Per step: acid's accent and tie.
+    accent: [f32; 16],
+}
+
+impl BarDraws {
+    fn draw(r: &mut shard_dsp::rng::Rng) -> Self {
+        let (turn, pickup, late, which) = (r.next_f32(), r.next_f32(), r.next_f32(), r.next_f32());
+        let mut b = BarDraws {
+            turn,
+            pickup,
+            late,
+            which,
+            gap: [0.0; 16],
+            tone: [0.0; 16],
+            accent: [0.0; 16],
+        };
+        for s in 0..16 {
+            b.gap[s] = r.next_f32();
+            b.tone[s] = r.next_f32();
+            b.accent[s] = r.next_f32();
+        }
+        b
+    }
+}
+
+/// How often a pulse figure leaves out a sixteenth off the beat.
+const PULSE_GAPS: f32 = 0.3;
+
+/// A bar of acid: the downbeat always, two in three of the other steps, an
+/// accent on about one in four, octave jumps and fifths, and some notes
+/// tied into the next step.
+fn acid_bar(d: &BarDraws) -> Vec<(usize, Tone, u8, u8)> {
+    let mut out = Vec::new();
+    let mut s = 0;
+    while s < 16 {
+        if s == 0 || d.gap[s] < 0.66 {
+            let tone = match d.tone[s] {
+                t if t < 0.22 => Tone::Octave,
+                t if t < 0.32 => Tone::Fifth,
+                _ => Tone::Root,
+            };
+            let vel = if s == 0 || d.accent[s] < 0.25 {
+                ACCENT
+            } else {
+                SOFT
+            };
+            // A tie: held into the next step, which is then not struck.
+            let hold = if d.accent[s] > 0.82 && s < 15 { 2 } else { 1 };
+            out.push((s, tone, hold, vel));
+            s += usize::from(hold);
+        } else {
+            s += 1;
+        }
+    }
+    out
 }
 
 /// A bass line: `figure` over `harmony` in `register`.
 ///
 /// What the seed varies, always within the chord: velocities by a few
-/// steps; the octave pulse and the gallop answer the last beat of a bar
-/// with the fifth or octave; root–fifth picks up the next beat with a
-/// sixteenth; sparse adds a second, shorter note late in some bars. Every
-/// draw is made for every bar whether used or not, so changing one thing
-/// moves nothing else.
+/// steps; the pulses leave out some sixteenths off the beat, and they and
+/// the gallop answer the last beat of a bar with the fifth or octave;
+/// root–fifth picks up the next beat with a sixteenth; sparse adds a
+/// second, shorter note late in some bars; acid is drawn afresh every bar.
+/// Every draw is made for every bar whether used or not, so changing one
+/// thing moves nothing else.
 pub fn bass(h: &Harmony, figure: Figure, register: Register, seed: u32) -> Vec<Note> {
     let mut r = rng(seed, 1);
     let mut out: Vec<Note> = Vec::new();
     let bars = h.length.div_ceil(16);
     for bar in 0..bars {
-        let (turn, pickup, late, which) = (r.next_f32(), r.next_f32(), r.next_f32(), r.next_f32());
-        let mut events = bar_of(figure);
+        let draws = BarDraws::draw(&mut r);
+        let (turn, pickup, late, which) = (draws.turn, draws.pickup, draws.late, draws.which);
+        let mut events = if figure == Figure::Acid {
+            acid_bar(&draws)
+        } else {
+            bar_of(figure)
+        };
+        if matches!(figure, Figure::EbmPulse | Figure::OctavePulse) {
+            events.retain(|e| e.0 % 4 == 0 || draws.gap[e.0] >= PULSE_GAPS);
+        }
         match figure {
-            Figure::OctavePulse | Figure::Gallop | Figure::EbmPulse if turn < 0.35 => {
+            Figure::OctavePulse | Figure::Gallop | Figure::EbmPulse | Figure::Rolling
+                if turn < 0.35 =>
+            {
                 // The last beat answers with another tone.
                 let tone = if which < 0.5 {
                     Tone::Fifth

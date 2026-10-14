@@ -247,7 +247,9 @@ fn the_octave_pulse_leaps_an_octave_in_every_register() {
         for key in 0..12 {
             let h = harmony(key, Mode::Minor, "i-bVI-bVII", 16, 48);
             let n = line::bass(&h, Figure::OctavePulse, reg, 0);
-            assert_eq!((n[1].note - n[0].note).abs(), 12, "{} {key}", reg.name());
+            // Odd steps play the octave; some are left out.
+            let odd = n.iter().find(|n| n.step % 2 == 1).unwrap();
+            assert_eq!((odd.note - n[0].note).abs(), 12, "{} {key}", reg.name());
         }
     }
 }
@@ -265,6 +267,74 @@ fn sparse_leaves_at_least_half_the_steps_empty() {
             }
         }
         assert!(covered.iter().filter(|c| !**c).count() >= 32, "seed {seed}");
+    }
+}
+
+/// Steps no note sounds on, holds included.
+fn rests(notes: &[line::Note], length: usize) -> usize {
+    let mut covered = vec![false; length];
+    for n in notes {
+        for s in n.step..(n.step + n.hold as usize).min(length) {
+            covered[s] = true;
+        }
+    }
+    covered.iter().filter(|c| !**c).count()
+}
+
+#[test]
+fn the_pulses_leave_space_but_keep_every_beat() {
+    let h = harmony(9, Mode::Minor, "i-bVI-bVII-iv", 16, 64);
+    for f in [Figure::EbmPulse, Figure::OctavePulse] {
+        for seed in 0..30 {
+            let notes = line::bass(&h, f, Register::Low, seed);
+            let r = rests(&notes, 64);
+            assert!((8..=32).contains(&r), "{} seed {seed}: {r} rests", f.name());
+            for beat in (0..64).step_by(4) {
+                assert!(
+                    notes.iter().any(|n| n.step == beat),
+                    "{} seed {seed}: beat {beat}",
+                    f.name()
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn rolling_rests_where_the_kick_lands() {
+    let h = harmony(9, Mode::Minor, "i-bVI", 16, 32);
+    for seed in 0..10 {
+        let notes = line::bass(&h, Figure::Rolling, Register::Low, seed);
+        assert!(notes.iter().all(|n| n.step % 4 != 0), "seed {seed}");
+        assert_eq!(notes.len(), 24);
+    }
+}
+
+#[test]
+fn acid_is_a_different_line_every_bar_with_accents_and_rests() {
+    let h = harmony(9, Mode::Minor, "i", 16, 64);
+    for seed in 0..20 {
+        let notes = line::bass(&h, Figure::Acid, Register::Low, seed);
+        let bar = |b: usize| -> Vec<(usize, i32, u8)> {
+            notes
+                .iter()
+                .filter(|n| n.step / 16 == b)
+                .map(|n| (n.step % 16, n.note, n.hold))
+                .collect()
+        };
+        assert!((1..4).any(|b| bar(b) != bar(0)), "seed {seed}");
+        assert!(rests(&notes, 64) >= 8, "seed {seed}");
+        let mut pitches: Vec<i32> = notes.iter().map(|n| n.note).collect();
+        pitches.sort_unstable();
+        pitches.dedup();
+        assert!(pitches.len() >= 2, "seed {seed}: one pitch");
+        assert!(
+            notes
+                .iter()
+                .filter(|n| n.step % 4 != 0)
+                .any(|n| n.velocity > 110),
+            "seed {seed}: no offbeat accent"
+        );
     }
 }
 

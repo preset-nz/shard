@@ -358,7 +358,7 @@ fn the_draft_writes_briefs_as_tracks_and_reads_lists_without_queueing() {
     assert!(t
         .tracks
         .iter()
-        .any(|t| !t.is_drums() && t.steps.iter().filter(|s| s.on).count() == 64));
+        .any(|t| !t.is_drums() && t.length == 64 && t.steps.iter().filter(|s| s.on).count() >= 32));
 }
 
 /// The three first-slice prompts against LM Studio, in Quick: `cargo test -p

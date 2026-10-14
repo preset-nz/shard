@@ -103,7 +103,7 @@ pub fn tools() -> Tools {
                     "key": key,
                     "mode": mode,
                     "progression": progression,
-                    "figure": { "type": "string", "enum": generate::figure_names(), "description": "ebm_pulse: straight sixteenths on the root; octave_pulse: root and octave; offbeat: eighths between the kicks; root_fifth; gallop: an eighth and two sixteenths; sparse: long notes and space" },
+                    "figure": { "type": "string", "enum": generate::figure_names(), "description": "ebm_pulse: sixteenths on the root with gaps; rolling: three sixteenths after each beat, resting on the kick; octave_pulse: root and octave; acid: a new line each bar with accents, jumps and ties; offbeat: eighths between the kicks; root_fifth; gallop: an eighth and two sixteenths; sparse: long notes and space" },
                     "register": { "type": "string", "enum": registers, "description": "sub, low (the default), mid or high" },
                     "bars": { "type": "integer", "enum": [1, 2, 4], "description": BARS },
                     "chord_bars": chord_bars,
