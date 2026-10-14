@@ -19,9 +19,10 @@ export type AgentStopReason = 'cancelled' | 'time' | 'tokens' | 'turns';
  * `start` and ends with exactly one `done`. `stopped` or `error` come just
  * before `done` when the reply didn't finish on its own:
  *
- * - `cancelled` (Esc) and `error` apply nothing: `done.applied` is false.
- * - `time`, `tokens` and `turns` apply what was written before the limit:
- *   each write is a whole track, and one undo takes it all back.
+ * - `cancelled` (Stop or Esc), `time`, `tokens` and `turns` apply what was
+ *   written before the stop: each write is a whole track, and one undo takes
+ *   it all back. `cancelled` is shown as "Stopped".
+ * - `error` applies nothing: `done.applied` is false.
  *
  * `done.applied` is false too when the reply wrote nothing, or when the
  * tracks changed while it ran (that comes with an `error`). After an applied
@@ -66,9 +67,17 @@ export function agentSend(prompt: string, considered: boolean): Promise<void> {
   return invoke('agent_send', { prompt, considered });
 }
 
-/** Stops the running reply. Nothing it wrote is applied. */
+/** Stops the running reply. What it wrote so far is applied, as one undo step. */
 export function agentCancel(): Promise<void> {
   return invoke('agent_cancel');
+}
+
+/**
+ * Puts text on the clipboard, through Rust: `navigator.clipboard` fails
+ * silently in the macOS webview. Rejects with a message to show.
+ */
+export function copyText(text: string): Promise<void> {
+  return invoke('copy_text', { text });
 }
 
 export function agentSettings(): Promise<AgentSettings> {

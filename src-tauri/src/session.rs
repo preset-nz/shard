@@ -2630,10 +2630,7 @@ fn voicing(plan: &Plan, selected_track: Option<usize>, mode: PlayMode) -> [Voice
 /// A track's name by its slot, as the scene view and Undo show it: "Track 2"
 /// by its place among the melody tracks, "Drums 1" among the drums.
 pub fn track_name(slot: Slot) -> String {
-    match slot {
-        Slot::Melody(k) => format!("Track {}", k + 1),
-        Slot::Drums(k) => format!("Drums {}", k + 1),
-    }
+    slot.name()
 }
 
 /// When a track's change from `a` to `b` is one setting moving, its undo

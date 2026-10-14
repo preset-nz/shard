@@ -40,7 +40,7 @@ export type ChatAction = AgentEvent | { kind: 'rejected'; prompt: string; messag
 export function stopText(reason: AgentStopReason): string {
   switch (reason) {
     case 'cancelled':
-      return 'Cancelled';
+      return 'Stopped. Kept what it had written';
     case 'time':
       return 'Stopped: took longer than the time limit';
     case 'tokens':

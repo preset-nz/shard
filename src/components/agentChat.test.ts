@@ -68,6 +68,18 @@ describe('reduceChat', () => {
     ]);
   });
 
+  it('says a stop by the user kept what was written', () => {
+    const c = run([
+      start,
+      { kind: 'stopped', reason: 'cancelled' },
+      { kind: 'done', applied: true, label: 'Agent: a beat' },
+    ]);
+    expect(assistant(c.turns).parts).toEqual([
+      { type: 'note', tone: 'info', text: 'Stopped. Kept what it had written' },
+      { type: 'note', tone: 'info', text: 'Applied as one undo step: Agent: a beat' },
+    ]);
+  });
+
   it('starts a second reply after the first is done', () => {
     const c = run([
       start,

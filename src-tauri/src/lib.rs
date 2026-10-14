@@ -996,11 +996,39 @@ fn agent_send(
         .map_err(|e| format!("the reply couldn't start: {e}"))
 }
 
-/// Stops the running reply, if any: nothing it wrote is applied. It ends
-/// with `stopped` (cancelled) and `done`.
+/// Stops the running reply, if any: what it wrote so far is applied, as
+/// one undo step. It ends with `stopped` (cancelled) and `done`.
 #[tauri::command]
 fn agent_cancel(agent: tauri::State<'_, AgentState>) {
     agent.cancel.store(true, Ordering::Release);
+}
+
+/// Puts `text` on the clipboard: the agent panel's Copy. The webview's own
+/// `navigator.clipboard` fails silently in the macOS webview, and Tauri's
+/// clipboard plugin brings in BSL-1.0 crates the licence gate refuses, so
+/// through `pbcopy`, told the text is UTF-8.
+#[tauri::command]
+fn copy_text(text: String) -> Result<(), String> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let fail = |e: &dyn std::fmt::Display| format!("Couldn't copy: {e}");
+    let mut child = Command::new("/usr/bin/pbcopy")
+        .env("LC_CTYPE", "UTF-8")
+        .stdin(Stdio::piped())
+        .spawn()
+        .map_err(|e| fail(&e))?;
+    let written = child
+        .stdin
+        .take()
+        .ok_or_else(|| fail(&"no pipe to the clipboard"))
+        .and_then(|mut pipe| pipe.write_all(text.as_bytes()).map_err(|e| fail(&e)));
+    let status = child.wait().map_err(|e| fail(&e))?;
+    written?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(fail(&status))
+    }
 }
 
 #[tauri::command]
@@ -2640,6 +2668,7 @@ pub fn run() {
             rename_map,
             agent_send,
             agent_cancel,
+            copy_text,
             agent_settings,
             set_agent_settings,
         ])

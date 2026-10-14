@@ -9,7 +9,9 @@
 //! real answer (and `read_song` reads the draft). The writes queue as the
 //! commands and payloads they ran as. When the reply ends they run again on
 //! the session's document inside one short gesture (`Session::batch`):
-//! one undo step, "Agent: a funky beat". A cancelled reply drops the queue.
+//! one undo step, "Agent: a funky beat". A reply stopped by the user or by a
+//! limit applies what it wrote so far, the same way; only a reply that
+//! failed applies nothing.
 
 use std::sync::atomic::AtomicBool;
 
@@ -17,31 +19,38 @@ use rhizome_pom::{Document, Error as PomError, MemoryStore, Outcome};
 use serde_json::{json, Value as Json};
 
 use super::client::{Model, Settings};
-use super::run::{self, Ask, End, Event, Limits, Reason};
+use super::run::{self, Ask, End, Event, Limits};
 use super::tools::{Access, Tool, Toolbox, Tools};
-use crate::object_model::commands::{self, target};
+use crate::object_model::commands::{self, Target};
 use crate::object_model::Shard;
 use crate::session::Session;
 use crate::tracker::Track;
 
 /// The system prompt: the eval's three-tool prompt (`evals/agent/variants/
-/// tools.txt`) with its tool names and units made this app's, the song's
-/// track numbers explained, and the one bass example the evals favoured
-/// (`fewshot-bass.txt`), as calls. Sent byte for byte the same on every
-/// request.
-pub const SYSTEM: &str = r#"You are the groove engine inside a step sequencer. You change the song only by calling tools; never answer with JSON in text. Call set_tempo once if a tempo is asked for, then set_drums or set_melody once per voice asked for.
+/// tools.txt`) with its tool names and units made this app's, tracks and
+/// steps named as Shard shows them, and the one bass example the evals
+/// favoured (`fewshot-bass.txt`), as calls, its steps counted from 1. Sent
+/// byte for byte the same on every request.
+pub const SYSTEM: &str = r#"You are the groove engine inside a step sequencer. You change the song only by calling tools; never answer with JSON in text. Call set_tempo once if a tempo is asked for, then set_drums or set_melody once per voice asked for, then stop calling tools and reply in one sentence.
 
 Translate themes and moods into dark electronic textures: Trip-Hop (slow, smoky, heavy syncopation, lazy swing), Trap (skittering hi-hats, massive sub-bass, rapid rolls), Tricky/Illbient (offset patterns, industrial clanks, unpredictable rests), Dark Metal D&B (relentless 170+ BPM syncopated breakbeats, distorted driving basslines).
 
-For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 0. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
+For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
 
-The song as it is now comes with each request. Give a track number to write over that track; leave track out to write a new one.
+Tracks are named as Shard shows them: melody tracks Track 1, Track 2 and on, drums tracks Drums 1, Drums 2 and on. The song as it is now comes with each request. Give a track's name to write over that track; leave track out to write a new one.
 
 Example. User: "A heavy, gritty Trip-Hop bass line that feels like a rainy night in Bristol"
 set_tempo {"bpm": 85}
-set_melody {"steps": [{"step": 0, "note": 29, "velocity": 100, "hold": 3}, {"step": 4, "note": 29, "velocity": 80, "hold": 2}, {"step": 10, "note": 32, "velocity": 95, "hold": 1}]}"#;
+set_melody {"steps": [{"step": 1, "note": 29, "velocity": 100, "hold": 3}, {"step": 5, "note": 29, "velocity": 80, "hold": 2}, {"step": 11, "note": 32, "velocity": 95, "hold": 1}]}"#;
 
-const TRACK: &str = "The track to write over, by its number in the song (from 0), or \"new\". Leave it out to write a new track, or the selected one when it is of this kind.";
+const TRACK: &str = "The track to write over, by its name as Shard shows it (\"Track 1\", \"Drums 2\"), or \"new\". Leave it out to write a new track, or the selected one when it is of this kind.";
+
+const STEP: &str = "counted from 1 to the track's length, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13";
+
+/// What a track write's answer ends with, so a model that has done what was
+/// asked stops rather than checking its work by writing it again.
+const FINISHED: &str =
+    ". If this answers the request, stop calling tools and reply in one sentence.";
 
 /// Shard's tools: three coarse writes and a read (the eval's three-tool set,
 /// with `set_track` split by kind, since a drums track holds hits on three
@@ -65,7 +74,7 @@ pub fn tools() -> Tools {
         Tool {
             name: "set_drums",
             command: commands::SET_DRUMS,
-            description: "Write one whole drums track: kick, snare and hat hits on a step grid. Replaces every hit the track had. Several drums may hit on one step.",
+            description: "Write one whole drums track: kick, snare and hat hits on a step grid, steps counted from 1. Replaces every hit the track had. Several drums may hit on one step.",
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -76,7 +85,7 @@ pub fn tools() -> Tools {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "step": { "type": "integer" },
+                                "step": { "type": "integer", "description": STEP },
                                 "midi_note": { "type": "integer", "description": "General MIDI drum note" },
                                 "velocity": { "type": "integer" },
                             },
@@ -91,7 +100,7 @@ pub fn tools() -> Tools {
         Tool {
             name: "set_melody",
             command: commands::SET_MELODY,
-            description: "Write one whole melody track: a bass, lead or any pitched voice, one note at a time. Replaces every note the track had. A new track gets a sound of its own.",
+            description: "Write one whole melody track: a bass, lead or any pitched voice, one note at a time, steps counted from 1. Replaces every note the track had. A new track gets a sound of its own.",
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -102,7 +111,7 @@ pub fn tools() -> Tools {
                         "items": {
                             "type": "object",
                             "properties": {
-                                "step": { "type": "integer" },
+                                "step": { "type": "integer", "description": STEP },
                                 "note": { "type": "integer", "description": "MIDI note" },
                                 "velocity": { "type": "integer" },
                                 "hold": { "type": "integer", "description": "steps the note lasts, 1 to 16" },
@@ -118,7 +127,7 @@ pub fn tools() -> Tools {
         Tool {
             name: "read_song",
             command: commands::READ_SONG,
-            description: "Read the song as it is now: tempo, swing and every track, with its number.",
+            description: "Read the song as it is now: tempo, swing and every track by its name, steps counted from 1.",
             parameters: json!({ "type": "object", "properties": {}, "required": [] }),
             access: Access::Read,
         },
@@ -136,8 +145,12 @@ pub struct Draft {
     /// Each track muted as heard, by place, when the reply began.
     muted: Vec<bool>,
     /// Whether each track was a drums track when the reply began. The
-    /// queue names tracks by place, so it applies only to the same tracks.
+    /// queue names tracks as Shard does, by place among their kind, so it
+    /// applies only to the same tracks.
     kinds: Vec<bool>,
+    /// At most one write per named track: a later write of a track replaces
+    /// the earlier, which it would overwrite whole anyway. A write that made
+    /// a track (`"new"`) stays, since replaying it makes the track.
     queue: Vec<(&'static str, Json)>,
 }
 
@@ -230,41 +243,66 @@ impl Toolbox for Draft {
             commands::SET_MELODY => Some(false),
             _ => None,
         };
-        let named = args.get("track").is_some_and(|t| !t.is_null());
-        if let (Some(drums), false) = (drums, named) {
-            // No track named: the selected one when it is of this kind.
-            let tracks = &self.doc.projection().tracker.tracks;
-            let fits = self
-                .selected
-                .filter(|s| tracks.get(*s).is_some_and(|t| t.is_drums() == drums));
-            payload["track"] = match fits {
-                Some(s) => json!(s),
-                None => json!("new"),
+        if let Some(drums) = drums {
+            let tracker = &self.doc.projection().tracker;
+            let named = args.get("track").is_some_and(|t| !t.is_null());
+            if !named {
+                // No track named: the selected one when it is of this kind.
+                let fits = self.selected.filter(|s| {
+                    tracker
+                        .tracks
+                        .get(*s)
+                        .is_some_and(|t| t.is_drums() == drums)
+                });
+                payload["track"] = match fits {
+                    Some(s) => json!(commands::track_names(tracker)[s]),
+                    None => json!("new"),
+                };
+            }
+            // Refused here rather than by the command, so it costs no edit;
+            // and the track as its name, so the same track is always the
+            // same payload.
+            payload["track"] = match commands::resolve(tracker, &payload, drums)? {
+                Target::Place(i) => json!(commands::track_names(tracker)[i]),
+                Target::New => json!("new"),
             };
-        }
-        if drums.is_some() {
-            // Refused here rather than by the command, so it costs no edit.
-            target(&payload)?;
         }
         // A reasoning model checking its work writes the same track again
         // and again until the turn cap; tell it nothing changed.
+        let same_target = |(c, p): &&(&'static str, Json)| {
+            *c == tool.command && p.get("track") == payload.get("track")
+        };
         if self
             .queue
-            .last()
-            .is_some_and(|(c, p)| *c == tool.command && *p == payload)
+            .iter()
+            .rev()
+            .find(same_target)
+            .is_some_and(|(_, p)| *p == payload)
         {
             return Ok(
-                "nothing changed: the song already holds exactly this. If the song is done, stop calling tools."
+                "nothing changed: the song already holds exactly this. If the song is done, stop calling tools and reply in one sentence."
                     .into(),
             );
         }
         match self.doc.run(tool.command, &payload) {
             Ok(out) => {
+                let track = payload.get("track").and_then(Json::as_str);
+                if drums.is_some() && track != Some("new") {
+                    // It overwrites the track whole, so the earlier write
+                    // of it would only be undone on replay.
+                    self.queue.retain(|(c, p)| {
+                        !(*c == tool.command && p.get("track") == payload.get("track"))
+                    });
+                }
                 self.queue.push((tool.command, payload));
-                Ok(match out {
+                let mut text = match out {
                     Outcome::Text(t) => t,
                     _ => "done".into(),
-                })
+                };
+                if drums.is_some() {
+                    text += FINISHED;
+                }
+                Ok(text)
             }
             Err(PomError::Payload(m)) => Err(m),
             Err(e) => Err(e.to_string()),
@@ -279,9 +317,9 @@ pub fn user_message(prompt: &str, song: &Json) -> String {
 }
 
 /// One whole reply: `start`, the loop, the writes applied as one undo step,
-/// `done`. Cancelled or failed, nothing is applied. Stopped by a limit, what
-/// was written so far is applied: each write is a whole track, and one undo
-/// takes it all back.
+/// `done`. Stopped, by the user or by a limit, what was written so far is
+/// applied: each write is a whole track, and one undo takes it all back.
+/// Failed, nothing is applied.
 pub fn respond(
     session: &Session,
     model: &mut dyn Model,
@@ -335,7 +373,7 @@ pub fn respond(
         End::Finished => true,
         End::Stopped(reason) => {
             emit(Event::Stopped { reason });
-            reason != Reason::Cancelled
+            true
         }
         End::Failed(message) => {
             emit(Event::Error { message });

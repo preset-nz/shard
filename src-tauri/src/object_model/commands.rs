@@ -10,14 +10,23 @@
 //! - `shard.set_melody`: one melody track's whole line, from MIDI notes.
 //! - `shard.set_tempo`: tempo, and swing as a percentage.
 //!
-//! **A payload names its track by place, or `"new"`.** What the selected
-//! track is belongs to the session, not the document, so a caller that wants
-//! "the selected one" resolves it first. Left out, a write makes a new track.
+//! **One vocabulary: the one Shard shows.** A payload names its track as the
+//! UI does, "Track 1" or "Drums 2" (any case), or by a bare number counting
+//! that command's kind from 1, or `"new"`; steps count from 1 to the track's
+//! length, as the step strip shows them. A model, a script and a person
+//! looking at the app all say "step 1 of Track 1" and mean the same thing,
+//! so nothing between them translates. The document stays 0-based: the
+//! conversion is here, at the payload, and `read_song` answers in the same
+//! terms. What the selected track is belongs to the session, not the
+//! document, so a caller that wants "the selected one" resolves it first.
+//! Left out, a write makes a new track.
 //!
 //! **A refusal is text for whoever sent it.** Every command is always
 //! enabled, and refuses inside `run` with `Error::Payload`, whose message
 //! says what to send instead: POM's `Disabled` carries only the id. Values
-//! out of range are brought in, never refused, and the answer says so.
+//! out of range are brought in, never refused, and the answer says so. The
+//! one exception is a step 0: it says the sender counts from 0, so every
+//! other step it sent is one early too, and the whole write is refused.
 
 use rhizome_core::{Edit, NodeId, Ref};
 use rhizome_pom::{Commands, Document, Error as PomError, Outcome};
@@ -28,7 +37,7 @@ use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::{KITS, VOICES};
 
 use super::{arrangement_node, spec, to_value, Shard, ShardEdit, TRACK_PATCH};
-use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX};
+use crate::tracker::{Kit, Slot, Step, Track, Tracker, LENGTHS, SWING_MAX};
 
 pub const READ_SONG: &str = "shard.read_song";
 pub const SET_DRUMS: &str = "shard.set_drums";
@@ -94,24 +103,100 @@ pub enum Target {
     New,
 }
 
-/// `track` as a payload holds it: a number, `"new"`, or a number as text.
-pub fn target(p: &Json) -> Result<Target, String> {
-    match p.get("track") {
-        None | Some(Json::Null) => Ok(Target::New),
-        Some(Json::Number(n)) => n
-            .as_u64()
-            .map(|n| Target::Place(n as usize))
-            .ok_or_else(|| format!("track {n} is not a place; tracks count from 0")),
-        Some(Json::String(s)) if s.trim().eq_ignore_ascii_case("new") => Ok(Target::New),
-        Some(Json::String(s)) => s
-            .trim()
-            .parse::<usize>()
-            .map(Target::Place)
-            .map_err(|_| format!("track \"{s}\" is neither a place (0, 1, …) nor \"new\"")),
-        Some(other) => Err(format!(
-            "track {other} is neither a place (0, 1, …) nor \"new\""
-        )),
+/// Every track's name as Shard shows it, in order.
+pub fn track_names(t: &Tracker) -> Vec<String> {
+    t.slots().into_iter().map(Slot::name).collect()
+}
+
+/// The name of the track a write of this kind would add.
+fn new_name(t: &Tracker, drums: bool) -> String {
+    if drums {
+        Slot::Drums(t.drums().count()).name()
+    } else {
+        Slot::Melody(t.melody().count()).name()
     }
+}
+
+fn kind(drums: bool) -> &'static str {
+    if drums {
+        "drums"
+    } else {
+        "melody"
+    }
+}
+
+/// The track a write of drums (or melody) names in `track`: its name as
+/// Shard shows it, in any case ("Track 1", "drums 2"), a bare number
+/// counting tracks of that kind from 1, `"new"`, or nothing for a new one.
+/// Refused, saying which tracks there are, when it names none, or names one
+/// of the other kind.
+pub fn resolve(t: &Tracker, p: &Json, drums: bool) -> Result<Target, String> {
+    let names = track_names(t);
+    let have = || {
+        if names.is_empty() {
+            "the song has no tracks".to_string()
+        } else {
+            format!("the song has {}", names.join(", "))
+        }
+    };
+    let wrong = |sent: &str| {
+        format!(
+            "track {sent} is not a track's name; name one as Shard shows it ({}), or send \"new\"",
+            have().trim_start_matches("the song has ")
+        )
+    };
+    let text = match p.get("track") {
+        None | Some(Json::Null) => return Ok(Target::New),
+        Some(Json::String(s)) => s.split_whitespace().collect::<Vec<_>>().join(" "),
+        Some(Json::Number(n)) => n.to_string(),
+        Some(other) => return Err(wrong(&other.to_string())),
+    };
+    if text.eq_ignore_ascii_case("new") {
+        return Ok(Target::New);
+    }
+    // A bare number: the k-th track of this command's kind, from 1.
+    let wanted = match text.parse::<f64>() {
+        Ok(0.0) => {
+            return Err(format!(
+                "tracks count from 1, as Shard shows them: {}",
+                have()
+            ))
+        }
+        Ok(n) if n >= 1.0 && n.fract() == 0.0 => {
+            let k = n as usize - 1;
+            if drums {
+                Slot::Drums(k).name()
+            } else {
+                Slot::Melody(k).name()
+            }
+        }
+        Ok(_) => return Err(wrong(&text)),
+        Err(_) => text.clone(),
+    };
+    let Some(place) = names.iter().position(|n| n.eq_ignore_ascii_case(&wanted)) else {
+        let looks = wanted.to_ascii_lowercase();
+        if looks.starts_with("track ") || looks.starts_with("drums ") {
+            return Err(format!(
+                "there is no {wanted}; {}. Leave track out to write a new {} track",
+                have(),
+                kind(drums)
+            ));
+        }
+        return Err(wrong(&format!("\"{text}\"")));
+    };
+    if t.tracks[place].is_drums() != drums {
+        let (other, tool) = if drums {
+            ("melody", "set_melody")
+        } else {
+            ("drums", "set_drums")
+        };
+        return Err(format!(
+            "{} is a {other} track; use {tool} for it, or leave track out to write a new {} track",
+            names[place],
+            kind(drums)
+        ));
+    }
+    Ok(Target::Place(place))
 }
 
 /// A number the model may send as an integer, a float or a string.
@@ -189,11 +274,24 @@ fn velocity(v: Option<&Json>) -> u8 {
         .min(VELOCITY_MAX)
 }
 
-/// A step as sent, if it is one: a whole number from 0.
+/// A step as sent, counted from 1, as the index the document holds (from
+/// 0), if it is one: a whole number from 1.
 fn step_of(v: &Json) -> Option<usize> {
     number(v)
-        .filter(|n| *n >= 0.0 && n.fract() == 0.0)
-        .map(|n| n as usize)
+        .filter(|n| *n >= 1.0 && n.fract() == 0.0)
+        .map(|n| n as usize - 1)
+}
+
+/// Refuses a payload with a step 0 whole: a sender counting from 0 has every
+/// step one early, so writing the rest would land them all wrong.
+fn steps_from_one<'a>(steps: impl IntoIterator<Item = &'a Json>) -> Result<(), String> {
+    if steps.into_iter().any(|v| number(v) == Some(0.0)) {
+        return Err(
+            "step 0 is not a step: steps count from 1, as Shard shows them, so a 16-step track runs 1 to 16 and its beats fall on 1, 5, 9 and 13. Send the whole track again counting from 1"
+                .into(),
+        );
+    }
+    Ok(())
 }
 
 // Drums.
@@ -230,27 +328,21 @@ const LANES: [&str; 3] = ["kick", "snare", "hat"];
 
 fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     let hits: Vec<Hit> = list(p, "hits")?;
-    let target = target(p)?;
+    steps_from_one(hits.iter().map(|h| &h.step))?;
     let now = d.projection().tracker.clone();
+    let target = resolve(&now, p, true)?;
     let place = match target {
-        Target::Place(i) => {
-            let t = now.tracks.get(i).ok_or_else(|| no_track(&now, i))?;
-            if !t.is_drums() {
-                return Err(format!(
-                    "track {i} is a melody track; use set_melody for it, or leave track out to write a new drums track"
-                ));
-            }
-            Some(i)
-        }
+        Target::Place(i) => Some(i),
         Target::New => {
             if now.drums().count() >= KITS {
                 return Err(format!(
-                    "the song already has {KITS} drums tracks, the most it holds; write over one of them by its track number"
+                    "the song already has {KITS} drums tracks, the most it holds; write over one of them by its name"
                 ));
             }
             None
         }
     };
+    let name = place.map_or_else(|| new_name(&now, true), |i| track_names(&now)[i].clone());
 
     let mut grid = [[0u8; STEPS]; 3];
     let (mut ignored_notes, mut bad, mut odd_lanes, mut past) =
@@ -313,7 +405,7 @@ fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
         ..old.cloned().unwrap_or_else(Kit::blank)
     };
     let arr = arr_of(d)?;
-    let place = match place {
+    match place {
         Some(i) => {
             let mut next = now.clone();
             let t = &mut next.tracks[i];
@@ -322,7 +414,6 @@ fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
             let next = next.sanitised();
             d.edit("Set Drums", |tx| tx.write_tracker(arr, &next))
                 .map_err(|e| e.to_string())?;
-            i
         }
         None => {
             let track = Track {
@@ -332,9 +423,8 @@ fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
             };
             d.edit("Set Drums", |tx| tx.add_track(arr, &track).map(|_| ()))
                 .map_err(|e| e.to_string())?;
-            now.tracks.len()
         }
-    };
+    }
 
     let counts: Vec<String> = (0..3)
         .map(|l| {
@@ -343,7 +433,7 @@ fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
         })
         .collect();
     let mut out = format!(
-        "drums track {place} written, switched on: {length} steps, {}",
+        "Wrote {name}, switched on: {length} steps, {}",
         counts.join(", ")
     );
     ignored_notes.sort_unstable();
@@ -369,7 +459,7 @@ fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     }
     if target == Target::New {
         // Without this a model revising its answer writes another new track.
-        out += &format!(". To change it, write over track {place}");
+        out += &format!(". To change it, write over {name}");
     }
     Ok(out)
 }
@@ -485,27 +575,21 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
         "steps"
     };
     let notes: Vec<Note> = list(p, key)?;
-    let target = target(p)?;
+    steps_from_one(notes.iter().map(|n| &n.step))?;
     let now = d.projection().tracker.clone();
+    let target = resolve(&now, p, false)?;
     let place = match target {
-        Target::Place(i) => {
-            let t = now.tracks.get(i).ok_or_else(|| no_track(&now, i))?;
-            if t.is_drums() {
-                return Err(format!(
-                    "track {i} is a drums track; use set_drums for it, or leave track out to write a new melody track"
-                ));
-            }
-            Some(i)
-        }
+        Target::Place(i) => Some(i),
         Target::New => {
             if now.melody().count() >= VOICES {
                 return Err(format!(
-                    "the song already has {VOICES} melody tracks, the most it holds; write over one of them by its track number"
+                    "the song already has {VOICES} melody tracks, the most it holds; write over one of them by its name"
                 ));
             }
             None
         }
     };
+    let name = place.map_or_else(|| new_name(&now, false), |i| track_names(&now)[i].clone());
 
     let mut bad = 0usize;
     let mut read: Vec<(usize, i32, u8, u8)> = Vec::new();
@@ -563,7 +647,7 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     let count = steps.iter().filter(|s| s.on).count();
 
     let arr = arr_of(d)?;
-    let place = match place {
+    match place {
         Some(i) => {
             let mut next = now.clone();
             next.tracks[i].steps = steps;
@@ -571,7 +655,6 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
             let next = next.sanitised();
             d.edit("Set Melody", |tx| tx.write_tracker(arr, &next))
                 .map_err(|e| e.to_string())?;
-            i
         }
         None => {
             let track = Track {
@@ -598,12 +681,11 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
                 tx.set_ref(node, TRACK_PATCH, Ref::here(patch))
             })
             .map_err(|e| e.to_string())?;
-            now.tracks.len()
         }
-    };
+    }
 
     let mut out = format!(
-        "melody track {place} written: {length} steps, {count} notes, root note {}{}",
+        "Wrote {name}: {count} notes over {length} steps, root note {}{}",
         root.0,
         if target == Target::New {
             ", on a new FM patch of its own"
@@ -635,7 +717,7 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     }
     if target == Target::New {
         // Without this a model revising its answer writes another new track.
-        out += &format!(". To change it, write over track {place}");
+        out += &format!(". To change it, write over {name}");
     }
     Ok(out)
 }
@@ -680,10 +762,12 @@ pub fn swing_percent(s: f32) -> f32 {
 // Reading.
 
 /// The song in the shape the write commands take: tempo, swing in percent,
-/// and every track with its notes or hits as MIDI.
+/// and every track by its name, with its notes or hits as MIDI on steps
+/// counted from 1.
 pub fn song(d: &Document<Shard>) -> Json {
     let plan = d.projection();
     let t = &plan.tracker;
+    let names = track_names(t);
     let tracks: Vec<Json> = t
         .tracks
         .iter()
@@ -695,12 +779,14 @@ pub fn song(d: &Document<Shard>) -> Json {
                     for (lane, row) in [&kit.kick, &kit.snare, &kit.hat].into_iter().enumerate() {
                         let v = row.get(step).copied().unwrap_or(0);
                         if v > 0 {
-                            hits.push(json!({ "step": step, "drum": LANES[lane], "velocity": v }));
+                            hits.push(
+                                json!({ "step": step + 1, "drum": LANES[lane], "velocity": v }),
+                            );
                         }
                     }
                 }
                 json!({
-                    "track": i,
+                    "name": names[i],
                     "kind": "drums",
                     "on": kit.on,
                     "length": track.length,
@@ -717,7 +803,7 @@ pub fn song(d: &Document<Shard>) -> Json {
                     .filter(|(_, s)| s.on)
                     .map(|(step, s)| {
                         json!({
-                            "step": step,
+                            "step": step + 1,
                             "note": root + i32::from(s.pitch),
                             "velocity": s.velocity,
                             "hold": s.hold,
@@ -725,7 +811,7 @@ pub fn song(d: &Document<Shard>) -> Json {
                     })
                     .collect();
                 json!({
-                    "track": i,
+                    "name": names[i],
                     "kind": "melody",
                     "length": track.length,
                     "root": root,
@@ -745,11 +831,4 @@ fn arr_of(d: &Document<Shard>) -> Result<NodeId, String> {
     arrangement_node(d.tree())
         .map(|n| n.id())
         .ok_or_else(|| "the song has no arrangement".to_string())
-}
-
-fn no_track(t: &Tracker, i: usize) -> String {
-    format!(
-        "there is no track {i}: the song has tracks 0 to {}; leave track out to write a new one",
-        t.tracks.len().saturating_sub(1)
-    )
 }

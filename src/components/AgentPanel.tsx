@@ -27,7 +27,7 @@ import {
   ToolCallOutput,
 } from '@preset.nz/ux-kit/chat';
 import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from 'react';
-import { agentCancel, agentSend, onAgentEvent } from '@/lib/agent';
+import { agentCancel, agentSend, copyText, onAgentEvent } from '@/lib/agent';
 import { emptyConversation, isStreaming, type Part, reduceChat, transcript } from './agentChat';
 
 type Mode = 'quick' | 'considered';
@@ -102,6 +102,9 @@ export function AgentPanel({
   const [chat, dispatch] = useReducer(reduceChat, emptyConversation);
   const [mode, setMode] = useState<Mode>(readMode);
   const [draft, setDraft] = useState('');
+  // The Copy button's answer: a check for a moment, or why it failed. The
+  // panel's own, never a part of the conversation.
+  const [copied, setCopied] = useState<'idle' | 'done' | { error: string }>('idle');
   const onAppliedRef = useRef(onApplied);
   onAppliedRef.current = onApplied;
 
@@ -116,6 +119,19 @@ export function AgentPanel({
   }, []);
 
   const streaming = isStreaming(chat);
+
+  useEffect(() => {
+    if (copied === 'idle') return;
+    const t = setTimeout(() => setCopied('idle'), copied === 'done' ? 1500 : 4000);
+    return () => clearTimeout(t);
+  }, [copied]);
+
+  const copy = () => {
+    copyText(transcript(chat)).then(
+      () => setCopied('done'),
+      (err) => setCopied({ error: String(err) }),
+    );
+  };
 
   const changeMode = (next: Mode) => {
     setMode(next);
@@ -177,14 +193,19 @@ export function AgentPanel({
             <button
               type="button"
               className="ml-auto flex size-5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
-              aria-label="Copy the conversation"
-              title="Copy the conversation, tool calls included"
-              onClick={() => void navigator.clipboard.writeText(transcript(chat))}
+              aria-label={copied === 'done' ? 'Copied' : 'Copy the conversation'}
+              title={copied === 'done' ? 'Copied' : 'Copy the conversation, tool calls included'}
+              onClick={copy}
             >
-              <Icons.CopyIcon size={12} />
+              {copied === 'done' ? <Icons.CheckIcon size={12} /> : <Icons.CopyIcon size={12} />}
             </button>
           )}
         </header>
+        {typeof copied === 'object' && (
+          <p role="alert" className="shrink-0 px-2 py-1 text-[11px] text-destructive">
+            {copied.error}
+          </p>
+        )}
         {!collapsed && (
           <ChatScroller className="min-h-0 flex-1" aria-label="Conversation">
             {chat.turns.map((turn, index) => (

@@ -116,23 +116,25 @@ fn text(r: &crate::session_tests::Rig) -> String {
 fn drums_take_general_midi_notes_and_lane_names_and_say_what_they_ignored() {
     let r = rig();
     let mut d = Draft::of(&r.session).unwrap();
-    // A new session: track 0 melody, track 1 drums (off, with a beat).
+    // A new session: Track 1, then Drums 1 (off, with a beat). Steps count
+    // from 1, as the step strip shows them; the document holds them from 0.
     let out = call(
         &mut d,
         "set_drums",
-        json!({ "track": 1, "hits": [
-            { "step": 0, "midi_note": 36, "velocity": 120 },
-            { "step": 4, "midi_note": 38, "velocity": 110 },
-            { "step": 4, "midi_note": 39, "velocity": 90 },
-            { "step": 2, "midi_note": 42, "velocity": 70 },
-            { "step": 6, "midi_note": 46, "velocity": 80 },
-            { "step": 8, "midi_note": 49, "velocity": 60 },
-            { "step": 10, "drum": "kick", "velocity": 100 },
-            { "step": 12, "midi_note": 41, "velocity": 100 },
-            { "step": 14, "midi_note": 60, "velocity": 100 },
+        json!({ "track": "Drums 1", "hits": [
+            { "step": 1, "midi_note": 36, "velocity": 120 },
+            { "step": 5, "midi_note": 38, "velocity": 110 },
+            { "step": 5, "midi_note": 39, "velocity": 90 },
+            { "step": 3, "midi_note": 42, "velocity": 70 },
+            { "step": 7, "midi_note": 46, "velocity": 80 },
+            { "step": 9, "midi_note": 49, "velocity": 60 },
+            { "step": 11, "drum": "kick", "velocity": 100 },
+            { "step": 13, "midi_note": 41, "velocity": 100 },
+            { "step": 15, "midi_note": 60, "velocity": 100 },
         ] }),
     )
     .unwrap();
+    assert!(out.starts_with("Wrote Drums 1, switched on"), "{out}");
     assert!(out.contains("kick 2, snare 1, hat 3"), "{out}");
     assert!(out.contains("Ignored notes 41, 60"), "{out}");
     assert!(out.contains("switched on"), "{out}");
@@ -155,15 +157,15 @@ fn drums_take_general_midi_notes_and_lane_names_and_say_what_they_ignored() {
 fn a_melody_on_an_existing_track_is_pitched_from_its_patchs_root() {
     let r = rig();
     let mut d = Draft::of(&r.session).unwrap();
-    // Track 0 plays Patch 1, whose material is the drone: A2, 45.
+    // Track 1 plays Patch 1, whose material is the drone: A2, 45.
     let out = call(
         &mut d,
         "set_melody",
-        json!({ "track": 0, "steps": [
-            { "step": 0, "note": DRONE_ROOT, "velocity": 100, "hold": 2 },
-            { "step": 3, "midi_note": DRONE_ROOT + 3, "velocity": 80, "duration": 0.75 },
-            { "step": 8, "note": DRONE_ROOT + 12, "velocity": 90, "hold": 1 },
-            { "step": 12, "note": DRONE_ROOT + 31, "velocity": 90, "hold": 1 },
+        json!({ "track": "Track 1", "steps": [
+            { "step": 1, "note": DRONE_ROOT, "velocity": 100, "hold": 2 },
+            { "step": 4, "midi_note": DRONE_ROOT + 3, "velocity": 80, "duration": 0.75 },
+            { "step": 9, "note": DRONE_ROOT + 12, "velocity": 90, "hold": 1 },
+            { "step": 13, "note": DRONE_ROOT + 31, "velocity": 90, "hold": 1 },
         ] }),
     )
     .unwrap();
@@ -200,13 +202,14 @@ fn a_new_melody_track_gets_an_fm_voice_of_its_own_at_its_lowest_note() {
         &mut d,
         "set_melody",
         json!({ "track": "new", "steps": [
-            { "step": 0, "note": 29, "velocity": 100, "hold": 3 },
-            { "step": 4, "note": 29, "velocity": 80, "hold": 2 },
-            { "step": 10, "note": 32, "velocity": 95, "hold": 1 },
+            { "step": 1, "note": 29, "velocity": 100, "hold": 3 },
+            { "step": 5, "note": 29, "velocity": 80, "hold": 2 },
+            { "step": 11, "note": 32, "velocity": 95, "hold": 1 },
         ] }),
     )
     .unwrap();
-    assert!(out.starts_with("melody track 2 written"), "{out}");
+    assert!(out.starts_with("Wrote Track 2:"), "{out}");
+    assert!(out.contains("To change it, write over Track 2"), "{out}");
     assert!(out.contains("root note 29"), "{out}");
     d.apply(&r.session, "Agent: a bass").unwrap();
     let t = r.session.tracker();
@@ -250,8 +253,8 @@ fn a_new_melody_track_is_heard() {
         &mut d,
         "set_melody",
         json!({ "steps": [
-            { "step": 0, "note": 36, "velocity": 120, "hold": 4 },
-            { "step": 8, "note": 39, "velocity": 120, "hold": 4 },
+            { "step": 1, "note": 36, "velocity": 120, "hold": 4 },
+            { "step": 9, "note": 39, "velocity": 120, "hold": 4 },
         ] }),
     )
     .unwrap();
@@ -277,26 +280,36 @@ fn a_write_naming_no_track_goes_to_the_selected_one_of_its_kind_or_a_new_one() {
     let melody = call(
         &mut d,
         "set_melody",
-        json!({ "steps": [{ "step": 0, "note": 45, "velocity": 100, "hold": 1 }] }),
+        json!({ "steps": [{ "step": 1, "note": 45, "velocity": 100, "hold": 1 }] }),
     )
     .unwrap();
-    assert!(melody.starts_with("melody track 0 written"), "{melody}");
+    assert!(melody.starts_with("Wrote Track 1:"), "{melody}");
     // The selected track is a melody track, so drums go on a new one.
     let drums = call(
         &mut d,
         "set_drums",
-        json!({ "hits": [{ "step": 0, "midi_note": 36, "velocity": 100 }] }),
+        json!({ "hits": [{ "step": 1, "midi_note": 36, "velocity": 100 }] }),
     )
     .unwrap();
-    assert!(drums.starts_with("drums track 2 written"), "{drums}");
-    // The draft reads back what it was told.
+    assert!(drums.starts_with("Wrote Drums 2,"), "{drums}");
+    // The draft reads back what it was told, in the UI's names and steps.
     let song = d.song();
-    assert_eq!(song["tracks"].as_array().unwrap().len(), 3);
+    let names: Vec<&str> = song["tracks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Track 1", "Drums 1", "Drums 2"]);
+    assert!(song["tracks"][0].get("track").is_none(), "no bare place");
     assert_eq!(song["tracks"][0]["selected"], true);
+    assert_eq!(song["tracks"][0]["steps"][0]["step"], 1);
     assert_eq!(song["tracks"][2]["hits"][0]["drum"], "kick");
+    assert_eq!(song["tracks"][2]["hits"][0]["step"], 1);
     // Nothing reached the session yet.
     assert_eq!(r.session.track_count(), 2);
     assert_eq!(d.queue().len(), 2);
+    assert_eq!(d.queue()[0].1["track"], "Track 1");
     assert_eq!(d.queue()[1].1["track"], "new");
 }
 
@@ -304,23 +317,60 @@ fn a_write_naming_no_track_goes_to_the_selected_one_of_its_kind_or_a_new_one() {
 fn wrong_kinds_and_missing_tracks_are_refused_with_what_to_do() {
     let r = rig();
     let mut d = Draft::of(&r.session).unwrap();
+    let note = json!([{ "step": 1, "note": 45, "velocity": 100, "hold": 1 }]);
     let e = call(
         &mut d,
         "set_melody",
-        json!({ "track": 1, "steps": [{ "step": 0, "note": 45, "velocity": 100, "hold": 1 }] }),
+        json!({ "track": "Drums 1", "steps": note }),
     )
     .unwrap_err();
-    assert!(e.contains("drums track") && e.contains("set_drums"), "{e}");
+    assert!(
+        e.contains("Drums 1 is a drums track") && e.contains("set_drums"),
+        "{e}"
+    );
     let e = call(&mut d, "set_drums", json!({ "track": 7, "hits": [] })).unwrap_err();
-    assert!(e.contains("there is no track 7"), "{e}");
+    assert_eq!(
+        e,
+        "there is no Drums 7; the song has Track 1, Drums 1. Leave track out to write a new drums track"
+    );
+    let e = call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "Track 3", "steps": note }),
+    )
+    .unwrap_err();
+    assert!(
+        e.starts_with("there is no Track 3; the song has Track 1, Drums 1"),
+        "{e}"
+    );
+    let e = call(&mut d, "set_melody", json!({ "track": 0, "steps": note })).unwrap_err();
+    assert!(e.contains("tracks count from 1"), "{e}");
     let e = call(
         &mut d,
         "set_drums",
         json!({ "track": "the loud one", "hits": [] }),
     )
     .unwrap_err();
-    assert!(e.contains("\"new\""), "{e}");
-    let e = call(&mut d, "set_melody", json!({ "track": 0, "steps": "lots" })).unwrap_err();
+    assert!(
+        e.contains("\"new\"") && e.contains("Track 1, Drums 1"),
+        "{e}"
+    );
+    let e = call(
+        &mut d,
+        "set_drums",
+        json!({ "track": "Drums 1", "hits": [
+            { "step": 0, "midi_note": 36, "velocity": 100 },
+            { "step": 4, "midi_note": 38, "velocity": 100 },
+        ] }),
+    )
+    .unwrap_err();
+    assert!(e.contains("steps count from 1"), "{e}");
+    let e = call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "Track 1", "steps": "lots" }),
+    )
+    .unwrap_err();
     assert!(e.contains("\"steps\""), "{e}");
     assert!(d.queue().is_empty(), "a refusal queues nothing");
     assert!(!d.apply(&r.session, "Agent: nothing").unwrap());
@@ -335,11 +385,11 @@ fn a_whole_reply_is_one_undo_step_that_takes_new_tracks_and_patches_with_it() {
         turn_calling("set_tempo", json!({ "bpm": 92, "swing": 56 })),
         turn_calling(
             "set_drums",
-            json!({ "hits": [{ "step": 0, "midi_note": 36, "velocity": 110 }] }),
+            json!({ "hits": [{ "step": 1, "midi_note": 36, "velocity": 110 }] }),
         ),
         turn_calling(
             "set_melody",
-            json!({ "track": "new", "steps": [{ "step": 0, "note": 29, "velocity": 100, "hold": 4 }] }),
+            json!({ "track": "new", "steps": [{ "step": 1, "note": 29, "velocity": 100, "hold": 4 }] }),
         ),
         done_turn(),
     ]);
@@ -401,14 +451,45 @@ fn a_whole_reply_is_one_undo_step_that_takes_new_tracks_and_patches_with_it() {
 }
 
 #[test]
-fn a_cancelled_reply_applies_nothing() {
+fn a_stop_keeps_what_was_written() {
     let r = rig();
     let before = text(&r);
     let mut model = Script::new(vec![turn_calling(
         "set_drums",
-        json!({ "hits": [{ "step": 0, "midi_note": 36, "velocity": 110 }] }),
+        json!({ "hits": [{ "step": 1, "midi_note": 36, "velocity": 110 }] }),
     )]);
+    // Stopped while the model thinks about its second turn.
     model.cancel_on = Some(1);
+    let events = reply(&r, &mut model, "a beat");
+    assert!(events.contains(&Event::Stopped {
+        reason: Reason::Cancelled
+    }));
+    assert_eq!(
+        events.last(),
+        Some(&Event::Done {
+            applied: true,
+            label: "Agent: a beat".into()
+        })
+    );
+    let t = r.session.tracker();
+    assert_eq!(t.tracks.len(), 3);
+    assert_eq!(t.tracks[2].drums.as_ref().unwrap().kick[0], 110);
+    let (undo, _) = r.session.history_labels();
+    assert_eq!(
+        undo,
+        ["Agent: a beat"],
+        "one undo step, as a finished reply"
+    );
+    r.session.undo().unwrap();
+    assert_eq!(text(&r), before);
+}
+
+#[test]
+fn a_stop_before_any_write_changes_nothing() {
+    let r = rig();
+    let before = text(&r);
+    let mut model = Script::new(Vec::new());
+    model.cancel_on = Some(0);
     let events = reply(&r, &mut model, "a beat");
     assert!(events.contains(&Event::Stopped {
         reason: Reason::Cancelled
@@ -448,7 +529,7 @@ fn a_reply_out_of_time_says_so_and_keeps_what_it_wrote() {
     let r = rig();
     let mut model = Script::new(vec![turn_calling(
         "set_drums",
-        json!({ "track": 1, "hits": [{ "step": 0, "midi_note": 36, "velocity": 110 }] }),
+        json!({ "track": "Drums 1", "hits": [{ "step": 1, "midi_note": 36, "velocity": 110 }] }),
     )]);
     model.late_on = Some(1);
     let events = reply(&r, &mut model, "a beat");
@@ -497,12 +578,94 @@ fn a_call_cut_off_by_the_token_cap_is_refused_and_the_reply_stops() {
 #[test]
 fn the_same_write_again_changes_nothing_and_says_so() {
     let r = rig();
-    let args = json!({ "track": 1, "hits": [{ "step": 0, "midi_note": 36, "velocity": 110 }] });
+    let hits = json!([{ "step": 1, "midi_note": 36, "velocity": 110 }]);
     let mut d = Draft::of(&r.session).unwrap();
-    call(&mut d, "set_drums", args.clone()).unwrap();
-    let again = call(&mut d, "set_drums", args).unwrap();
+    let first = call(&mut d, "set_drums", json!({ "track": 1, "hits": hits })).unwrap();
+    assert!(
+        first.ends_with(
+            ". If this answers the request, stop calling tools and reply in one sentence."
+        ),
+        "a track write ends by saying when to stop: {first}"
+    );
+    // The same track by its name: the same write.
+    let again = call(
+        &mut d,
+        "set_drums",
+        json!({ "track": "drums 1", "hits": hits }),
+    )
+    .unwrap();
     assert!(again.starts_with("nothing changed"), "{again}");
     assert_eq!(d.queue().len(), 1);
+}
+
+#[test]
+fn a_later_write_of_a_track_replaces_the_earlier_in_the_queue() {
+    let r = rig();
+    let mut d = Draft::of(&r.session).unwrap();
+    let line = |step: u32| json!({ "track": 1, "steps": [{ "step": step, "note": 45, "velocity": 100, "hold": 1 }] });
+    call(&mut d, "set_tempo", json!({ "bpm": 90, "swing": 56 })).unwrap();
+    for step in 1..=6 {
+        call(&mut d, "set_melody", line(step)).unwrap();
+    }
+    let made = call(
+        &mut d,
+        "set_melody",
+        json!({ "steps": [{ "step": 1, "note": 40, "velocity": 100, "hold": 1 }] }),
+    )
+    .unwrap();
+    assert!(made.starts_with("Wrote Track 2:"), "{made}");
+    call(&mut d, "set_melody", json!({ "track": "Track 2", "steps": [{ "step": 3, "note": 40, "velocity": 100, "hold": 1 }] })).unwrap();
+    call(&mut d, "set_melody", line(9)).unwrap();
+    // The tempo, the made track, its rewrite, and Track 1's last line.
+    let queued: Vec<&Json> = d.queue().iter().map(|(_, p)| &p["track"]).collect();
+    assert_eq!(
+        queued,
+        [
+            &Json::Null,
+            &json!("new"),
+            &json!("Track 2"),
+            &json!("Track 1")
+        ]
+    );
+    d.apply(&r.session, "Agent: a line").unwrap();
+    let t = r.session.tracker();
+    let on = |i: usize| -> Vec<usize> {
+        t.tracks[i]
+            .steps
+            .iter()
+            .enumerate()
+            .filter(|(_, s)| s.on)
+            .map(|(i, _)| i)
+            .collect()
+    };
+    assert_eq!(on(0), [8], "the last write of Track 1, its step 9");
+    assert_eq!(on(2), [2], "Track 2 made, then rewritten");
+    assert!((t.swing - 0.12).abs() < 1e-6);
+}
+
+#[test]
+fn track_1_in_set_melody_is_the_first_melody_track() {
+    // The live failure: "a bassline on track 1" sent track 1, which by
+    // place was the drums track.
+    let r = rig();
+    let mut d = Draft::of(&r.session).unwrap();
+    let out = call(
+        &mut d,
+        "set_melody",
+        json!({ "track": 1, "steps": [{ "step": 1, "note": 45, "velocity": 100, "hold": 1 }] }),
+    )
+    .unwrap();
+    assert!(out.starts_with("Wrote Track 1:"), "{out}");
+    let out = call(
+        &mut d,
+        "set_melody",
+        json!({ "track": "track 1", "steps": [{ "step": 16, "note": 45, "velocity": 100, "hold": 1 }] }),
+    )
+    .unwrap();
+    assert!(out.starts_with("Wrote Track 1:"), "{out}");
+    d.apply(&r.session, "Agent: a line").unwrap();
+    let steps = &r.session.tracker().tracks[0].steps;
+    assert!(steps[15].on && !steps[0].on, "step 16 is the last of 16");
 }
 
 #[test]
@@ -613,7 +776,7 @@ fn a_reply_whose_tracks_changed_meanwhile_applies_nothing() {
     call(
         &mut d,
         "set_drums",
-        json!({ "track": 1, "hits": [{ "step": 0, "midi_note": 36, "velocity": 110 }] }),
+        json!({ "track": "Drums 1", "hits": [{ "step": 1, "midi_note": 36, "velocity": 110 }] }),
     )
     .unwrap();
     // While the model thought, a track was added by hand.
@@ -632,16 +795,18 @@ fn the_commands_run_on_a_document_without_a_session() {
     let out = doc
         .run(
             commands::SET_MELODY,
-            &json!({ "steps": [{ "step": 0, "note": 40, "velocity": 100, "hold": 1 }] }),
+            &json!({ "steps": [{ "step": 1, "note": 40, "velocity": 100, "hold": 1 }] }),
         )
         .unwrap();
-    assert!(matches!(out, Outcome::Text(t) if t.starts_with("melody track 2 written")));
+    assert!(matches!(out, Outcome::Text(t) if t.starts_with("Wrote Track 2:")));
     let Outcome::Text(song) = doc.run(commands::READ_SONG, &json!({})).unwrap() else {
         panic!("read_song answers text");
     };
     let song: Json = serde_json::from_str(&song).unwrap();
     assert_eq!(song["tracks"][2]["root"], 40);
+    assert_eq!(song["tracks"][2]["name"], "Track 2");
     assert_eq!(song["tracks"][2]["steps"][0]["note"], 40);
+    assert_eq!(song["tracks"][2]["steps"][0]["step"], 1);
     assert_eq!(doc.tree().undo_label(), Some("Set Melody"));
 }
 
@@ -737,4 +902,52 @@ fn live_lm_studio_writes_a_four_on_the_floor_beat() {
     println!("song: {}", r.session.read(commands::song));
     println!("{hits} hits, {kicks} of them kicks");
     assert!(hits > 0, "a drums track got hits");
+}
+
+/// Asks LM Studio for a bassline on Track 1, by name: `cargo test -p shard
+/// live_lm_studio_writes -- --ignored --nocapture`, with the model loaded;
+/// `SHARD_AGENT_CONSIDERED=1` for reasoning on. It should write Track 1 and
+/// stop on its own, before any limit.
+#[test]
+#[ignore = "needs LM Studio running with a model loaded"]
+fn live_lm_studio_writes_a_bassline_on_track_1_and_stops() {
+    let r = rig();
+    let considered = std::env::var("SHARD_AGENT_CONSIDERED").is_ok_and(|v| v == "1");
+    let settings = Settings::default();
+    let mut model = Logged(crate::agent::client::Http::new(&settings), Instant::now());
+    let cancel = AtomicBool::new(false);
+    let mut events = Vec::new();
+    let started = Instant::now();
+    respond(
+        &r.session,
+        &mut model,
+        &settings,
+        "only a bassline on Track 1: a death metal verse in G, heavy and dark",
+        considered,
+        &cancel,
+        &mut |e| {
+            match &e {
+                Event::Text { .. } | Event::Reasoning { .. } => {}
+                other => println!(
+                    "{:.1} s {}",
+                    started.elapsed().as_secs_f32(),
+                    serde_json::to_string(other).unwrap()
+                ),
+            }
+            events.push(e);
+        },
+    );
+    println!("took {:.1} s", started.elapsed().as_secs_f32());
+    assert!(
+        !events.iter().any(|e| matches!(e, Event::Stopped { .. })),
+        "it stopped on its own"
+    );
+    assert!(matches!(
+        events.last(),
+        Some(Event::Done { applied: true, .. })
+    ));
+    let t = r.session.tracker();
+    println!("song: {}", r.session.read(commands::song));
+    assert_eq!(t.tracks.len(), 2, "no new track");
+    assert!(t.tracks[0].steps.iter().any(|s| s.on), "Track 1 has notes");
 }

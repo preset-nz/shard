@@ -67,6 +67,17 @@ pub enum Slot {
     Drums(usize),
 }
 
+impl Slot {
+    /// The track's name as Shard shows it: "Track 2" by its place among the
+    /// melody tracks, "Drums 1" among the drums, counted from 1.
+    pub fn name(self) -> String {
+        match self {
+            Slot::Melody(k) => format!("Track {}", k + 1),
+            Slot::Drums(k) => format!("Drums {}", k + 1),
+        }
+    }
+}
+
 /// Each track's slot, from whether each is a drums track, in order. The one
 /// mapping from a track's place to its voice or kit: the session and the
 /// meters both go through it.
