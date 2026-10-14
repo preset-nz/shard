@@ -5,8 +5,7 @@
                               # an edit (-edit.mp4, 1920x1200 H.264) with the model's
                               # wait at 6x and labelled so, and a poster (-poster.jpg)
     just demo --rehearse      # the same moves, Quick mode, no recording
-    just demo --recut A B     # the edit again from today's take; A and B are the
-                              # wait's start and end, as a take prints them
+    just demo --recut         # the edit again from today's take and its .json
 
 The take is the window, not the screen: the display switches to 2056x1329
 points ("More Space"), Shard's window to 1920x1200 points in the middle of it,
@@ -23,6 +22,7 @@ into target/demo/ by `just demo`.
 
 import argparse
 import datetime
+import json
 import pathlib
 import signal
 import subprocess
@@ -35,6 +35,14 @@ PROMPT = "a dark industrial beat and a driving bass line in D minor, 125 bpm"
 SCREEN = (2056, 1329)  # points; More Space on a 16-inch MacBook Pro
 WINDOW = (1920, 1200)
 MENU_BAR = 38  # points, with the notch
+TEAL = "49a8b3"  # ux-kit's dark primary: the captions' plate
+EVENTS: list[tuple[float, str, float]] = []  # when, caption, seconds shown
+
+
+def note(caption: str, seconds: float = 1.8):
+    """A caption for the edit's bottom centre, the way a key display shows a
+    press: every menu command and held key, since a click shows itself."""
+    EVENTS.append((time.monotonic(), caption, seconds))
 
 
 def ax(*args) -> list[int]:
@@ -67,6 +75,7 @@ def slide(label, to, n=-1, ms=1400):
 
 
 def menu(bar, item):
+    note(f"{bar} › {item}")
     subprocess.run(
         ["osascript", "-e",
          f'tell application "System Events" to tell process "shard" to click menu item "{item}" '
@@ -93,6 +102,12 @@ def stage() -> list[int]:
     if frame[2:] != list(WINDOW):
         raise SystemExit(f"the window is {frame[2]}x{frame[3]}, not {w}x{h}")
     subprocess.run(["osascript", "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true'])
+    time.sleep(1)
+    # The take opens on the bare session: Song, not Loop or Once (the mode is
+    # remembered between launches, and Loop goes quiet once Sustain is at
+    # zero), and the agent panel already hidden.
+    click("Song")
+    agent_panel(False)
     time.sleep(1)
     return frame
 
@@ -127,15 +142,9 @@ def bass_track() -> str:
 
 
 def run(considered: bool):
-    subprocess.run(["osascript", "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true'])
     hold(1.5)
 
-    # Song, not Loop or Once: the transport's mode is remembered between
-    # launches, and Loop goes quiet once Sustain is at zero.
-    click("Song")
     # The empty session first: the built-in drone, without the agent.
-    agent_panel(False)
-    hold(1)
     click("Play")
     hold(5)
     click("Stop")
@@ -202,6 +211,7 @@ def run(considered: bool):
     # The tape brakes under a held B, and Stop lands while it's braking.
     # B is ignored while a button has focus, so a plain heading takes it.
     click("PROCESS")
+    note("Hold B · Brake", 2.6)
     brake = subprocess.Popen([BIN / "ui", "hold", "11", "2600"])
     hold(1.8)
     click("Stop")
@@ -213,11 +223,13 @@ def run(considered: bool):
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--rehearse", action="store_true", help="Quick mode, no recording")
-    ap.add_argument("--recut", nargs=2, type=float, metavar=("A", "B"), help="edit today's take again")
+    ap.add_argument("--recut", action="store_true", help="edit today's take again")
     a = ap.parse_args()
     out = pathlib.Path.home() / "rhizomatic-preset" / "renders" / f"shard-demo-{datetime.date.today():%Y%m%d}.mov"
+    marks_file = out.with_suffix(".json")
     if a.recut:
-        edit(out, *a.recut)
+        m = json.loads(marks_file.read_text())
+        edit(out, m["wait"][0], m["wait"][1], [tuple(e) for e in m["captions"]])
         return
     before = display()
     try:
@@ -235,28 +247,45 @@ def main():
             rec.wait(timeout=30)
     finally:
         display(*before[:2])
-    a_, b_ = marks["sent"] - t0 + 2, marks["answered"] - t0 - 1
-    print(f"wait: {a_:.1f} to {b_:.1f} s (for --recut)")
-    edit(out, a_, b_)
+    wait = (marks["sent"] - t0 + 2, marks["answered"] - t0 - 1)
+    captions = [(t - t0, c, d) for t, c, d in EVENTS if t >= t0]
+    marks_file.write_text(json.dumps({"wait": wait, "captions": captions}, ensure_ascii=False, indent=1))
+    edit(out, *wait, captions)
 
 
-def edit(raw: pathlib.Path, a: float, b: float, speed: int = 6):
+def edit(raw: pathlib.Path, a: float, b: float, captions=(), speed: int = 6):
     """The take with the model's wait, `a` to `b` seconds in, `speed` times
-    faster and labelled so in the title bar's right end; halved, as H.264 for
-    every browser, with a poster from the result playing."""
+    faster under a "6×" plate, and each caption on the same plate at the
+    bottom centre for its seconds; halved, as H.264 for every browser, with a
+    poster from the result playing."""
     out = raw.with_name(raw.stem + "-edit.mp4")
-    label = BIN / f"label-{speed}x.png"
-    # At the take's 2x: the title bar is 56 px high.
-    subprocess.run([BIN / "label", f"{speed}×", label, "40"], check=True)
+
+    def at(t):  # a time in the take, in the edit
+        return t if t <= a else a + (t - a) / speed if t <= b else t - (b - a) * (1 - 1 / speed)
+
+    shown = [(f"▶▶  {speed}×", a, a + (b - a) / speed)]
+    shown += [(c, at(t), at(t) + d) for t, c, d in captions if not a < t < b]
+    plates, inputs, chain, last = {}, [], "", "vc"
+    for i, (text, start, end) in enumerate(shown):
+        if text not in plates:
+            png = BIN / "labels" / f"{len(plates)}.png"
+            png.parent.mkdir(exist_ok=True)
+            # At the take's 2x: 52 px high in the edit, 48 px off the bottom.
+            subprocess.run([BIN / "label", text, png, "104", TEAL], check=True)
+            plates[text] = len(plates) + 1
+            inputs += ["-i", png]
+        chain += (f"[{last}][{plates[text]}:v]overlay=x=(W-w)/2:y=H-h-96:"
+                  f"enable='between(t,{start:.3f},{end:.3f})'[o{i}];")
+        last = f"o{i}"
     v = (f"[0:v]trim=0:{a},setpts=PTS-STARTPTS[v0];[0:a]atrim=0:{a},asetpts=PTS-STARTPTS[a0];"
-         f"[0:v]trim={a}:{b},setpts=(PTS-STARTPTS)/{speed}[v1r];"
-         "[v1r][1:v]overlay=x=W-w-24:y=8[v1];"
+         f"[0:v]trim={a}:{b},setpts=(PTS-STARTPTS)/{speed}[v1];"
          f"[0:a]atrim={a}:{b},asetpts=PTS-STARTPTS,atempo=2,atempo={speed / 2}[a1];"
          f"[0:v]trim={b},setpts=PTS-STARTPTS[v2];[0:a]atrim={b},asetpts=PTS-STARTPTS[a2];"
          "[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[vc][a];"
-         "[vc]scale=trunc(iw/4)*2:trunc(ih/4)*2:flags=lanczos,fps=60,format=yuv420p[v]")
+         + chain +
+         f"[{last}]scale=trunc(iw/4)*2:trunc(ih/4)*2:flags=lanczos,fps=60,format=yuv420p[v]")
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, "-i", label, "-filter_complex", v,
+        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, *inputs, "-filter_complex", v,
          "-map", "[v]", "-map", "[a]",
          "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-profile:v", "high",
          "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out],
