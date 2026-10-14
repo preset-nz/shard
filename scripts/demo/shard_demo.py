@@ -12,7 +12,10 @@ points ("More Space"), Shard's window to 1920x1200 points in the middle of it,
 and the recording, at 2x, halves to 1920x1200 with every point one pixel. The
 display goes back to what it was when the run ends, however it ends.
 
-Shard must be running (`just run`) on a freshly launched, empty session.
+The run starts Shard itself: it kills any running Shard, unsaved work and
+all, and launches a fresh one with `just run`, so every take, a rehearsal's
+too, opens on an empty session. File > New would ask about unsaved changes,
+and a lost dialog once jammed it. Shard stays running after the take.
 Don't save a file under the repo while it runs: Vite reloads the webview.
 Every control is found by name in the accessibility tree (`ax`), never by a
 pixel read off a screenshot, so the run needs nobody watching it: the only
@@ -27,6 +30,7 @@ import pathlib
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
@@ -91,9 +95,31 @@ def display(*size) -> list[int]:
     return [int(v) for v in out.stdout.split()]
 
 
+def launch():
+    """A fresh Shard: any running one killed, `just run` started detached,
+    and back once its window shows Play. The log goes outside the repo,
+    since a write under it reloads the webview."""
+    subprocess.run(["pkill", "-x", "shard"])
+    for _ in range(40):
+        if subprocess.run(["pgrep", "-x", "shard"], capture_output=True).returncode:
+            break
+        time.sleep(0.25)
+    log = pathlib.Path(tempfile.gettempdir()) / "shard-demo-run.log"
+    with log.open("w") as f:
+        subprocess.Popen(["just", "run"], cwd=ROOT, stdout=f, stderr=subprocess.STDOUT, start_new_session=True)
+    for _ in range(300):
+        time.sleep(1)
+        if subprocess.run([BIN / "ax", "find", "Play"], capture_output=True).returncode == 0:
+            time.sleep(2)  # the rest of the webview
+            return
+    raise SystemExit(f"Shard didn't start in 5 minutes; see {log}")
+
+
 def stage() -> list[int]:
-    """The display at SCREEN, Shard's window at WINDOW in the middle of it,
-    before the recording starts. Returns the window's frame, x y w h."""
+    """A fresh Shard, the display at SCREEN and its window at WINDOW in
+    the middle of it, before the recording starts. Returns the window's
+    frame, x y w h."""
+    launch()
     display(*SCREEN)
     time.sleep(2.5)  # the display settles, and windows move to fit
     w, h = WINDOW

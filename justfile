@@ -159,7 +159,7 @@ package: build
 eval-agent *args:
     python3 evals/agent/agent_eval.py {{args}}
 
-# Start `just run` fresh first; `--rehearse` runs it unrecorded, in Quick. Switches the display to More Space and back.
+# Launches a fresh Shard (killing a running one) and switches the display to More Space and back; `--rehearse` runs it unrecorded, in Quick.
 # A scripted, recorded demo: a prompt to the agent, then shaping the bass
 [group('eval')]
 demo *args:
