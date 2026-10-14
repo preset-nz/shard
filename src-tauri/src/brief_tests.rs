@@ -155,6 +155,24 @@ fn a_new_bass_gets_a_driven_fm_patch_and_an_arp_a_brighter_one() {
         value(bass, &fx::row_id(copy0, "drive.mix")) > 0.0,
         "drive is heard"
     );
+    // The bass moves: a driven ladder whose cutoff follows an envelope on
+    // every note, and an LFO turning the FM index over four bars.
+    assert_eq!(value(bass, "ladder.on"), 1.0, "the ladder is heard");
+    assert!(value(bass, "ladder.mix") > 0.0);
+    let m = &bass.modulation;
+    let cutoff = m.links.get("ladder.cutoff").expect("the cutoff follows");
+    assert!(m.envelopes.iter().any(|e| e.id == cutoff.source), "{m:?}");
+    assert!(cutoff.hi > cutoff.lo, "the envelope opens the filter");
+    let index = m.links.get("fm.index").expect("the index follows");
+    let lfo = m
+        .lfos
+        .iter()
+        .find(|l| l.id == index.source)
+        .expect("an LFO");
+    let four_bars = 120.0 / 60.0 / 16.0;
+    assert!((lfo.rate - four_bars).abs() < 1e-3, "{}", lfo.rate);
+    assert!(arp.modulation.links.is_empty(), "the arp stays as it was");
+
     assert!(value(arp, "fm.index") > value(bass, "fm.index"), "brighter");
     assert!(
         value(arp, "env.sustain") < value(bass, "env.sustain"),

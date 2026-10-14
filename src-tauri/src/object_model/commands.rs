@@ -28,11 +28,12 @@
 //! one exception is a step 0: it says the sender counts from 0, so every
 //! other step it sent is one early too, and the whole write is refused.
 
-use rhizome_core::{Edit, NodeId, Ref};
+use rhizome_core::{Edit, NodeId, Ref, Value};
 use rhizome_pom::{Commands, Document, Error as PomError, Outcome};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
 use shard_dsp::fx::Kind as Fx;
+use shard_dsp::modulation::{MAX_RATE_HZ, MIN_RATE_HZ};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::{KITS, VOICES};
@@ -608,6 +609,39 @@ const BASS_DRIVE: [(&str, f32); 5] = [
     ("drive.type", 0.0),
 ];
 
+/// What makes a new bass move: a driven ladder low-pass whose cutoff
+/// follows a pluck envelope on every note, and a slow LFO on the FM index
+/// that turns the tone over four bars. Links are shares of a row's range,
+/// and the cutoff's is exponential: 0.28 is about 140 Hz, 0.66 about 1.9 kHz.
+const BASS_LADDER: [(&str, f32); 4] = [
+    ("ladder.on", 1.0),
+    ("ladder.drive", 0.45),
+    ("ladder.resonance", 0.45),
+    ("ladder.cutoff", 600.0),
+];
+const BASS_SWEEP: (f32, f32) = (0.28, 0.66);
+const BASS_INDEX_LFO: (f32, f32) = (0.12, 0.35);
+
+/// The ladder, its envelope and the index LFO on a new bass `patch`, the
+/// LFO one turn per four bars at `tempo`.
+fn bass_movement(tx: &mut Edit<'_>, patch: NodeId, tempo: f32) -> rhizome_core::Result<()> {
+    for (id, v) in BASS_LADDER {
+        put_row(tx, patch, id, v)?;
+    }
+    let ladder = tx.section(patch, "ladder")?;
+    let env = tx.add_mod_env(patch)?;
+    tx.put(env, "mod-env.label", Value::Text("Mod envelope 1".into()))?;
+    tx.link(ladder, "ladder.cutoff", env, BASS_SWEEP.0, BASS_SWEEP.1)?;
+
+    let lfo = tx.add_lfo(patch)?;
+    let rate = (tempo / 60.0 / 16.0).clamp(MIN_RATE_HZ, MAX_RATE_HZ);
+    tx.put(lfo, "lfo.label", Value::Text("LFO 1".into()))?;
+    tx.put(lfo, "lfo.rate", Value::Float(super::float(rate)))?;
+    tx.put(lfo, "lfo.shape", Value::Choice("sine".into()))?;
+    let fm = tx.section(patch, "fm")?;
+    tx.link(fm, "fm.index", lfo, BASS_INDEX_LFO.0, BASS_INDEX_LFO.1)
+}
+
 /// Writes patch row `id` on `patch`, making its section when absent, the
 /// value brought into range as `Session::set_param` does.
 fn put_row(tx: &mut Edit<'_>, patch: NodeId, id: &str, v: f32) -> rhizome_core::Result<()> {
@@ -722,6 +756,7 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
                 ..Track::blank()
             };
             let r = root.0;
+            let tempo = now.tempo;
             d.edit("Set Melody", |tx| {
                 // Its own patch, so a sound for it never changes a track
                 // already playing: the material taken out, FM in.
@@ -745,6 +780,9 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
                         }
                     }
                 }
+                if role == Role::Bass {
+                    bass_movement(tx, patch, tempo)?;
+                }
                 let node = tx.add_track(arr, &track)?;
                 tx.set_ref(node, TRACK_PATCH, Ref::here(patch))
             })
@@ -758,7 +796,7 @@ pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<St
         if target == Target::New {
             match role {
                 Role::Plain => ", on a new FM patch of its own",
-                Role::Bass => ", on a new FM bass patch of its own",
+                Role::Bass => ", on a new FM bass patch of its own, a ladder filter swept by an envelope on every note and an LFO turning its tone over four bars",
                 Role::Arp => ", on a new FM arp patch of its own",
             }
         } else {
