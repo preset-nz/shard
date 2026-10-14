@@ -21,3 +21,19 @@ References: `material.source`.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Scrubbed: Scrub on, Position swept from 20% to 60% and back to 30%.*
+
+<audio controls preload="none" src="audio/material-1.m4a"></audio>
+
+*Played from a line: each step starts the sample at its own pitch.*
+
+<audio controls preload="none" src="audio/material-2.m4a"></audio>
+<!-- examples:end -->

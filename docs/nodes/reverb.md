@@ -22,3 +22,23 @@ A simulated space around the sound, from a small room to a long hall or plate ta
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*A small room: Mix 30%.*
+
+<audio controls preload="none" src="audio/reverb-1.m4a"></audio>
+
+*Cathedral: Mix 50%, Type Hall, Decay 8 s, Size 90%, Pre-delay 60 ms.*
+
+<audio controls preload="none" src="audio/reverb-2.m4a"></audio>
+
+*Bright plate: Mix 40%, Type Plate, Decay 3 s, Tone 12 kHz.*
+
+<audio controls preload="none" src="audio/reverb-3.m4a"></audio>
+<!-- examples:end -->

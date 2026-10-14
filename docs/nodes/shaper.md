@@ -20,3 +20,19 @@ Pushes the attack and the tail of a sound up or down, by how fast it changes rat
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Sharper consonants: Mix 100%, Attack 80%.*
+
+<audio controls preload="none" src="audio/shaper-1.m4a"></audio>
+
+*Dried up: Mix 100%, Sustain -80%.*
+
+<audio controls preload="none" src="audio/shaper-2.m4a"></audio>
+<!-- examples:end -->

@@ -21,3 +21,19 @@ A very short swept delay mixed with the dry sound, so notches sweep through it w
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Slow jet: Mix 60%, Rate 0.15 Hz, Feedback 70%.*
+
+<audio controls preload="none" src="audio/flanger-1.m4a"></audio>
+
+*Metal comb: Mix 70%, Manual 0.4 ms, Depth 10%, Feedback -90%.*
+
+<audio controls preload="none" src="audio/flanger-2.m4a"></audio>
+<!-- examples:end -->

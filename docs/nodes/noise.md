@@ -39,3 +39,15 @@ Each voice has its own noise, and left and right are independent, so it is wide 
 - **Wind.** Colour pink, Band about 60%, Width wide, Run Free, a slow Random LFO on Frequency.
 - **Whistled melody.** Band full, Width near zero, steps at the pitches you want.
 - **The glitch loop.** Noise into Peaks with one Random LFO on Low and inverted on High, then the Shifter with Feedback up. Record a long take while moving things, then take it apart.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Ticks: Colour 0.8; Envelope Decay 60 ms, Sustain 0%.*
+
+<audio controls preload="none" src="audio/noise-1.m4a"></audio>
+
+*Pitched wind: Band 90%, Width 10%.*
+
+<audio controls preload="none" src="audio/noise-2.m4a"></audio>
+<!-- examples:end -->

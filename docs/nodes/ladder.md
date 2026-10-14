@@ -40,3 +40,19 @@ The patch has two filters. The first is clean and exact. The Ladder comes after 
 - **Acid.** A short FM or sample note, Resonance around 70%, Drive up, a modulation envelope on Cutoff.
 - **Whistling noise.** Noise into the Ladder, Resonance near full, Cutoff low; sweep Cutoff with a slow LFO. The noise gives the whistle something to ride on.
 - **Glitch.** The same, with a Random LFO on Cutoff and Repeat after it, Hold played by a second Random LFO. Record a take and harvest it.
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Dark growl: Drive 80%, Cutoff 600 Hz, Resonance 50%.*
+
+<audio controls preload="none" src="audio/ladder-1.m4a"></audio>
+
+*Whistling sweep: Resonance 90%, Cutoff swept from 300 Hz to 4 kHz.*
+
+<audio controls preload="none" src="audio/ladder-2.m4a"></audio>
+<!-- examples:end -->

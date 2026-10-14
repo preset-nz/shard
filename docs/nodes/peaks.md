@@ -21,3 +21,19 @@ Two narrow boosted bands that ring like resonators on noise and whistle when swe
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Two resonances: Mix 70%, Low 800 Hz, High 2.5 kHz, Boost 24 dB, Width 10%.*
+
+<audio controls preload="none" src="audio/peaks-1.m4a"></audio>
+
+*Swept whistle: Mix 80%, Boost 30 dB, Width 5%, Low swept from 200 Hz to 3 kHz.*
+
+<audio controls preload="none" src="audio/peaks-2.m4a"></audio>
+<!-- examples:end -->

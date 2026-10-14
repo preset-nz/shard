@@ -20,3 +20,23 @@ Moves every frequency by the same number of hertz, so the sound turns inharmonic
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Shimmer: Mix 50%, Shift 7 Hz, Spread 100%.*
+
+<audio controls preload="none" src="audio/freqshift-1.m4a"></audio>
+
+*Spiral: Mix 60%, Shift 120 Hz, Feedback 80%.*
+
+<audio controls preload="none" src="audio/freqshift-2.m4a"></audio>
+
+*Clang: Mix 100%, Shift -300 Hz.*
+
+<audio controls preload="none" src="audio/freqshift-3.m4a"></audio>
+<!-- examples:end -->

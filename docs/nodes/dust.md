@@ -21,3 +21,19 @@ Sparse random clicks, from the odd tick to a dense crackle, like dust on a recor
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Crackle under the voice: Gain 40%, Density 30, Tone 70%.*
+
+<audio controls preload="none" src="audio/dust-1.m4a"></audio>
+
+*Rain: Density 400, Decay 5 ms.*
+
+<audio controls preload="none" src="audio/dust-2.m4a"></audio>
+<!-- examples:end -->

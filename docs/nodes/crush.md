@@ -19,3 +19,19 @@ Degrades the sound by throwing away resolution and sample rate, for gritty lo-fi
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Old sampler: Mix 100%, Bits 8, Rate 12 kHz.*
+
+<audio controls preload="none" src="audio/crush-1.m4a"></audio>
+
+*Down to the bone: Mix 100%, Bits 3, Rate 2 kHz.*
+
+<audio controls preload="none" src="audio/crush-2.m4a"></audio>
+<!-- examples:end -->

@@ -21,3 +21,19 @@ Clean, faithful repeats of the sound, darkened only by Tone.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Ping-pong: Mix 40%, Time 375 ms, Feedback 50%, Ping-pong 100%.*
+
+<audio controls preload="none" src="audio/delay-1.m4a"></audio>
+
+*Dark repeats: Mix 50%, Time 600 ms, Feedback 70%, Tone 1.5 kHz.*
+
+<audio controls preload="none" src="audio/delay-2.m4a"></audio>
+<!-- examples:end -->

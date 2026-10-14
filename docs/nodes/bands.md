@@ -21,3 +21,19 @@ Splits the sound into low, mid and high and gives each band its own echo, at tim
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Harmonic echoes: Mix 50%.*
+
+<audio controls preload="none" src="audio/bands-1.m4a"></audio>
+
+*Bent by time: Mix 60%, Feedback 70%, Time swept from 375 ms to 120 ms.*
+
+<audio controls preload="none" src="audio/bands-2.m4a"></audio>
+<!-- examples:end -->

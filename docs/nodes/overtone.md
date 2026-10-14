@@ -21,3 +21,19 @@ Adds layers made from the sound itself: an octave down, an octave up and a fifth
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Sub under the voice: Mix 60%, Sub 80%, Octave 0%.*
+
+<audio controls preload="none" src="audio/overtone-1.m4a"></audio>
+
+*Organ: Mix 60%, Sub 30%, Octave 60%, Fifth 50%.*
+
+<audio controls preload="none" src="audio/overtone-2.m4a"></audio>
+<!-- examples:end -->

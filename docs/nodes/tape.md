@@ -17,3 +17,19 @@ How the tape slows, stops or runs backwards when a brake or reverse is played.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Brake: Time 1.5 s, Brake held for 2.5 s mid-sentence.*
+
+<audio controls preload="none" src="audio/tape-1.m4a"></audio>
+
+*Reverse: Time 100 ms, Reverse held for 1.5 s mid-sentence.*
+
+<audio controls preload="none" src="audio/tape-2.m4a"></audio>
+<!-- examples:end -->

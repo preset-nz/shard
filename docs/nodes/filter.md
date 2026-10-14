@@ -22,3 +22,23 @@ A resonant filter after all the effects, taking away the highs, the lows or ever
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Behind a wall: Cutoff 500 Hz, Slope 24 dB.*
+
+<audio controls preload="none" src="audio/filter-1.m4a"></audio>
+
+*Swept band: Type Band-pass, Resonance 70%, Cutoff swept from 200 Hz to 5 kHz.*
+
+<audio controls preload="none" src="audio/filter-2.m4a"></audio>
+
+*Thin: Type High-pass, Cutoff 1.5 kHz.*
+
+<audio controls preload="none" src="audio/filter-3.m4a"></audio>
+<!-- examples:end -->

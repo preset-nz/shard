@@ -5,6 +5,8 @@
 //! are AAC in `docs/nodes/audio/`, every one at the same loudness, and each
 //! page's Examples block is rewritten.
 //!
+//! A `docs/voice.wav`, when there is one, is the voice instead of `say`.
+//!
 //! Needs macOS `say` and `ffmpeg`. The WAVs on the way go to
 //! `~/rhizomatic-preset/renders/shard-examples/`, never into the repo.
 
@@ -18,7 +20,7 @@ use shard_lib::offline::{drone, Offline};
 const SR: f32 = 48_000.0;
 /// The voice and its pace, fixed so a rerun gives the same sample.
 const VOICE: &str = "Daniel";
-const WORDS_PER_MINUTE: &str = "150";
+const WORDS_PER_MINUTE: &str = "180";
 /// Where the voice comes in over the drone, and how long the drone rings on.
 const LEAD_IN: f32 = 1.5;
 const TAIL: f32 = 2.5;
@@ -275,14 +277,24 @@ fn run() -> Result<(), String> {
     let _ = std::fs::remove_dir_all(&audio);
     std::fs::create_dir_all(&audio).map_err(|e| e.to_string())?;
 
-    let quote = std::fs::read_to_string(docs.join("quote.txt")).map_err(|e| e.to_string())?;
-    let dry = dry_sample(quote.trim(), &renders)?;
+    // The sentence on the first line, its credit on the second.
+    let text = std::fs::read_to_string(docs.join("quote.txt")).map_err(|e| e.to_string())?;
+    let mut lines = text.lines().map(str::trim).filter(|l| !l.is_empty());
+    let quote = lines.next().ok_or("docs/quote.txt is empty")?;
+    let credit = lines.next().ok_or("docs/quote.txt has no credit line")?;
+    let tag = format!("Voice: \"{quote}\" {credit}");
+    let dry = dry_sample(quote, &docs, &renders)?;
     let sample_seconds = read_mono(&dry)?.len() as f32 / SR;
 
     // The dry clip goes through the session too, so it is what every recipe
     // starts from and not the file itself.
     let clip = render(&dry, sample_seconds, None)?;
-    encode(&clip, &renders.join("dry.wav"), &audio.join("dry.m4a"))?;
+    encode(
+        &clip,
+        &renders.join("dry.wav"),
+        &audio.join("dry.m4a"),
+        Some(&tag),
+    )?;
 
     let mut pages: BTreeMap<&str, Vec<String>> = BTreeMap::new();
     let mut count: BTreeMap<&str, usize> = BTreeMap::new();
@@ -292,7 +304,9 @@ fn run() -> Result<(), String> {
         let stem = format!("{}-{n}", recipe.node);
         let clip = render(&dry, sample_seconds, Some(recipe))?;
         let wav = renders.join(format!("{stem}.wav"));
-        encode(&clip, &wav, &audio.join(format!("{stem}.m4a")))?;
+        let voiced = recipe.plays != Plays::Line || !recipe.adds.is_empty();
+        let comment = voiced.then_some(tag.as_str());
+        encode(&clip, &wav, &audio.join(format!("{stem}.m4a")), comment)?;
         println!("{stem}  {}", recipe.name);
         let block = pages.entry(recipe.node).or_default();
         if block.is_empty() && recipe.plays == Plays::Sample {
@@ -303,6 +317,10 @@ fn run() -> Result<(), String> {
     for (node, block) in pages {
         write_block(&docs.join(format!("nodes/{node}.md")), &block)?;
     }
+    let readme = format!(
+        "# Example clips\n\nWritten by `just examples`; do not edit. The voice reads \"{quote}\" {credit}\n"
+    );
+    std::fs::write(audio.join("README.md"), readme).map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -422,22 +440,39 @@ fn play_line(off: &Offline) -> Result<(), String> {
     s.set_param("patch.hold", 250.0)
 }
 
-/// The voice over the drone, mono, peaking at -1 dBFS.
-fn dry_sample(quote: &str, renders: &Path) -> Result<PathBuf, String> {
-    let voice_path = renders.join("voice.wav");
-    let status = Command::new("say")
-        .args(["-v", VOICE, "-r", WORDS_PER_MINUTE])
-        .arg("--file-format=WAVE")
-        .arg("--data-format=LEF32@48000")
-        .arg("-o")
-        .arg(&voice_path)
-        .arg(quote)
-        .status()
-        .map_err(|e| format!("say: {e}"))?;
+/// The voice reading the quote: `docs/voice.wav` when there is one (a take
+/// from another voice, shaped elsewhere, at any rate), or else macOS `say`.
+fn voice(quote: &str, docs: &Path, renders: &Path) -> Result<Vec<f32>, String> {
+    let path = renders.join("voice.wav");
+    let take = docs.join("voice.wav");
+    let status = if take.exists() {
+        Command::new("ffmpeg")
+            .args(["-y", "-loglevel", "error", "-i"])
+            .arg(&take)
+            .args(["-ac", "1", "-ar", "48000", "-c:a", "pcm_f32le"])
+            .arg(&path)
+            .status()
+            .map_err(|e| format!("ffmpeg: {e}"))?
+    } else {
+        Command::new("say")
+            .args(["-v", VOICE, "-r", WORDS_PER_MINUTE])
+            .arg("--file-format=WAVE")
+            .arg("--data-format=LEF32@48000")
+            .arg("-o")
+            .arg(&path)
+            .arg(quote)
+            .status()
+            .map_err(|e| format!("say: {e}"))?
+    };
     if !status.success() {
-        return Err("say failed".into());
+        return Err("the voice could not be made".into());
     }
-    let voice = read_mono(&voice_path)?;
+    read_mono(&path)
+}
+
+/// The voice over the drone, mono, peaking at -1 dBFS.
+fn dry_sample(quote: &str, docs: &Path, renders: &Path) -> Result<PathBuf, String> {
+    let voice = voice(quote, docs, renders)?;
     let lead = (LEAD_IN * SR) as usize;
     let len = lead + voice.len() + (TAIL * SR) as usize;
     let bed = drone(SR, len as f32 / SR);
@@ -481,8 +516,9 @@ fn use_material(off: &Offline, dry: &Path) -> Result<u64, String> {
 }
 
 /// Writes the clip as a WAV, then encodes it to AAC at `LOUDNESS_LUFS`, by
-/// gain alone: measured first, so the dynamics are left as they are.
-fn encode(clip: &[f32], wav: &Path, m4a: &Path) -> Result<(), String> {
+/// gain alone: measured first, so the dynamics are left as they are. A clip
+/// with the voice in it carries the quote's credit in its comment tag.
+fn encode(clip: &[f32], wav: &Path, m4a: &Path, comment: Option<&str>) -> Result<(), String> {
     if clip.iter().any(|s| !s.is_finite()) {
         return Err(format!("{}: not finite", wav.display()));
     }
@@ -518,6 +554,12 @@ fn encode(clip: &[f32], wav: &Path, m4a: &Path) -> Result<(), String> {
         .arg(wav)
         .args(["-af", &format!("volume={gain:.2}dB")])
         .args(["-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart"])
+        .args(
+            comment
+                .map(|c| ["-metadata".to_string(), format!("comment={c}")])
+                .into_iter()
+                .flatten(),
+        )
         .arg(m4a)
         .status()
         .map_err(|e| format!("ffmpeg: {e}"))?;

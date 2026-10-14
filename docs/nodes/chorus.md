@@ -24,3 +24,19 @@ Mixes in gently detuned, swept copies of the sound to widen and thicken it.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Wide and shimmering: Mix 50%, Type Ensemble, Depth 70%.*
+
+<audio controls preload="none" src="audio/chorus-1.m4a"></audio>
+
+*A choir of one: Mix 80%, Type Choir, Voices 8.*
+
+<audio controls preload="none" src="audio/chorus-2.m4a"></audio>
+<!-- examples:end -->

@@ -20,3 +20,19 @@ Bends the sound out of shape with a curve, then darkens it with a tone filter, f
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Warm grit: Mix 50%, Amount 18.*
+
+<audio controls preload="none" src="audio/drive-1.m4a"></audio>
+
+*Folded to metal: Mix 100%, Amount 40, Tone 4 kHz, Type Fold.*
+
+<audio controls preload="none" src="audio/drive-2.m4a"></audio>
+<!-- examples:end -->

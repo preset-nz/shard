@@ -22,3 +22,19 @@ The worn counterpart of the delay: each repeat comes back darker, dirtier and sl
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Tape echo: Mix 50%, Time 400 ms, Feedback 55%.*
+
+<audio controls preload="none" src="audio/echo-1.m4a"></audio>
+
+*Runaway: Mix 50%, Time 250 ms, Feedback 90%, Grit 70%.*
+
+<audio controls preload="none" src="audio/echo-2.m4a"></audio>
+<!-- examples:end -->

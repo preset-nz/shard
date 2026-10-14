@@ -21,3 +21,19 @@ Shapes how each note swells in and dies away; at its neutral setting it passes t
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Slow swell: Attack 3 s.*
+
+<audio controls preload="none" src="audio/env-1.m4a"></audio>
+
+*Plucked words: Decay 150 ms, Sustain 0%, played from a line.*
+
+<audio controls preload="none" src="audio/env-2.m4a"></audio>
+<!-- examples:end -->

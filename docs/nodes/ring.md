@@ -18,3 +18,19 @@ Multiplies the sound by a tone, adding metallic, bell-like frequencies that do n
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Robot: Mix 100%, Frequency 30 Hz.*
+
+<audio controls preload="none" src="audio/ring-1.m4a"></audio>
+
+*Clang: Mix 70%, Frequency 900 Hz.*
+
+<audio controls preload="none" src="audio/ring-2.m4a"></audio>
+<!-- examples:end -->

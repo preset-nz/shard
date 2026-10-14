@@ -21,3 +21,23 @@ Grabs the last slice of sound and loops it, for stutters and freezes.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Freeze a word: Mix 100%, Length 400 ms, Hold raised for 2 s mid-sentence.*
+
+<audio controls preload="none" src="audio/repeat-1.m4a"></audio>
+
+*Stutter: Mix 100%, Length 60 ms, Hold raised twice a second through the middle.*
+
+<audio controls preload="none" src="audio/repeat-2.m4a"></audio>
+
+*Backwards and down: Mix 100%, Length 500 ms, Speed -12 st, Reverse on, Hold raised for 2.5 s late in the sentence.*
+
+<audio controls preload="none" src="audio/repeat-3.m4a"></audio>
+<!-- examples:end -->

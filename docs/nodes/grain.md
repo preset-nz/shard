@@ -28,3 +28,23 @@ References: `grain.source`.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*A cloud: Position 30%, Jitter 20%, Size 120 ms, Density 40 Hz.*
+
+<audio controls preload="none" src="audio/grain-1.m4a"></audio>
+
+*Frozen shimmer: Position 45%, Size 300 ms, Density 80 Hz, Pitch spread 12 st.*
+
+<audio controls preload="none" src="audio/grain-2.m4a"></audio>
+
+*Scattered backwards: Jitter 100%, Size 60 ms, Density 15 Hz, Reverse 100%, Window Expodec.*
+
+<audio controls preload="none" src="audio/grain-3.m4a"></audio>
+<!-- examples:end -->

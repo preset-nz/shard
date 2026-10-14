@@ -22,3 +22,19 @@ Repeats that each climb in pitch from the last, so the trail rises like a siren.
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Climbing fifths: Mix 50%.*
+
+<audio controls preload="none" src="audio/rise-1.m4a"></audio>
+
+*Sinking: Mix 50%, Feedback 80%, Shift -5 st.*
+
+<audio controls preload="none" src="audio/rise-2.m4a"></audio>
+<!-- examples:end -->

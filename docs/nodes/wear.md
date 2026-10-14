@@ -22,3 +22,19 @@ Tape that has been looked after badly: pitch wobble, lurching, level dropouts an
 <!-- generated:end -->
 
 ## Using it
+
+## Examples
+
+<!-- examples:begin — `just examples` rewrites this block; write outside it -->
+*Dry: the sample with nothing on it.*
+
+<audio controls preload="none" src="audio/dry.m4a"></audio>
+
+*Worn cassette: Mix 100%.*
+
+<audio controls preload="none" src="audio/wear-1.m4a"></audio>
+
+*Failing tape: Mix 100%, Wow 80%, Unstable 70%, Dropouts 60%.*
+
+<audio controls preload="none" src="audio/wear-2.m4a"></audio>
+<!-- examples:end -->
