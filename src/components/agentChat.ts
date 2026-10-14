@@ -47,6 +47,8 @@ export function stopText(reason: AgentStopReason): string {
       return 'Stopped: used up its tokens';
     case 'turns':
       return 'Stopped: used up its turns';
+    case 'looping':
+      return 'Stopped: it was going in circles';
   }
 }
 
@@ -112,6 +114,8 @@ export function reduceChat(c: Conversation, action: ChatAction): Conversation {
           text: stopText(action.reason),
         },
       ]);
+    case 'note':
+      return editOpen(c, (p) => [...p, { type: 'note', tone: 'info', text: action.text }]);
     case 'error':
       return editOpen(c, (p) => [...p, { type: 'note', tone: 'error', text: action.message }]);
     case 'done': {

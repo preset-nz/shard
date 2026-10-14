@@ -12,7 +12,7 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 /** Which limit stopped a reply. */
-export type AgentStopReason = 'cancelled' | 'time' | 'tokens' | 'turns';
+export type AgentStopReason = 'cancelled' | 'time' | 'tokens' | 'turns' | 'looping';
 
 /**
  * What arrives on `agent://event` while a reply runs. Every reply starts with
@@ -43,6 +43,8 @@ export type AgentEvent =
       ok: boolean;
     }
   | { kind: 'stopped'; reason: AgentStopReason }
+  /** A muted line about what the loop did on its own (a retry without thinking). */
+  | { kind: 'note'; text: string }
   | { kind: 'error'; message: string }
   | { kind: 'done'; applied: boolean; label: string };
 

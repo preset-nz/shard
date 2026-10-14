@@ -82,6 +82,9 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
           spellCheck={false}
         />
       </div>
+      <p className="text-xs text-muted-foreground">
+        Sampling: Qwen&apos;s recommended values (edit agent.json to change them)
+      </p>
     </div>
   );
 }

@@ -52,6 +52,8 @@ struct Script {
     cancel_on: Option<usize>,
     /// Runs out of time at that turn, as a stream still going at the budget.
     late_on: Option<usize>,
+    /// Loops (in its reasoning) at these turns, if the body asks for thinking.
+    loop_on: Vec<usize>,
 }
 
 impl Script {
@@ -61,6 +63,7 @@ impl Script {
             bodies: Vec::new(),
             cancel_on: None,
             late_on: None,
+            loop_on: Vec::new(),
         }
     }
 }
@@ -80,6 +83,10 @@ impl Model for Script {
         }
         if self.late_on == Some(self.bodies.len() - 1) {
             return Err(Failure::Time);
+        }
+        if self.loop_on.contains(&(self.bodies.len() - 1)) {
+            on(Delta::Reasoning("One check: round and round.".into()));
+            return Err(Failure::Looping);
         }
         let t = if self.turns.is_empty() {
             done_turn()
@@ -810,6 +817,94 @@ fn the_commands_run_on_a_document_without_a_session() {
     assert_eq!(doc.tree().undo_label(), Some("Set Melody"));
 }
 
+#[test]
+fn a_considered_turn_that_loops_is_asked_again_without_thinking() {
+    let r = rig();
+    let mut m = Script::new(vec![
+        turn_calling("set_tempo", json!({ "bpm": 175 })),
+        done_turn(),
+    ]);
+    m.loop_on = vec![0];
+    let mut events = Vec::new();
+    let cancel = AtomicBool::new(false);
+    respond(
+        &r.session,
+        &mut m,
+        &Settings::default(),
+        "fast",
+        true,
+        &cancel,
+        &mut |e| events.push(e),
+    );
+    assert_eq!(m.bodies.len(), 3);
+    assert!(m.bodies[0].get("reasoning_effort").is_none());
+    assert_eq!(m.bodies[1]["reasoning_effort"], "none");
+    assert_eq!(m.bodies[1]["messages"], m.bodies[0]["messages"]);
+    assert_eq!(m.bodies[0]["presence_penalty"], 1.0);
+    assert_eq!(m.bodies[1]["presence_penalty"], 0.0);
+    assert!(
+        events.iter().any(|e| matches!(e,
+        Event::Note { text } if text == "Thinking went in circles; asked again without thinking."))
+    );
+    assert!(!events.iter().any(|e| matches!(e, Event::Stopped { .. })));
+    assert!(events
+        .iter()
+        .any(|e| matches!(e, Event::Tool { name, ok: true, .. } if name == "set_tempo")));
+}
+
+#[test]
+fn a_cut_off_turn_still_thinking_is_asked_again_once_and_a_second_loop_stops() {
+    let r = rig();
+    let cut = Turn {
+        text: String::new(),
+        calls: Vec::new(),
+        finish: Some("length".into()),
+    };
+    let mut m = Script::new(vec![cut, done_turn()]);
+    let events = reply_with(&r, &mut m, "x", true);
+    assert_eq!(m.bodies.len(), 2);
+    assert_eq!(m.bodies[1]["reasoning_effort"], "none");
+    assert!(events.iter().any(|e| matches!(e, Event::Note { .. })));
+
+    let mut m = Script::new(vec![]);
+    m.loop_on = vec![0, 1];
+    let events = reply_with(&r, &mut m, "y", true);
+    assert_eq!(m.bodies.len(), 2);
+    assert!(events.iter().any(|e| matches!(
+        e,
+        Event::Stopped {
+            reason: Reason::Looping
+        }
+    )));
+    assert_eq!(
+        serde_json::to_value(Event::Stopped {
+            reason: Reason::Looping
+        })
+        .unwrap(),
+        json!({ "kind": "stopped", "reason": "looping" })
+    );
+}
+
+fn reply_with(
+    r: &crate::session_tests::Rig,
+    model: &mut Script,
+    prompt: &str,
+    considered: bool,
+) -> Vec<Event> {
+    let mut events = Vec::new();
+    let cancel = AtomicBool::new(false);
+    respond(
+        &r.session,
+        model,
+        &Settings::default(),
+        prompt,
+        considered,
+        &cancel,
+        &mut |e| events.push(e),
+    );
+    events
+}
+
 /// A model that prints when each turn ends and what it called.
 struct Logged<M>(M, Instant);
 
@@ -908,6 +1003,44 @@ fn live_lm_studio_writes_a_four_on_the_floor_beat() {
 /// live_lm_studio_writes -- --ignored --nocapture`, with the model loaded;
 /// `SHARD_AGENT_CONSIDERED=1` for reasoning on. It should write Track 1 and
 /// stop on its own, before any limit.
+#[test]
+#[ignore = "needs LM Studio running with a model loaded"]
+fn live_lm_studio_writes_a_glitchy_death_metal_bass_on_track_1() {
+    let r = rig();
+    let considered = std::env::var("SHARD_AGENT_CONSIDERED").is_ok_and(|v| v == "1");
+    let settings = Settings::default();
+    let mut model = Logged(crate::agent::client::Http::new(&settings), Instant::now());
+    let cancel = AtomicBool::new(false);
+    let mut events = Vec::new();
+    let started = Instant::now();
+    respond(
+        &r.session,
+        &mut model,
+        &settings,
+        "track 1: glitchy, speedy, death metal baseline in G.",
+        considered,
+        &cancel,
+        &mut |e| {
+            match &e {
+                Event::Text { .. } | Event::Reasoning { .. } => {}
+                other => println!(
+                    "{:.1} s {}",
+                    started.elapsed().as_secs_f32(),
+                    serde_json::to_string(other).unwrap()
+                ),
+            }
+            events.push(e);
+        },
+    );
+    println!("took {:.1} s", started.elapsed().as_secs_f32());
+    println!("song: {}", r.session.read(commands::song));
+    assert!(matches!(
+        events.last(),
+        Some(Event::Done { applied: true, .. })
+    ));
+    assert!(r.session.tracker().tracks[0].steps.iter().any(|s| s.on));
+}
+
 #[test]
 #[ignore = "needs LM Studio running with a model loaded"]
 fn live_lm_studio_writes_a_bassline_on_track_1_and_stops() {

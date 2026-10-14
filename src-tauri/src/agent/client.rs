@@ -21,6 +21,69 @@ use serde_json::{json, Value as Json};
 pub struct Settings {
     pub base_url: String,
     pub model: String,
+    pub sampling: Sampling,
+}
+
+/// One mode's sampling. `top_k` and `min_p` are extensions to the OpenAI
+/// API that LM Studio, llama.cpp and Ollama accept.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Preset {
+    pub temperature: f64,
+    pub top_p: f64,
+    pub top_k: u32,
+    pub min_p: f64,
+    pub presence_penalty: f64,
+}
+
+/// Sampling per mode. The defaults are Qwen3's recommended values
+/// (huggingface.co/Qwen/Qwen3.6-35B-A3B, "Best Practices"): thinking
+/// 0.6 / 0.95 / 20 / 0, non-thinking 0.7 / 0.8 / 20 / 0. Greedy or unset
+/// sampling in thinking mode is what Qwen warns causes endless repetition;
+/// considered adds a presence penalty of 1.0 against it (the card allows 0
+/// to 2), quick none, since a note number repeats legitimately.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Sampling {
+    pub quick: Preset,
+    pub considered: Preset,
+}
+
+impl Default for Sampling {
+    fn default() -> Self {
+        Self {
+            quick: Preset {
+                temperature: 0.7,
+                top_p: 0.8,
+                top_k: 20,
+                min_p: 0.0,
+                presence_penalty: 0.0,
+            },
+            considered: Preset {
+                temperature: 0.6,
+                top_p: 0.95,
+                top_k: 20,
+                min_p: 0.0,
+                presence_penalty: 1.0,
+            },
+        }
+    }
+}
+
+impl Default for Preset {
+    fn default() -> Self {
+        Sampling::default().quick
+    }
+}
+
+impl Sampling {
+    pub fn for_mode(&self, quick: bool) -> &Preset {
+        if quick {
+            &self.quick
+        } else {
+            &self.considered
+        }
+    }
 }
 
 impl Default for Settings {
@@ -29,6 +92,7 @@ impl Default for Settings {
         Self {
             base_url: "http://localhost:1234/v1".into(),
             model: String::new(),
+            sampling: Sampling::default(),
         }
     }
 }
@@ -119,6 +183,8 @@ pub enum Failure {
     Cancelled,
     /// The reply's wall-clock budget ran out.
     Time,
+    /// The model's own text was going round in circles (`Watch`).
+    Looping,
     /// The server couldn't be reached or answered with an error.
     Http(String),
 }
@@ -140,9 +206,16 @@ pub trait Model {
 }
 
 /// A request's body. `quick` turns reasoning off; considered leaves the
-/// server's default. Never a `response_format`: a JSON schema forces the
+/// server's default. `sampling` is that mode's preset. Never a `response_format`: a JSON schema forces the
 /// reasoning block into JSON on LM Studio and the answer comes back empty.
-pub fn body(model: &str, messages: &[Json], tools: &Json, quick: bool, max_tokens: u32) -> Json {
+pub fn body(
+    model: &str,
+    messages: &[Json],
+    tools: &Json,
+    quick: bool,
+    max_tokens: u32,
+    sampling: &Preset,
+) -> Json {
     let mut b = json!({
         "model": model,
         "messages": messages,
@@ -150,11 +223,69 @@ pub fn body(model: &str, messages: &[Json], tools: &Json, quick: bool, max_token
         "stream": true,
         "stream_options": { "include_usage": true },
         "max_tokens": max_tokens,
+        "temperature": sampling.temperature,
+        "top_p": sampling.top_p,
+        "top_k": sampling.top_k,
+        "min_p": sampling.min_p,
+        "presence_penalty": sampling.presence_penalty,
     });
     if quick {
         b["reasoning_effort"] = json!("none");
     }
     b
+}
+
+/// Watches one stream of text for going in circles. The text is lower-cased
+/// with its whitespace collapsed, so a cycle that differs in line breaks
+/// still matches. It loops when the last `TAIL` characters have already
+/// occurred twice before in it: three passes over the same 400 characters.
+/// Reasoning reuses phrases and even sentences, but not 400 characters
+/// three times; a cycle of the real failure ("One check: ... I will output
+/// the calls. One thought: ...", a dozen lines) is caught on its third
+/// pass, not at the token cap.
+#[derive(Debug, Default)]
+pub struct Watch {
+    seen: String,
+    /// Whether the last character pushed was whitespace.
+    space: bool,
+    checked: usize,
+}
+
+impl Watch {
+    const TAIL: usize = 400;
+    /// How much new text to gather between checks.
+    const EVERY: usize = 100;
+
+    /// Adds text; true when the whole is now looping.
+    pub fn push(&mut self, text: &str) -> bool {
+        for c in text.chars() {
+            if c.is_whitespace() {
+                if !self.space && !self.seen.is_empty() {
+                    self.seen.push(' ');
+                }
+                self.space = true;
+            } else {
+                self.seen.extend(c.to_lowercase());
+                self.space = false;
+            }
+        }
+        if self.seen.len() < Self::TAIL * 3 || self.seen.len() < self.checked + Self::EVERY {
+            return false;
+        }
+        self.checked = self.seen.len();
+        looping(&self.seen)
+    }
+}
+
+/// Whether `text` (already normalised) ends with a 400-character stretch it
+/// has already held twice before.
+fn looping(text: &str) -> bool {
+    let mut start = text.len() - Watch::TAIL;
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    let (before, tail) = text.split_at(start);
+    before.matches(tail).take(2).count() >= 2
 }
 
 /// Puts a streamed answer together, one `data:` line at a time.
@@ -353,6 +484,7 @@ impl Model for Http {
             )));
         }
         let mut stream = Stream::default();
+        let (mut thinking, mut saying) = (Watch::default(), Watch::default());
         let mut line = String::new();
         loop {
             if cancel.load(Ordering::Acquire) {
@@ -365,7 +497,17 @@ impl Model for Http {
             match reader.read_line(&mut line) {
                 Ok(0) => break,
                 Ok(_) => {
-                    stream.line(&line, on);
+                    let mut looped = false;
+                    stream.line(&line, &mut |d| {
+                        looped |= match &d {
+                            Delta::Reasoning(r) => thinking.push(r),
+                            Delta::Text(t) => saying.push(t),
+                        };
+                        on(d)
+                    });
+                    if looped {
+                        return Err(Failure::Looping);
+                    }
                     if stream.is_done() {
                         break;
                     }
@@ -500,11 +642,76 @@ mod tests {
     #[test]
     fn quick_turns_reasoning_off_and_considered_leaves_it() {
         let tools = json!([]);
-        let quick = body("m", &[], &tools, true, 8000);
+        let p = Sampling::default();
+        let quick = body("m", &[], &tools, true, 8000, &p.quick);
         assert_eq!(quick["reasoning_effort"], "none");
-        let considered = body("m", &[], &tools, false, 8000);
+        let considered = body("m", &[], &tools, false, 8000, &p.considered);
         assert!(considered.get("reasoning_effort").is_none());
         assert!(considered.get("response_format").is_none());
         assert_eq!(considered["max_tokens"], 8000);
+    }
+
+    #[test]
+    fn each_mode_sends_its_own_sampling() {
+        let tools = json!([]);
+        let p = Sampling::default();
+        let q = body("m", &[], &tools, true, 8000, &p.quick);
+        let c = body("m", &[], &tools, false, 8000, &p.considered);
+        assert_eq!(q["temperature"], 0.7);
+        assert_eq!(q["top_p"], 0.8);
+        assert_eq!(q["presence_penalty"], 0.0);
+        assert_eq!(c["temperature"], 0.6);
+        assert_eq!(c["top_p"], 0.95);
+        assert_eq!(c["top_k"], 20);
+        assert_eq!(c["min_p"], 0.0);
+        assert_eq!(c["presence_penalty"], 1.0);
+        // The same bytes every turn of a reply.
+        assert_eq!(
+            c.to_string(),
+            body("m", &[], &tools, false, 8000, &p.considered).to_string()
+        );
+        // A settings file from before sampling still loads.
+        let s: Settings = serde_json::from_str(r#"{"baseUrl":"http://x/v1","model":"m"}"#).unwrap();
+        assert_eq!(s.sampling, p);
+    }
+
+    /// The failure seen live: the plan settled, then a dozen lines said
+    /// over and over until the token cap.
+    const CYCLE: &str = "One check: \"track 1\" -> track: \"Track 1\". This is correct.\nI will output the calls.\nOne thought: the user said baseline, so a bass line.\nOne more thought: set_tempo 175 first.\nThen set_melody with Track 1 and ten notes.\nWait, is G1 31? Yes, G1 = 31.\nNotes: 31, 31, 34, 31, 38, 31, 34, 31, 43, 31.\nHold values short for speedy.\nVelocity high for death metal.\nAll good.\nLet me double check the track name once more.\nOne check: ";
+
+    #[test]
+    fn a_cycle_of_the_same_lines_is_caught_on_its_third_pass() {
+        let mut w = Watch::default();
+        let mut caught = None;
+        for pass in 1..=8 {
+            // Streamed in small pieces, as tokens arrive.
+            for piece in CYCLE.as_bytes().chunks(7) {
+                if w.push(std::str::from_utf8(piece).unwrap()) {
+                    caught = Some(pass);
+                    break;
+                }
+            }
+            if caught.is_some() {
+                break;
+            }
+        }
+        assert!(matches!(caught, Some(3..=5)), "caught on pass {caught:?}");
+    }
+
+    #[test]
+    fn long_reasoning_that_reuses_its_phrases_is_not_a_loop() {
+        let mut w = Watch::default();
+        let mut text = String::new();
+        for i in 0..200 {
+            text.push_str(&format!(
+                "Step {i}: the bass needs G1 = 31 and the hold is {} steps, so the note at step {} stays short. Check the tempo of 175 again. ",
+                i % 4 + 1,
+                i * 3 % 16 + 1
+            ));
+        }
+        assert!(text.len() > 20_000);
+        for piece in text.as_bytes().chunks(11) {
+            assert!(!w.push(std::str::from_utf8(piece).unwrap()));
+        }
     }
 }

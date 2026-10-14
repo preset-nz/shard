@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::Serialize;
 use serde_json::{json, Value as Json};
 
-use super::client::{self, Delta, Failure, Model};
+use super::client::{self, Delta, Failure, Model, Sampling};
 use super::tools::{self, Toolbox};
 
 /// What one reply may spend.
@@ -51,6 +51,8 @@ pub enum Reason {
     Time,
     Tokens,
     Turns,
+    /// Its own text went round in circles (and, in Quick, again).
+    Looping,
 }
 
 /// What the webview hears on `agent://event`. Every reply starts with
@@ -78,6 +80,10 @@ pub enum Event {
     },
     Stopped {
         reason: Reason,
+    },
+    /// A muted line about what the loop did on its own.
+    Note {
+        text: String,
     },
     Error {
         message: String,
@@ -107,7 +113,11 @@ pub struct Ask<'a> {
     pub user: String,
     pub quick: bool,
     pub limits: Limits,
+    pub sampling: Sampling,
 }
+
+/// Said when a considered turn is asked again without thinking.
+pub const RETRY_NOTE: &str = "Thinking went in circles; asked again without thinking.";
 
 /// Runs one reply against `toolbox`, telling `emit` as it goes. Emits
 /// neither `start` nor `done`: those are the caller's, who applies the
@@ -129,7 +139,13 @@ pub fn reply(
         json!({ "role": "user", "content": ask.user }),
     ];
     let mut calls_so_far = 0usize;
-    for _ in 0..ask.limits.turns {
+    // A considered reply that loops is asked again with reasoning off, once;
+    // the rest of the reply stays off, so the request body stays the same
+    // from turn to turn.
+    let mut quick = ask.quick;
+    let mut turns_left = ask.limits.turns;
+    while turns_left > 0 {
+        turns_left -= 1;
         if cancel.load(Ordering::Acquire) {
             return End::Stopped(Reason::Cancelled);
         }
@@ -137,8 +153,9 @@ pub fn reply(
             ask.model,
             &messages,
             &tools,
-            ask.quick,
+            quick,
             ask.limits.max_tokens,
+            ask.sampling.for_mode(quick),
         );
         let mut on = |d: Delta| match d {
             Delta::Text(delta) => emit(Event::Text { delta }),
@@ -149,9 +166,27 @@ pub fn reply(
             Err(Failure::Cancelled) => return End::Stopped(Reason::Cancelled),
             Err(Failure::Time) => return End::Stopped(Reason::Time),
             Err(Failure::Http(m)) => return End::Failed(m),
+            Err(Failure::Looping) if quick => return End::Stopped(Reason::Looping),
+            Err(Failure::Looping) => {
+                quick = true;
+                turns_left += 1;
+                emit(Event::Note {
+                    text: RETRY_NOTE.into(),
+                });
+                continue;
+            }
         };
         let cut = turn.finish.as_deref() == Some("length");
         if turn.calls.is_empty() {
+            // Cut off with no words and no calls: still thinking.
+            if cut && !quick && turn.text.trim().is_empty() {
+                quick = true;
+                turns_left += 1;
+                emit(Event::Note {
+                    text: RETRY_NOTE.into(),
+                });
+                continue;
+            }
             return if cut {
                 End::Stopped(Reason::Tokens)
             } else {

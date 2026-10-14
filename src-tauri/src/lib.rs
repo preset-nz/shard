@@ -1053,6 +1053,12 @@ fn set_agent_settings(
             .map_or(defaults.base_url, str::to_string),
         // Empty is "whatever is loaded" (`agent::client::pick_model`).
         model: settings.model.trim().to_string(),
+        // Sampling is edited in agent.json, not by the dialog: keep it.
+        sampling: agent
+            .settings
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .sampling,
     };
     if let Some(dir) = agent.path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;

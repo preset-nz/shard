@@ -35,7 +35,7 @@ pub const SYSTEM: &str = r#"You are the groove engine inside a step sequencer. Y
 
 Translate themes and moods into dark electronic textures: Trip-Hop (slow, smoky, heavy syncopation, lazy swing), Trap (skittering hi-hats, massive sub-bass, rapid rolls), Tricky/Illbient (offset patterns, industrial clanks, unpredictable rests), Dark Metal D&B (relentless 170+ BPM syncopated breakbeats, distorted driving basslines).
 
-For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
+For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Notes are MIDI numbers, middle C is C4 = 60: so E1 = 28, G1 = 31, A1 = 33, G2 = 43, G3 = 55. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
 
 Tracks are named as Shard shows them: melody tracks Track 1, Track 2 and on, drums tracks Drums 1, Drums 2 and on. The song as it is now comes with each request. Give a track's name to write over that track; leave track out to write a new one.
 
@@ -362,6 +362,7 @@ pub fn respond(
         system: SYSTEM,
         user: user_message(prompt, &draft.song()),
         quick: !considered,
+        sampling: settings.sampling,
         limits: if considered {
             Limits::considered()
         } else {

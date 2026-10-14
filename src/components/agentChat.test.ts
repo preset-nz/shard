@@ -68,6 +68,22 @@ describe('reduceChat', () => {
     ]);
   });
 
+  it('shows the retry note and the looping stop as muted lines', () => {
+    const c = run([
+      start,
+      { kind: 'note', text: 'Thinking went in circles; asked again without thinking.' },
+      { kind: 'stopped', reason: 'looping' },
+    ]);
+    expect(assistant(c.turns).parts).toEqual([
+      {
+        type: 'note',
+        tone: 'info',
+        text: 'Thinking went in circles; asked again without thinking.',
+      },
+      { type: 'note', tone: 'warn', text: 'Stopped: it was going in circles' },
+    ]);
+  });
+
   it('says a stop by the user kept what was written', () => {
     const c = run([
       start,
