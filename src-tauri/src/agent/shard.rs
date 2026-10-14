@@ -329,6 +329,23 @@ pub fn respond(
     cancel: &AtomicBool,
     emit: &mut dyn FnMut(Event),
 ) {
+    respond_with(
+        session, model, settings, SYSTEM, prompt, considered, cancel, emit,
+    )
+}
+
+/// `respond` with another system prompt: for the live prompt experiments.
+#[allow(clippy::too_many_arguments)]
+pub fn respond_with(
+    session: &Session,
+    model: &mut dyn Model,
+    settings: &Settings,
+    system: &str,
+    prompt: &str,
+    considered: bool,
+    cancel: &AtomicBool,
+    emit: &mut dyn FnMut(Event),
+) {
     let label = run::label(prompt);
     let chosen = model.resolve(&settings.model);
     emit(Event::Start {
@@ -359,7 +376,7 @@ pub fn respond(
     };
     let ask = Ask {
         model: &name,
-        system: SYSTEM,
+        system,
         user: user_message(prompt, &draft.song()),
         quick: !considered,
         sampling: settings.sampling,

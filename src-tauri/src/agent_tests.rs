@@ -85,7 +85,9 @@ impl Model for Script {
             return Err(Failure::Time);
         }
         if self.loop_on.contains(&(self.bodies.len() - 1)) {
-            on(Delta::Reasoning("One check: round and round.".into()));
+            on(Delta::Reasoning(
+                "Plan: set_tempo {\"bpm\": 175}\nOne check: round and round.".into(),
+            ));
             return Err(Failure::Looping);
         }
         let t = if self.turns.is_empty() {
@@ -839,7 +841,16 @@ fn a_considered_turn_that_loops_is_asked_again_without_thinking() {
     assert_eq!(m.bodies.len(), 3);
     assert!(m.bodies[0].get("reasoning_effort").is_none());
     assert_eq!(m.bodies[1]["reasoning_effort"], "none");
-    assert_eq!(m.bodies[1]["messages"], m.bodies[0]["messages"]);
+    let (first, second) = (
+        m.bodies[0]["messages"].as_array().unwrap(),
+        m.bodies[1]["messages"].as_array().unwrap(),
+    );
+    assert_eq!(&second[..first.len()], &first[..]);
+    assert_eq!(second.len(), first.len() + 1);
+    let carried = second[first.len()]["content"].as_str().unwrap();
+    assert!(carried.starts_with("Your thinking was cut off. Your plan so far:\n"));
+    assert!(carried.contains("set_tempo {\"bpm\": 175}"));
+    assert_eq!(m.bodies[1]["tools"], m.bodies[0]["tools"]);
     assert_eq!(m.bodies[0]["presence_penalty"], 1.0);
     assert_eq!(m.bodies[1]["presence_penalty"], 0.0);
     assert!(
@@ -1022,7 +1033,19 @@ fn live_lm_studio_writes_a_glitchy_death_metal_bass_on_track_1() {
         &cancel,
         &mut |e| {
             match &e {
-                Event::Text { .. } | Event::Reasoning { .. } => {}
+                Event::Reasoning { delta } => {
+                    if let Ok(path) = std::env::var("SHARD_AGENT_DUMP") {
+                        use std::io::Write;
+                        if let Ok(mut f) = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(path)
+                        {
+                            let _ = f.write_all(delta.as_bytes());
+                        }
+                    }
+                }
+                Event::Text { .. } => {}
                 other => println!(
                     "{:.1} s {}",
                     started.elapsed().as_secs_f32(),
@@ -1083,4 +1106,137 @@ fn live_lm_studio_writes_a_bassline_on_track_1_and_stops() {
     println!("song: {}", r.session.read(commands::song));
     assert_eq!(t.tracks.len(), 2, "no new track");
     assert!(t.tracks[0].steps.iter().any(|s| s.on), "Track 1 has notes");
+}
+
+/// Strips the sampling fields from a body: the server's own defaults.
+struct NoSampling<M>(M);
+
+impl<M: Model> Model for NoSampling<M> {
+    fn resolve(&mut self, configured: &str) -> Result<String, String> {
+        self.0.resolve(configured)
+    }
+
+    fn turn(
+        &mut self,
+        body: &Json,
+        deadline: Instant,
+        cancel: &AtomicBool,
+        on: &mut dyn FnMut(Delta),
+    ) -> Result<Turn, Failure> {
+        let mut b = body.clone();
+        for k in ["temperature", "top_p", "top_k", "min_p", "presence_penalty"] {
+            b.as_object_mut().unwrap().remove(k);
+        }
+        self.0.turn(&b, deadline, cancel, on)
+    }
+}
+
+/// How a bassline fills its track: notes, rests (steps nothing sounds on,
+/// holds counted), distinct pitches, velocity spread.
+fn fill(r: &crate::session_tests::Rig) -> (usize, usize, usize, u8) {
+    let t = r.session.tracker();
+    let Some(track) = t.melody().last() else {
+        return (0, 16, 0, 0);
+    };
+    let n = track.length as usize;
+    let mut covered = vec![false; n];
+    let (mut notes, mut pitches, mut vels) = (0, std::collections::BTreeSet::new(), Vec::new());
+    for (i, s) in track.steps.iter().take(n).enumerate().filter(|(_, s)| s.on) {
+        notes += 1;
+        pitches.insert(s.pitch);
+        vels.push(s.velocity);
+        for c in covered.iter_mut().skip(i).take(s.hold.max(1) as usize) {
+            *c = true;
+        }
+    }
+    let rests = covered.iter().filter(|c| !**c).count();
+    let spread = vels.iter().max().unwrap_or(&0) - vels.iter().min().unwrap_or(&0);
+    (notes, rests, pitches.len(), spread)
+}
+
+/// Basslines under prompt and sampling variants, in Quick, 3 reps each:
+/// `SHARD_VARIANTS=a,b,c,d cargo test -p shard live_fill -- --ignored
+/// --nocapture`. Prints one row per answer and a mean per variant.
+#[test]
+#[ignore = "needs LM Studio running with a model loaded"]
+fn live_fill_by_variant() {
+    let wanted = std::env::var("SHARD_VARIANTS").unwrap_or_else(|_| "a".into());
+    let reps: usize = std::env::var("SHARD_REPS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(3);
+    let beats = " on a 16-step track, beats fall on 1, 5, 9 and 13";
+    let notes_line = "Notes are MIDI numbers, middle C is C4 = 60: so E1 = 28, G1 = 31, A1 = 33, G2 = 43, G3 = 55. ";
+    let prompts = [
+        "track 1: glitchy, speedy, death metal baseline in G",
+        "a sparse dub bassline in E minor, lots of space",
+        "a funky syncopated bassline in A",
+        "a slow claustrophobic bass, 87 bpm",
+    ];
+    for v in wanted.split(',') {
+        let system = match v {
+            "a" | "b" => crate::agent::shard::SYSTEM.to_string(),
+            "c" => crate::agent::shard::SYSTEM
+                .replace(&format!(":{beats}"), "")
+                .replace(notes_line, ""),
+            "d" => crate::agent::shard::SYSTEM.replace(
+                "Write only the tracks asked for",
+                "Leave rests: a bassline breathes; most steps are empty or held. Write only the tracks asked for",
+            ),
+            "e" => crate::agent::shard::SYSTEM.replace(notes_line, ""),
+            other => panic!("no variant {other}"),
+        };
+        assert_ne!(system, "", "{v}");
+        if v == "c" {
+            assert!(
+                !system.contains("beats fall"),
+                "c still has the beats sentence"
+            );
+        }
+        let settings = Settings::default();
+        let mut sums = [0.0f64; 5];
+        let mut count = 0.0;
+        for prompt in prompts {
+            for _ in 0..reps {
+                let r = rig();
+                let http = crate::agent::client::Http::new(&settings);
+                let cancel = AtomicBool::new(false);
+                let started = Instant::now();
+                let mut stopped = false;
+                let mut emit = |e: Event| stopped |= matches!(e, Event::Stopped { .. });
+                if v == "b" {
+                    let mut m = NoSampling(http);
+                    crate::agent::shard::respond_with(
+                        &r.session, &mut m, &settings, &system, prompt, false, &cancel, &mut emit,
+                    );
+                } else {
+                    let mut m = http;
+                    crate::agent::shard::respond_with(
+                        &r.session, &mut m, &settings, &system, prompt, false, &cancel, &mut emit,
+                    );
+                }
+                let secs = started.elapsed().as_secs_f64();
+                let (n, rests, pitches, spread) = fill(&r);
+                println!("{v} | {prompt:.40} | notes {n} rests {rests} pitches {pitches} vel-spread {spread} | {secs:.1} s{}", if stopped { " STOPPED" } else { "" });
+                for (s, x) in sums.iter_mut().zip([
+                    n as f64,
+                    rests as f64,
+                    pitches as f64,
+                    spread as f64,
+                    secs,
+                ]) {
+                    *s += x;
+                }
+                count += 1.0;
+            }
+        }
+        println!(
+            "MEAN {v}: notes {:.1} rests {:.1} pitches {:.1} vel-spread {:.1} time {:.1} s",
+            sums[0] / count,
+            sums[1] / count,
+            sums[2] / count,
+            sums[3] / count,
+            sums[4] / count
+        );
+    }
 }

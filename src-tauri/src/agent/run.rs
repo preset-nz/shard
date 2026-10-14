@@ -157,9 +157,13 @@ pub fn reply(
             ask.limits.max_tokens,
             ask.sampling.for_mode(quick),
         );
+        let mut thinking = String::new();
         let mut on = |d: Delta| match d {
             Delta::Text(delta) => emit(Event::Text { delta }),
-            Delta::Reasoning(delta) => emit(Event::Reasoning { delta }),
+            Delta::Reasoning(delta) => {
+                thinking.push_str(&delta);
+                emit(Event::Reasoning { delta })
+            }
         };
         let turn = match model.turn(&body, deadline, cancel, &mut on) {
             Ok(t) => t,
@@ -173,6 +177,7 @@ pub fn reply(
                 emit(Event::Note {
                     text: RETRY_NOTE.into(),
                 });
+                carry_plan(&mut messages, &thinking);
                 continue;
             }
         };
@@ -185,6 +190,7 @@ pub fn reply(
                 emit(Event::Note {
                     text: RETRY_NOTE.into(),
                 });
+                carry_plan(&mut messages, &thinking);
                 continue;
             }
             return if cut {
@@ -259,6 +265,35 @@ pub fn reply(
         }
     }
     End::Stopped(Reason::Turns)
+}
+
+/// How much of a cut-off thinking the retry is handed back.
+const PLAN_TAIL: usize = 3000;
+
+/// Tells the retried turn what it had worked out: the tail of its thinking,
+/// from the start of a line so a sentence isn't cut mid-word. Only messages
+/// grow; the system prompt and the tools stay the same bytes.
+fn carry_plan(messages: &mut Vec<Json>, thinking: &str) {
+    let t = thinking.trim();
+    if t.is_empty() {
+        return;
+    }
+    let mut start = t.len().saturating_sub(PLAN_TAIL);
+    while !t.is_char_boundary(start) {
+        start += 1;
+    }
+    if start > 0 {
+        if let Some(nl) = t[start..].find('\n') {
+            start += nl + 1;
+        }
+    }
+    messages.push(json!({
+        "role": "user",
+        "content": format!(
+            "Your thinking was cut off. Your plan so far:\n{}\nMake the tool calls from that plan now, then reply in one sentence.",
+            t[start..].trim()
+        ),
+    }));
 }
 
 /// An undo label from a prompt: "Agent: " and its first few words.

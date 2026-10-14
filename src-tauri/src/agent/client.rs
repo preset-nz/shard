@@ -238,9 +238,11 @@ pub fn body(
 /// Watches one stream of text for going in circles. The text is lower-cased
 /// with its whitespace collapsed, so a cycle that differs in line breaks
 /// still matches. It loops when the last `TAIL` characters have already
-/// occurred twice before in it: three passes over the same 400 characters.
-/// Reasoning reuses phrases and even sentences, but not 400 characters
-/// three times; a cycle of the real failure ("One check: ... I will output
+/// occurred five times before in it: six passes over the same 400 characters.
+/// A model wrapping up may restate a whole plan, JSON and all, two or
+/// three times (seen live, and wrongly stopped at three passes); a real
+/// degenerate loop cycles dozens of times, so six passes is the line.
+/// Reasoning does not say 400 characters six times; a cycle of the real failure ("One check: ... I will output
 /// the calls. One thought: ...", a dozen lines) is caught on its third
 /// pass, not at the token cap.
 #[derive(Debug, Default)]
@@ -269,7 +271,7 @@ impl Watch {
                 self.space = false;
             }
         }
-        if self.seen.len() < Self::TAIL * 3 || self.seen.len() < self.checked + Self::EVERY {
+        if self.seen.len() < Self::TAIL * 6 || self.seen.len() < self.checked + Self::EVERY {
             return false;
         }
         self.checked = self.seen.len();
@@ -278,14 +280,14 @@ impl Watch {
 }
 
 /// Whether `text` (already normalised) ends with a 400-character stretch it
-/// has already held twice before.
+/// has already held five times before.
 fn looping(text: &str) -> bool {
     let mut start = text.len() - Watch::TAIL;
     while !text.is_char_boundary(start) {
         start += 1;
     }
     let (before, tail) = text.split_at(start);
-    before.matches(tail).take(2).count() >= 2
+    before.matches(tail).take(5).count() >= 5
 }
 
 /// Puts a streamed answer together, one `data:` line at a time.
@@ -680,10 +682,10 @@ mod tests {
     const CYCLE: &str = "One check: \"track 1\" -> track: \"Track 1\". This is correct.\nI will output the calls.\nOne thought: the user said baseline, so a bass line.\nOne more thought: set_tempo 175 first.\nThen set_melody with Track 1 and ten notes.\nWait, is G1 31? Yes, G1 = 31.\nNotes: 31, 31, 34, 31, 38, 31, 34, 31, 43, 31.\nHold values short for speedy.\nVelocity high for death metal.\nAll good.\nLet me double check the track name once more.\nOne check: ";
 
     #[test]
-    fn a_cycle_of_the_same_lines_is_caught_on_its_third_pass() {
+    fn a_cycle_of_the_same_lines_is_caught_after_many_passes() {
         let mut w = Watch::default();
         let mut caught = None;
-        for pass in 1..=8 {
+        for pass in 1..=12 {
             // Streamed in small pieces, as tokens arrive.
             for piece in CYCLE.as_bytes().chunks(7) {
                 if w.push(std::str::from_utf8(piece).unwrap()) {
@@ -695,7 +697,23 @@ mod tests {
                 break;
             }
         }
-        assert!(matches!(caught, Some(3..=5)), "caught on pass {caught:?}");
+        assert!(matches!(caught, Some(6..=9)), "caught on pass {caught:?}");
+    }
+
+    #[test]
+    fn a_plan_restated_three_times_is_not_a_loop() {
+        let plan = "[Tool Calls] set_tempo {\"bpm\": 175} set_melody {\"track\": \"Track 1\", \"length\": 16, \"steps\": [{\"step\": 1, \"note\": 43, \"velocity\": 127, \"hold\": 1}, {\"step\": 2, \"note\": 43, \"velocity\": 110, \"hold\": 1}, {\"step\": 4, \"note\": 41, \"velocity\": 120, \"hold\": 2}, {\"step\": 6, \"note\": 44, \"velocity\": 100, \"hold\": 1}, {\"step\": 9, \"note\": 43, \"velocity\": 127, \"hold\": 1}, {\"step\": 12, \"note\": 41, \"velocity\": 95, \"hold\": 2}, {\"step\": 14, \"note\": 44, \"velocity\": 105, \"hold\": 1}, {\"step\": 15, \"note\": 43, \"velocity\": 127, \"hold\": 1}]} ";
+        assert!(plan.len() > 450);
+        let mut w = Watch::default();
+        let mut text = String::from("Planning the bass in G with chromatic neighbours. ");
+        for stage in ["Output Generation", "Proceeds", "Done"] {
+            text.push_str(stage);
+            text.push_str(". ");
+            text.push_str(plan);
+        }
+        for piece in text.as_bytes().chunks(9) {
+            assert!(!w.push(std::str::from_utf8(piece).unwrap()));
+        }
     }
 
     #[test]
