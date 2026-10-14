@@ -28,7 +28,7 @@ import {
 } from '@preset.nz/ux-kit/chat';
 import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from 'react';
 import { agentCancel, agentSend, onAgentEvent } from '@/lib/agent';
-import { emptyConversation, isStreaming, type Part, reduceChat } from './agentChat';
+import { emptyConversation, isStreaming, type Part, reduceChat, transcript } from './agentChat';
 
 type Mode = 'quick' | 'considered';
 const MODE_KEY = 'shard.agent.mode';
@@ -172,6 +172,17 @@ export function AgentPanel({
             <span className="min-w-0 truncate text-[10px] text-muted-foreground" title={chat.model}>
               {chat.model}
             </span>
+          )}
+          {chat.turns.length > 0 && (
+            <button
+              type="button"
+              className="ml-auto flex size-5 shrink-0 items-center justify-center text-muted-foreground hover:text-foreground"
+              aria-label="Copy the conversation"
+              title="Copy the conversation, tool calls included"
+              onClick={() => void navigator.clipboard.writeText(transcript(chat))}
+            >
+              <Icons.CopyIcon size={12} />
+            </button>
           )}
         </header>
         {!collapsed && (

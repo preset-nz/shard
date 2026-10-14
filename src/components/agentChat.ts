@@ -139,3 +139,46 @@ export function reduceChat(c: Conversation, action: ChatAction): Conversation {
     }
   }
 }
+
+/** The conversation as Markdown, for the clipboard: every turn, with each
+ * tool call's arguments and result, so a reply can be pasted into a bug
+ * report or an eval note as it happened. */
+export function transcript(chat: Conversation): string {
+  const out: string[] = [];
+  if (chat.model) out.push(`Model: ${chat.model}`, '');
+  for (const turn of chat.turns) {
+    if (turn.from === 'user') {
+      out.push(`## You`, '', turn.text, '');
+      continue;
+    }
+    out.push('## Agent', '');
+    for (const part of turn.parts) {
+      switch (part.type) {
+        case 'text':
+          out.push(part.text, '');
+          break;
+        case 'reasoning':
+          out.push('<details><summary>Thinking</summary>', '', part.text, '', '</details>', '');
+          break;
+        case 'tool':
+          out.push(
+            `**${part.tool.name}** ${part.tool.ok ? '(done)' : '(refused)'}`,
+            '',
+            '```json',
+            JSON.stringify(part.tool.args, null, 2),
+            '```',
+            '',
+            '```',
+            part.tool.result,
+            '```',
+            '',
+          );
+          break;
+        case 'note':
+          out.push(`_${part.text}_`, '');
+          break;
+      }
+    }
+  }
+  return `${out.join('\n').trimEnd()}\n`;
+}
