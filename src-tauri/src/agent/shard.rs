@@ -21,19 +21,22 @@ use serde_json::{json, Value as Json};
 use super::client::{Model, Settings};
 use super::run::{self, Ask, End, Event, Limits};
 use super::tools::{Access, Tool, Toolbox, Tools};
+use crate::music;
 use crate::object_model::commands::{self, Target};
+use crate::object_model::generate;
 use crate::object_model::Shard;
 use crate::session::Session;
 use crate::tracker::Track;
 
 /// The system prompt: the eval's three-tool prompt (`evals/agent/variants/
 /// tools.txt`) with its tool names and units made this app's, tracks and
-/// steps named as Shard shows them, and the one bass example the evals
-/// favoured (`fewshot-bass.txt`), as calls, its steps counted from 1. Sent
-/// byte for byte the same on every request.
-pub const SYSTEM: &str = r#"You are the groove engine inside a step sequencer. You change the song only by calling tools; never answer with JSON in text. Call set_tempo once if a tempo is asked for, then set_drums or set_melody once per voice asked for, then stop calling tools and reply in one sentence.
+/// steps named as Shard shows them, steered to the brief tools (`make_*`)
+/// for whole tracks; its example is the request of the bass the evals
+/// favoured (`fewshot-bass.txt`), answered as a brief. Sent byte for byte
+/// the same on every request.
+pub const SYSTEM: &str = r#"You are the groove engine inside a step sequencer. You change the song only by calling tools; never answer with JSON in text. Call set_tempo once if a tempo is asked for, then one tool per voice asked for, then stop calling tools and reply in one sentence. For a whole track, choose and let Shard write the notes: make_drums for a beat, make_bass for a bassline, make_arp for an arpeggio. Use set_drums or set_melody only for exact notes the user dictates.
 
-Translate themes and moods into dark electronic textures: Trip-Hop (slow, smoky, heavy syncopation, lazy swing), Trap (skittering hi-hats, massive sub-bass, rapid rolls), Tricky/Illbient (offset patterns, industrial clanks, unpredictable rests), Dark Metal D&B (relentless 170+ BPM syncopated breakbeats, distorted driving basslines).
+Translate themes and moods into dark electronic textures: EBM (driving sixteenth bass pulse, four-on-the-floor, 120-135 BPM), Glitch (broken, sparse, displaced hits), Trip-Hop (slow, smoky, heavy syncopation, lazy swing), Trap (skittering hi-hats, massive sub-bass, rapid rolls), Tricky/Illbient (offset patterns, industrial clanks, unpredictable rests), Dark Metal D&B (relentless 170+ BPM syncopated breakbeats, distorted driving basslines).
 
 For drums, use General MIDI notes: Kick (36), Snare (38), Closed Hat (42), Open Hat (46), Clap (39). Steps are sixteenths counted from 1, as Shard shows them: on a 16-step track, beats fall on 1, 5, 9 and 13. hold is in steps, so 1 is one sixteenth. Scale velocities (0-127) for ghost notes, accents and groove. Notes are MIDI numbers, middle C is C4 = 60: so E1 = 28, G1 = 31, A1 = 33, G2 = 43, G3 = 55. Write only the tracks asked for, one track per voice; a track plays one note at a time. If no voice is named, write one track.
 
@@ -41,7 +44,7 @@ Tracks are named as Shard shows them: melody tracks Track 1, Track 2 and on, dru
 
 Example. User: "A heavy, gritty Trip-Hop bass line that feels like a rainy night in Bristol"
 set_tempo {"bpm": 85}
-set_melody {"steps": [{"step": 1, "note": 29, "velocity": 100, "hold": 3}, {"step": 5, "note": 29, "velocity": 80, "hold": 2}, {"step": 11, "note": 32, "velocity": 95, "hold": 1}]}"#;
+make_bass {"key": "F", "mode": "minor", "progression": "i-iv-bVII-i", "figure": "sparse", "register": "sub"}"#;
 
 const TRACK: &str = "The track to write over, by its name as Shard shows it (\"Track 1\", \"Drums 2\"), or \"new\". Leave it out to write a new track, or the selected one when it is of this kind.";
 
@@ -52,11 +55,108 @@ const STEP: &str = "counted from 1 to the track's length, as Shard shows them: o
 const FINISHED: &str =
     ". If this answers the request, stop calling tools and reply in one sentence.";
 
-/// Shard's tools: three coarse writes and a read (the eval's three-tool set,
-/// with `set_track` split by kind, since a drums track holds hits on three
-/// lanes and a melody track holds notes).
+const SEED: &str = "Any whole number. Leave it out the first time; send a different one for another take of the same request.";
+
+const BARS: &str = "1, 2 or 4";
+
+/// Shard's tools: the brief tools (whole tracks from a few choices, written
+/// by `crate::music`'s generators) and what they choose from, then the
+/// eval's exact writes and read (`set_track` split by kind, since a drums
+/// track holds hits on three lanes and a melody track holds notes).
 pub fn tools() -> Tools {
+    let styles = generate::style_names();
+    let progressions = generate::progression_names();
+    let modes = generate::mode_names();
+    let registers = generate::register_names();
+    let key = json!({ "type": "string", "description": "the tonic: A, F#, Bb; may name the mode too (\"E phrygian\")" });
+    let mode = json!({ "type": "string", "enum": modes, "description": "the scale; left out, the key's or the progression's own" });
+    let progression = json!({ "type": "string", "enum": progressions, "description": "chords as roman numerals over the mode; list_progressions gives each one's feel" });
+    let chord_bars =
+        json!({ "type": "number", "enum": [0.5, 1, 2, 4], "description": "bars each chord lasts" });
     Tools::new(vec![
+        Tool {
+            name: "make_drums",
+            command: generate::MAKE_DRUMS,
+            description: "Write a whole drums track in a style: Shard places the hits. Replaces every hit the track had.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "track": { "description": TRACK },
+                    "style": { "type": "string", "enum": styles, "description": "ebm_straight and ebm_shuffle for EBM, glitch_sparse and glitch_broken for glitch; list_drum_styles describes each" },
+                    "bars": { "type": "integer", "enum": [1, 2, 4], "description": BARS },
+                    "density": { "type": "number", "description": "0 to 1: 0.5 as the style is written, lower thinner, higher adds hats and ghost notes" },
+                    "glitch": { "type": "number", "description": "0 to 1: 0 clean; higher drops, displaces and stutters hits" },
+                    "seed": { "type": "integer", "description": SEED },
+                },
+                "required": ["style"],
+            }),
+            access: Access::Write,
+        },
+        Tool {
+            name: "make_bass",
+            command: generate::MAKE_BASS,
+            description: "Write a whole bass line that follows a chord progression: Shard places the notes. A new track gets a bass sound of its own.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "track": { "description": TRACK },
+                    "key": key,
+                    "mode": mode,
+                    "progression": progression,
+                    "figure": { "type": "string", "enum": generate::figure_names(), "description": "ebm_pulse: straight sixteenths on the root; octave_pulse: root and octave; offbeat: eighths between the kicks; root_fifth; gallop: an eighth and two sixteenths; sparse: long notes and space" },
+                    "register": { "type": "string", "enum": registers, "description": "sub, low (the default), mid or high" },
+                    "bars": { "type": "integer", "enum": [1, 2, 4], "description": BARS },
+                    "chord_bars": chord_bars,
+                    "seed": { "type": "integer", "description": SEED },
+                },
+                "required": ["key", "progression", "figure"],
+            }),
+            access: Access::Write,
+        },
+        Tool {
+            name: "make_arp",
+            command: generate::MAKE_ARP,
+            description: "Write a whole arpeggio track over a chord progression: Shard places the notes. A new track gets an arp sound of its own.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "track": { "description": TRACK },
+                    "key": key,
+                    "mode": mode,
+                    "progression": progression,
+                    "pattern": { "type": "string", "enum": generate::pattern_names() },
+                    "rate": { "type": "integer", "enum": generate::rates(), "description": "8 for eighths, 16 for sixteenths" },
+                    "octaves": { "type": "integer", "enum": [1, 2] },
+                    "register": { "type": "string", "enum": registers, "description": "mid is the default" },
+                    "bars": { "type": "integer", "enum": [1, 2, 4], "description": BARS },
+                    "chord_bars": chord_bars,
+                    "seed": { "type": "integer", "description": SEED },
+                },
+                "required": ["key", "progression", "pattern"],
+            }),
+            access: Access::Write,
+        },
+        Tool {
+            name: "list_drum_styles",
+            command: generate::LIST_DRUM_STYLES,
+            description: "List the drum styles make_drums plays, each with what it sounds like.",
+            parameters: json!({ "type": "object", "properties": {}, "required": [] }),
+            access: Access::Read,
+        },
+        Tool {
+            name: "list_progressions",
+            command: generate::LIST_PROGRESSIONS,
+            description: "List chord progressions for make_bass and make_arp by feel and mode, each with its feel.",
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "feel": { "type": "string", "enum": music::feels() },
+                    "mode": { "type": "string", "enum": generate::mode_names() },
+                },
+                "required": [],
+            }),
+            access: Access::Read,
+        },
         Tool {
             name: "set_tempo",
             command: commands::SET_TEMPO,
@@ -235,12 +335,21 @@ impl Toolbox for Draft {
 
     fn call(&mut self, tool: &Tool, args: &Json) -> Result<String, String> {
         if tool.access == Access::Read {
-            return Ok(self.song().to_string());
+            if tool.command == commands::READ_SONG {
+                return Ok(self.song().to_string());
+            }
+            // Reads the tables, never the song: nothing to queue.
+            return match self.doc.run(tool.command, args) {
+                Ok(Outcome::Text(t)) => Ok(t),
+                Ok(_) => Ok("done".into()),
+                Err(PomError::Payload(m)) => Err(m),
+                Err(e) => Err(e.to_string()),
+            };
         }
         let mut payload = args.clone();
         let drums = match tool.command {
-            commands::SET_DRUMS => Some(true),
-            commands::SET_MELODY => Some(false),
+            commands::SET_DRUMS | generate::MAKE_DRUMS => Some(true),
+            commands::SET_MELODY | generate::MAKE_BASS | generate::MAKE_ARP => Some(false),
             _ => None,
         };
         if let Some(drums) = drums {

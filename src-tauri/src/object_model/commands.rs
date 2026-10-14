@@ -32,6 +32,7 @@ use rhizome_core::{Edit, NodeId, Ref};
 use rhizome_pom::{Commands, Document, Error as PomError, Outcome};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
+use shard_dsp::fx::Kind as Fx;
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::{KITS, VOICES};
@@ -77,7 +78,7 @@ pub fn register(c: &mut Commands<Shard>) {
         |_| "Set Melody".into(),
         always,
         |d, p| {
-            set_melody(d, p)
+            melody(d, p, Role::Plain)
                 .map(Outcome::Text)
                 .map_err(PomError::Payload)
         },
@@ -92,6 +93,7 @@ pub fn register(c: &mut Commands<Shard>) {
                 .map_err(PomError::Payload)
         },
     );
+    super::generate::register(c);
 }
 
 // Payloads. Forgiving: models write `midi_note` and `duration` unprompted.
@@ -186,9 +188,9 @@ pub fn resolve(t: &Tracker, p: &Json, drums: bool) -> Result<Target, String> {
     };
     if t.tracks[place].is_drums() != drums {
         let (other, tool) = if drums {
-            ("melody", "set_melody")
+            ("melody", "make_bass, make_arp or set_melody")
         } else {
-            ("drums", "set_drums")
+            ("drums", "make_drums or set_drums")
         };
         return Err(format!(
             "{} is a {other} track; use {tool} for it, or leave track out to write a new {} track",
@@ -200,7 +202,7 @@ pub fn resolve(t: &Tracker, p: &Json, drums: bool) -> Result<Target, String> {
 }
 
 /// A number the model may send as an integer, a float or a string.
-fn number(v: &Json) -> Option<f64> {
+pub(super) fn number(v: &Json) -> Option<f64> {
     match v {
         Json::Number(n) => n.as_f64(),
         Json::String(s) => s.trim().parse().ok(),
@@ -326,7 +328,7 @@ fn lane_of_name(name: &str) -> Option<usize> {
 
 const LANES: [&str; 3] = ["kick", "snare", "hat"];
 
-fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
+pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     let hits: Vec<Hit> = list(p, "hits")?;
     steps_from_one(hits.iter().map(|h| &h.step))?;
     let now = d.projection().tracker.clone();
@@ -535,19 +537,76 @@ fn new_root(notes: &[i32]) -> i32 {
     root.clamp(16, 95)
 }
 
+/// Whether a track's patch plays the built-in drone: FM off, and its
+/// material the pool's sample with no file. Not when it has no patch.
+pub fn plays_drone(d: &Document<Shard>, patch: Option<NodeId>) -> bool {
+    let plan = d.projection();
+    let Some(p) = patch.and_then(|n| plan.patch_plan(n)) else {
+        return false;
+    };
+    if p.generators.contains(&"fm") && value(p, "fm.on").unwrap_or(0.0) > 0.5 {
+        return false;
+    }
+    p.wires
+        .material
+        .and_then(|id| plan.pool.get(id))
+        .is_some_and(|m| m.path.is_none())
+}
+
+/// What a melody write is for, which sets the sound a new track gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Role {
+    /// Any line: `set_melody`.
+    Plain,
+    /// A bass from `make_bass`: round and low, with a touch of drive.
+    Bass,
+    /// An arp from `make_arp`: brighter, shorter notes, a little quieter.
+    Arp,
+}
+
 /// What a new melody track's patch plays: an FM voice at `root`, notes held
-/// as long as their steps say. Settings from the pattern-to-shard skill's
-/// bass, the one voice the first listening tests had.
-fn voice_rows(root: i32) -> [(&'static str, f32); 5] {
-    [
+/// as long as their steps say. The plain voice is the pattern-to-shard
+/// skill's bass, the one voice the first listening tests had.
+fn voice_rows(role: Role, root: i32) -> Vec<(&'static str, f32)> {
+    let mut rows = vec![
         ("fm.on", 1.0),
         ("fm.freq", midi_hz(root as f32)),
         ("fm.ratio", 1.0),
         ("fm.index", 2.4),
         // Hold: a step's hold is its length.
         ("patch.length", 2.0),
-    ]
+    ];
+    match role {
+        Role::Plain => {}
+        Role::Bass => rows.extend([
+            ("fm.index", 2.0),
+            ("fm.feedback", 0.12),
+            ("env.attack", 2.0),
+            ("env.decay", 220.0),
+            ("env.sustain", 0.55),
+            ("env.release", 50.0),
+        ]),
+        Role::Arp => rows.extend([
+            ("fm.gain", 0.7),
+            ("fm.ratio", 2.0),
+            ("fm.index", 3.2),
+            ("env.attack", 1.0),
+            ("env.decay", 140.0),
+            ("env.sustain", 0.15),
+            ("env.release", 60.0),
+        ]),
+    }
+    rows
 }
+
+/// The drive a new bass track's patch gets: overdrive, mixed in a third.
+const BASS_DRIVE: [(&str, f32); 5] = [
+    ("drive.on", 1.0),
+    ("drive.mix", 0.35),
+    ("drive.amount", 14.0),
+    ("drive.tone", 2500.0),
+    ("drive.type", 0.0),
+];
 
 /// Writes patch row `id` on `patch`, making its section when absent, the
 /// value brought into range as `Session::set_param` does.
@@ -567,7 +626,7 @@ fn put_row(tx: &mut Edit<'_>, patch: NodeId, id: &str, v: f32) -> rhizome_core::
     }
 }
 
-fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
+pub(super) fn melody(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, String> {
     // The eval's shape called them notes.
     let key = if p.get("steps").is_none() && p.get("notes").is_some() {
         "notes"
@@ -674,8 +733,17 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
                 if let Some(m) = material {
                     tx.remove(m)?;
                 }
-                for (id, v) in voice_rows(r) {
+                for (id, v) in voice_rows(role, r) {
                     put_row(tx, patch, id, v)?;
+                }
+                if role == Role::Bass {
+                    let drive = tx.add_effect(patch, Fx::Drive)?;
+                    for (id, v) in BASS_DRIVE {
+                        let def = Fx::Drive.rows().iter().find(|r| r.id == id);
+                        if let Some(want) = def.and_then(|def| to_value(&spec(def), v)) {
+                            tx.put(drive, id, want)?;
+                        }
+                    }
                 }
                 let node = tx.add_track(arr, &track)?;
                 tx.set_ref(node, TRACK_PATCH, Ref::here(patch))
@@ -688,7 +756,11 @@ fn set_melody(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
         "Wrote {name}: {count} notes over {length} steps, root note {}{}",
         root.0,
         if target == Target::New {
-            ", on a new FM patch of its own"
+            match role {
+                Role::Plain => ", on a new FM patch of its own",
+                Role::Bass => ", on a new FM bass patch of its own",
+                Role::Arp => ", on a new FM arp patch of its own",
+            }
         } else {
             ""
         }

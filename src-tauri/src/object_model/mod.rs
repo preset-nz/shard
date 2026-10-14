@@ -64,6 +64,7 @@ pub mod commands;
 mod compile;
 #[cfg(test)]
 mod compile_tests;
+pub mod generate;
 #[cfg(test)]
 mod tests;
 

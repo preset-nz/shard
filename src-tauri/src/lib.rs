@@ -29,6 +29,8 @@ use shard_dsp::{
 mod agent;
 #[cfg(test)]
 mod agent_tests;
+#[cfg(test)]
+mod brief_tests;
 mod controllers;
 mod document;
 #[cfg(test)]
@@ -47,6 +49,7 @@ mod midi;
 #[cfg(test)]
 mod mix_tests;
 mod modulation;
+pub mod music;
 pub mod object_model;
 pub mod offline;
 #[cfg(test)]
