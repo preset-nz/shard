@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "f004fb2f223715133590ebed97d773a888d2469e975931190a6df29a0109a1c9"
+sha256 = "019bfb83aa736623823dbf18e4217f0a4e4be016207d194ecf650520aa096ceb"
 
 [[inputs]]
 path = "Cargo.toml"
@@ -31,7 +31,7 @@ sha256 = "de14945cc3541e945ea99a520e28d25d366053863c4df261a1bcd1e5e4cf93bd"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "7369f1335cddeb7bd114e96ded0a410eca822d0f6ab299ac53e0602055befc6e"
+sha256 = "0e6584b9f2b650e4c8d7c683a24430e41684881daa71a373db1e5d90925c81e2"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2540,7 +2540,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "rhizome-core"
-version = "0.1.5"
+version = "0.1.6"
 source = "path"
 declared = "MIT"
 scope = "shipped"
@@ -2548,7 +2548,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "rhizome-pom"
-version = "0.1.5"
+version = "0.1.6"
 source = "path"
 declared = "MIT"
 scope = "shipped"
@@ -3387,6 +3387,22 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
+name = "ureq"
+version = "3.4.2"
+source = "registry"
+declared = "MIT OR Apache-2.0"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
+name = "ureq-proto"
+version = "0.6.4"
+source = "registry"
+declared = "MIT OR Apache-2.0"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
 name = "url"
 version = "2.5.8"
 source = "registry"
@@ -3399,6 +3415,14 @@ name = "urlpattern"
 version = "0.6.0"
 source = "registry"
 declared = "MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
+name = "utf8-zero"
+version = "0.8.1"
+source = "registry"
+declared = "MIT OR Apache-2.0"
 scope = "shipped"
 
 [[packages]]

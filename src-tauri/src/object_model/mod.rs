@@ -60,6 +60,7 @@ use crate::modulation::{pluck_curve, MODES, NEW_RATE_HZ, NEW_SHAPE};
 use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX, TEMPO_MAX, TEMPO_MIN};
 use shard_dsp::KITS;
 
+pub mod commands;
 mod compile;
 #[cfg(test)]
 mod compile_tests;
@@ -1337,6 +1338,12 @@ impl ObjectModel for Shard {
                 ));
             }
         }
+    }
+
+    /// Whole-track writes and a read, for the agent panel and anything
+    /// else that drives a document by payload (`commands.rs`).
+    fn commands(c: &mut rhizome_pom::Commands<Self>) {
+        commands::register(c);
     }
 
     /// Rebuilt whole after every change: a session is small, and compiling

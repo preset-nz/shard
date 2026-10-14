@@ -26,6 +26,9 @@ use shard_dsp::{
     Alone, Engine, Generator, Globals, GrainLog, GrainSpawn, Mix, ModSet, ParamBank, KITS, VOICES,
 };
 
+mod agent;
+#[cfg(test)]
+mod agent_tests;
 mod controllers;
 mod document;
 #[cfg(test)]
@@ -903,6 +906,133 @@ fn select_track(
 #[tauri::command]
 fn add_track(state: tauri::State<'_, Audio>, drums: bool) -> Result<usize, String> {
     state.session.add_track(drums)
+}
+
+/// The agent panel (`agent`): whether a reply is running, the flag that
+/// stops it, and where the model is. The chat itself is the webview's, for
+/// this run of the app only: never in the document.
+struct AgentState {
+    running: Arc<AtomicBool>,
+    cancel: Arc<AtomicBool>,
+    settings: Mutex<agent::client::Settings>,
+    /// `agent.json` in the app config directory: the model's address
+    /// belongs to this machine, like `controllers.json`.
+    path: std::path::PathBuf,
+}
+
+impl AgentState {
+    fn load(path: std::path::PathBuf) -> Self {
+        let settings = std::fs::read_to_string(&path)
+            .ok()
+            .and_then(|t| serde_json::from_str(&t).ok())
+            .unwrap_or_default();
+        Self {
+            running: Arc::new(AtomicBool::new(false)),
+            cancel: Arc::new(AtomicBool::new(false)),
+            settings: Mutex::new(settings),
+            path,
+        }
+    }
+}
+
+/// Clears `running` however the reply's thread ends.
+struct Running(Arc<AtomicBool>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
+/// The one channel the agent panel listens on: `agent::run::Event`s.
+const AGENT_EVENT: &str = "agent://event";
+
+/// Starts a reply to `prompt` on its own thread: quick (reasoning off) or
+/// `considered`. Its progress arrives as `agent://event`s, ending with
+/// `done`. Refused while one is running.
+#[tauri::command]
+fn agent_send(
+    app: tauri::AppHandle,
+    audio: tauri::State<'_, Audio>,
+    agent: tauri::State<'_, AgentState>,
+    prompt: String,
+    considered: bool,
+) -> Result<(), String> {
+    use tauri::Emitter;
+    let prompt = prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err("ask for something first".into());
+    }
+    if agent.running.swap(true, Ordering::AcqRel) {
+        return Err("a reply is already running; wait for it, or press Esc to stop it".into());
+    }
+    agent.cancel.store(false, Ordering::Release);
+    let running = Running(Arc::clone(&agent.running));
+    let cancel = Arc::clone(&agent.cancel);
+    let session = Arc::clone(&audio.session);
+    let settings = agent
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    std::thread::Builder::new()
+        .name("shard-agent".into())
+        .spawn(move || {
+            let _running = running;
+            let mut model = agent::client::Http::new(&settings);
+            agent::shard::respond(
+                &session,
+                &mut model,
+                &settings,
+                &prompt,
+                considered,
+                &cancel,
+                &mut |e| {
+                    let _ = app.emit(AGENT_EVENT, &e);
+                },
+            );
+        })
+        .map(|_| ())
+        .map_err(|e| format!("the reply couldn't start: {e}"))
+}
+
+/// Stops the running reply, if any: nothing it wrote is applied. It ends
+/// with `stopped` (cancelled) and `done`.
+#[tauri::command]
+fn agent_cancel(agent: tauri::State<'_, AgentState>) {
+    agent.cancel.store(true, Ordering::Release);
+}
+
+#[tauri::command]
+fn agent_settings(agent: tauri::State<'_, AgentState>) -> agent::client::Settings {
+    agent
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+/// Sets where the model is, and keeps it for the next launch.
+#[tauri::command]
+fn set_agent_settings(
+    agent: tauri::State<'_, AgentState>,
+    settings: agent::client::Settings,
+) -> Result<agent::client::Settings, String> {
+    let defaults = agent::client::Settings::default();
+    let clean = agent::client::Settings {
+        base_url: Some(settings.base_url.trim())
+            .filter(|s| !s.is_empty())
+            .map_or(defaults.base_url, str::to_string),
+        // Empty is "whatever is loaded" (`agent::client::pick_model`).
+        model: settings.model.trim().to_string(),
+    };
+    if let Some(dir) = agent.path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    let text = serde_json::to_string_pretty(&clean).map_err(|e| e.to_string())?;
+    std::fs::write(&agent.path, text).map_err(|e| format!("couldn't keep the settings: {e}"))?;
+    *agent.settings.lock().unwrap_or_else(|e| e.into_inner()) = clean.clone();
+    Ok(clean)
 }
 
 /// Mutes or unmutes a track, on the next bar while playing. Not an edit.
@@ -2349,11 +2479,9 @@ pub fn run() {
         .setup(|app| {
             // Controllers belong to this machine, so they live in the app's
             // config directory rather than in any patch.
-            let path = app
-                .path()
-                .app_config_dir()
-                .map_err(|e| e.to_string())?
-                .join("controllers.json");
+            let config = app.path().app_config_dir().map_err(|e| e.to_string())?;
+            app.manage(AgentState::load(config.join("agent.json")));
+            let path = config.join("controllers.json");
             let audio = app.state::<Audio>();
             let bank = Arc::clone(&audio.bank);
             let arrangement = Arc::clone(&audio.arrangement);
@@ -2510,6 +2638,10 @@ pub fn run() {
             set_active_map,
             add_map,
             rename_map,
+            agent_send,
+            agent_cancel,
+            agent_settings,
+            set_agent_settings,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

@@ -809,6 +809,40 @@ impl Session {
         Ok((value, commit.is_some()))
     }
 
+    /// Runs `f` on the document inside one gesture named `label`: every
+    /// edit it makes is one undo step together, and the engine hears the
+    /// result once, at the end. For writes that arrive as a batch, such as
+    /// an agent's reply, run as commands (`object_model::commands`). The
+    /// document stays locked throughout, so no other edit can join the
+    /// gesture; keep `f` short, and never wait on anything slow inside it.
+    /// An open envelope gesture ends first, as its own step. When `f` fails,
+    /// everything it did is taken back and no step is left.
+    pub fn batch<T>(
+        &self,
+        label: &str,
+        f: impl FnOnce(&mut Document<Shard>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        let mut doc = lock(&self.doc);
+        self.end_gesture(&mut doc);
+        let g = doc.begin(label).map_err(err)?;
+        let out = f(&mut doc);
+        let closed = match &out {
+            Ok(_) => doc.end(g).map_err(err),
+            Err(_) => doc.cancel(g).map(|_| ()).map_err(err),
+        };
+        self.sync(&doc, false);
+        drop(doc);
+        self.changed();
+        closed?;
+        out
+    }
+
+    /// The track the tracker shows, if one is selected: what a write that
+    /// names no track means.
+    pub fn selected_track(&self) -> Option<usize> {
+        lock(&self.sent).selected_track
+    }
+
     /// Reads the document.
     pub fn read<T>(&self, f: impl FnOnce(&Document<Shard>) -> T) -> T {
         f(&lock(&self.doc))

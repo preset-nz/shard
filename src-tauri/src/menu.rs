@@ -21,6 +21,9 @@ pub const FX_ADD_PREFIX: &str = "fx-add:";
 pub const TRACK_ADD_MELODY: &str = "track.add:melody";
 pub const TRACK_ADD_DRUMS: &str = "track.add:drums";
 
+/// View > Agent: the agent panel, shown or hidden (roadmap row 24).
+pub const VIEW_AGENT: &str = "view-agent";
+
 /// File > Record Take (epic 44). The title reads `STOP_TITLE` while a take runs.
 pub const RECORD_TAKE: &str = "file-record-take";
 const RECORD_TITLE: &str = "Record Take";
@@ -102,6 +105,9 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     // Safari's Web Inspector chord: the grain inspector is a debugger, and
     // the menu standard keeps Cmd+I free for Get Info (rule 2).
     ("view-inspector", "CmdOrCtrl+Alt+I"),
+    // The agent panel (roadmap row 24): free in the menu standard, and A
+    // for Agent.
+    (VIEW_AGENT, "CmdOrCtrl+Alt+A"),
     // The menu standard's zoom chords (rule 4), on the material waveform.
     ("view-zoom-in", "CmdOrCtrl+="),
     ("view-zoom-out", "CmdOrCtrl+-"),
@@ -179,6 +185,8 @@ pub fn commands() -> Vec<Command> {
         view("view-tracker", "Track", 0),
         view("view-soundscape", "Patch", 0),
         view("view-inspector", "Grain Inspector", 1),
+        // Shows and hides the agent panel, checked while it shows.
+        toggle(VIEW_AGENT, "Agent").menu(MenuName::View).section(1),
         // Time zoom on the material waveform, greyed when none is shown.
         view("view-zoom-in", "Zoom In", 2),
         view("view-zoom-out", "Zoom Out", 2),
