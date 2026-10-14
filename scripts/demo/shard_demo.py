@@ -41,6 +41,8 @@ SCREEN = (2056, 1329)  # points; More Space on a 16-inch MacBook Pro
 WINDOW = (1920, 1200)
 MENU_BAR = 38  # points, with the notch
 TEAL = "49a8b3"  # ux-kit's dark primary: the captions' plate
+# Until preset.nz has a logo: its name, lower left, on every frame.
+MARK = ("preset.nz", "ffffff80", "DINAlternate-Bold")
 EVENTS: list[tuple[float, str, float]] = []  # when, caption, seconds shown
 
 
@@ -332,6 +334,13 @@ def edit(raw: pathlib.Path, a: float, b: float, captions=(), meta=None, speed: i
         chain += (f"[{last}][{plates[text]}:v]overlay=x=(W-w)/2:y=H-h-96:"
                   f"enable='between(t,{start:.3f},{end:.3f})'[o{i}];")
         last = f"o{i}"
+    mark = BIN / "labels" / "mark.png"
+    mark.parent.mkdir(exist_ok=True)
+    # 44 px at the take's 2x: 22 px high in the edit, 24 px in from the corner.
+    subprocess.run([BIN / "label", MARK[0], mark, "44", "-", MARK[1], MARK[2]], check=True)
+    inputs += ["-i", mark]
+    chain += f"[{last}][{len(plates) + 1}:v]overlay=x=48:y=H-h-48[mk];"
+    last = "mk"
     v = (f"[0:v]trim=0:{a},setpts=PTS-STARTPTS[v0];[0:a]atrim=0:{a},asetpts=PTS-STARTPTS[a0];"
          f"[0:v]trim={a}:{b},setpts=(PTS-STARTPTS)/{speed}[v1];"
          f"[0:a]atrim={a}:{b},asetpts=PTS-STARTPTS,atempo=2,atempo={speed / 2}[a1];"
@@ -363,7 +372,7 @@ def edit(raw: pathlib.Path, a: float, b: float, captions=(), meta=None, speed: i
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, *inputs, "-i", chapter_file,
          "-filter_complex", v, "-map", "[v]", "-map", "[a]",
-         "-map_metadata", str(len(plates) + 1), "-map_chapters", str(len(plates) + 1),
+         "-map_metadata", str(len(plates) + 2), "-map_chapters", str(len(plates) + 2),
          *[x for k, val in tags.items() for x in ("-metadata", f"{k}={val}")],
          "-metadata:s:v", "handler_name=Video", "-metadata:s:a", "handler_name=Audio",
          "-metadata:s:a", "language=zxx",
