@@ -64,6 +64,18 @@ def menu(bar, item):
     )
 
 
+def agent_panel(shown: bool):
+    """View > Agent is a toggle: pressed only when it isn't as wanted."""
+    mark = subprocess.run(
+        ["osascript", "-e",
+         'tell application "System Events" to tell process "shard" to get value of attribute '
+         '"AXMenuItemMarkChar" of menu item "Agent" of menu 1 of menu bar item "View" of menu bar 1'],
+        capture_output=True, text=True,
+    ).stdout.strip()
+    if (mark not in ("", "missing value")) != shown:
+        menu("View", "Agent")
+
+
 def undo_title() -> str:
     return subprocess.run(
         ["osascript", "-e",
@@ -83,7 +95,17 @@ def bass_track() -> str:
 
 def run(considered: bool):
     subprocess.run(["osascript", "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true'])
-    hold(2)
+    hold(1.5)
+
+    # The empty session first: the built-in drone, without the agent.
+    agent_panel(False)
+    hold(1)
+    click("Play")
+    hold(5)
+    click("Stop")
+    hold(1)
+    agent_panel(True)
+    hold(1.5)
 
     # The prompt.
     click("Considered" if considered else "Quick")
@@ -110,27 +132,7 @@ def run(considered: bool):
     menu("View", "Patch")
     hold(3)
 
-    # Drive: harder, and all of it.
-    click("Drive")
-    hold(1)
-    slide("Mix", 1.0)
-    hold(0.8)
-    slide("Amount", 0.85)
-    hold(0.8)
-    click("Overdrive")
-    hold(0.5)
-    click("Distortion")
-    hold(0.8)
-    slide("Tone", 0.75)
-    hold(4)
-
-    # The ladder: resonance up, and the cutoff's sweep opened.
-    click("Ladder")
-    hold(1)
-    slide("Resonance", 0.8)
-    hold(4)
-
-    # The envelope: a short pluck.
+    # The envelope first, while the sound is plain: a short pluck.
     click("Envelope")
     hold(1)
     slide("Decay", 0.08)
@@ -138,10 +140,36 @@ def run(considered: bool):
     slide("Sustain", 0.0)
     hold(5)
 
+    # The ladder: resonance up.
+    click("Ladder")
+    hold(1)
+    slide("Resonance", 0.7)
+    hold(4)
+
+    # Drive: some grit, not noise.
+    click("Drive")
+    hold(1)
+    slide("Mix", 0.6)
+    hold(0.8)
+    slide("Amount", 0.6)
+    hold(0.8)
+    click("Overdrive")
+    hold(0.5)
+    click("Fuzz")
+    hold(0.8)
+    slide("Tone", 0.6)
+    hold(4)
+
     # Everything again, then stop.
     click(f"Solo {bass}")
     hold(8)
+    # The tape brakes under a held B, and Stop lands while it's braking.
+    # B is ignored while a button has focus, so a plain heading takes it.
+    click("PROCESS")
+    brake = subprocess.Popen([BIN / "ui", "hold", "11", "2600"])
+    hold(1.8)
     click("Stop")
+    brake.wait()
     hold(1.5)
     return marks
 

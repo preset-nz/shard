@@ -164,7 +164,8 @@ eval-agent *args:
 [group('eval')]
 demo *args:
     mkdir -p target/demo
-    for t in rec ui ax; do swiftc -O scripts/demo/$t.swift -o target/demo/$t; done
+    # Only what changed: a write under the repo mid-run reloads the webview.
+    for t in rec ui ax; do [ target/demo/$t -nt scripts/demo/$t.swift ] || swiftc -O scripts/demo/$t.swift -o target/demo/$t; done
     python3 scripts/demo/shard_demo.py {{args}}
 
 # Example: just agent-logs search 'kind:tool refused'

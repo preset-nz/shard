@@ -1,4 +1,5 @@
-// ui move x y | click x y | dclick x y | drag x1 y1 x2 y2 [ms] | type "text" | key <code> [cmd|shift|opt...] | pos
+// ui move x y | click x y | dclick x y | drag x1 y1 x2 y2 [ms] | type "text" | key <code> [cmd|shift|opt...]
+// | hold <code> <ms> (a key held down, as Brake wants) | pos
 import Foundation
 import CoreGraphics
 
@@ -52,5 +53,10 @@ case "key":
     let code = CGKeyCode(a[2])!
     let d = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true); d?.flags = flags; post(d)
     let u = CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false); u?.flags = flags; post(u)
+case "hold":
+    let code = CGKeyCode(a[2])!
+    post(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: true))
+    usleep(useconds_t(Double(a[3])! * 1000))
+    post(CGEvent(keyboardEventSource: src, virtualKey: code, keyDown: false))
 default: print("unknown")
 }
