@@ -454,3 +454,48 @@ fn live_brief_prompts() {
         }
     }
 }
+
+#[test]
+fn a_brief_without_chords_picks_a_progression_with_its_feel_by_seed() {
+    use std::collections::BTreeSet;
+    let mut picked = BTreeSet::new();
+    for seed in 0..12 {
+        let mut d = doc();
+        let out = run(
+            &mut d,
+            MAKE_BASS,
+            json!({ "key": "A minor", "feel": "dark", "figure": "rolling", "seed": seed }),
+        )
+        .unwrap();
+        assert!(
+            out.contains("(picked for a dark feel by the seed)"),
+            "{out}"
+        );
+        let name = PROGRESSIONS
+            .iter()
+            .find(|p| out.contains(&format!(" over {} (picked", p.name)))
+            .unwrap_or_else(|| panic!("names no progression: {out}"));
+        assert!(name.tags.contains(&"dark"), "{}", name.name);
+        assert!(name.modes.contains(&Mode::Minor), "{}", name.name);
+        picked.insert(name.name);
+    }
+    assert!(picked.len() >= 3, "not the first on the list: {picked:?}");
+
+    // Named chords are kept as named.
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        MAKE_BASS,
+        json!({ "key": "A", "feel": "dark", "progression": "i-bVI-bVII", "figure": "acid" }),
+    )
+    .unwrap();
+    assert!(out.contains("over i-bVI-bVII in A minor"), "{out}");
+
+    let refused = run(
+        &mut d,
+        MAKE_BASS,
+        json!({ "key": "A", "feel": "grumpy", "figure": "acid" }),
+    )
+    .unwrap_err();
+    assert!(refused.contains("not a feel; send one of"), "{refused}");
+}

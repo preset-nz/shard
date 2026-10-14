@@ -3,7 +3,8 @@
 //! "The lean: the model writes a brief").
 //!
 //! - `shard.make_drums`: a drums track from a style, density and glitch.
-//! - `shard.make_bass`: a bass line from a key, mode, progression and figure.
+//! - `shard.make_bass`: a bass line from a key, mode, progression (or a
+//!   feel to pick one by) and figure.
 //! - `shard.make_arp`: an arpeggio from the same, a pattern and a rate.
 //! - `shard.list_drum_styles`, `shard.list_progressions`: what there is to
 //!   choose from, with each one's feel.
@@ -209,15 +210,39 @@ fn chord_name(key: i32, mode: Mode, degree: i32) -> String {
 fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, String> {
     let key_text = text_of(p, "key").ok_or("missing \"key\": a note name such as A, F# or Bb")?;
     let (key, key_mode) = music::parse_key(key_text)?;
-    let prog_text = text_of(p, "progression").ok_or(
-        "missing \"progression\": a name from list_progressions (\"i-bVI-bVII\"), or roman numerals such as \"i iv v\"",
-    )?;
-    let (degrees, entry) = music::chords(prog_text)?;
     let mode_names = names(&Mode::ALL, |m| m.name());
-    let fallback = key_mode
+    let asked_mode = match text_of(p, "mode") {
+        Some(_) => Some(choice(p, "mode", Mode::from_name, &mode_names, None)?),
+        None => key_mode,
+    };
+    let (seed, sent) = seed_of(p);
+    let feel = text_of(p, "feel").map(str::to_ascii_lowercase);
+    if let Some(f) = &feel {
+        let all = music::feels();
+        if !all.contains(&f.as_str()) {
+            return Err(format!(
+                "\"{f}\" is not a feel; send one of {}",
+                all.join(", ")
+            ));
+        }
+    }
+    let (degrees, entry, picked) = match text_of(p, "progression") {
+        Some(t) => {
+            let (degrees, entry) = music::chords(t)?;
+            (degrees, entry, false)
+        }
+        None => {
+            let e = pick_progression(feel.as_deref(), asked_mode, seed);
+            (
+                e.degrees.iter().map(|d| i32::from(*d)).collect(),
+                Some(e),
+                true,
+            )
+        }
+    };
+    let mode = asked_mode
         .or(entry.map(Progression::home))
         .unwrap_or(Mode::Minor);
-    let mode = choice(p, "mode", Mode::from_name, &mode_names, Some(fallback))?;
 
     let chord_bars = p
         .get("chord_bars")
@@ -244,7 +269,6 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         chord_steps,
         length,
     };
-    let (seed, sent) = seed_of(p);
     let reg_names = names(&Register::ALL, |r| r.name());
 
     let (notes, what) = match role {
@@ -336,7 +360,17 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         notes.iter().map(|n| n.note).min().unwrap_or(0),
         notes.iter().map(|n| n.note).max().unwrap_or(0),
     );
-    let name = entry.map_or(prog_text, |e| e.name);
+    let name = match (entry, picked) {
+        (Some(e), true) => format!(
+            "{} (picked {}by the seed)",
+            e.name,
+            feel.as_ref()
+                .filter(|f| e.tags.contains(&f.as_str()))
+                .map_or(String::new(), |f| format!("for a {f} feel "))
+        ),
+        (Some(e), false) => e.name.to_string(),
+        (None, _) => text_of(p, "progression").unwrap_or("").to_string(),
+    };
     let mut out = format!(
         "{wrote}. Played {what} over {name} in {} {} ({}), {} a chord, notes {} to {}, {}",
         music::pitch_name(key),
@@ -373,6 +407,30 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         None => {}
     }
     Ok(out)
+}
+
+/// A progression for a brief that named none: one with `feel` (any, when
+/// none has it) written for `mode` (any mode, when none of that feel is),
+/// chosen by `seed`.
+pub fn pick_progression(feel: Option<&str>, mode: Option<Mode>, seed: u32) -> &'static Progression {
+    let has_feel = |e: &&Progression| feel.is_none_or(|f| e.tags.contains(&f));
+    let in_mode = |e: &&Progression| mode.is_none_or(|m| e.modes.contains(&m));
+    let mut list: Vec<&Progression> = PROGRESSIONS
+        .iter()
+        .filter(has_feel)
+        .filter(in_mode)
+        .collect();
+    if list.is_empty() {
+        list = PROGRESSIONS.iter().filter(has_feel).collect();
+    }
+    if list.is_empty() {
+        list = PROGRESSIONS.iter().filter(in_mode).collect();
+    }
+    if list.is_empty() {
+        list = PROGRESSIONS.iter().collect();
+    }
+    let k = music::rng(seed, 3).next_u32() as usize % list.len();
+    list[k]
 }
 
 /// The progressions with a feel and in a mode, both optional; never none:

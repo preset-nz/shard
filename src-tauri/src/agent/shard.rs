@@ -44,7 +44,7 @@ Tracks are named as Shard shows them: melody tracks Track 1, Track 2 and on, dru
 
 Example. User: "A heavy, gritty Trip-Hop bass line that feels like a rainy night in Bristol"
 set_tempo {"bpm": 85}
-make_bass {"key": "F", "mode": "minor", "progression": "i-iv-bVII-i", "figure": "sparse", "register": "sub"}"#;
+make_bass {"key": "F", "mode": "minor", "feel": "sad", "figure": "sparse", "register": "sub"}"#;
 
 const TRACK: &str = "The track to write over, by its name as Shard shows it (\"Track 1\", \"Drums 2\"), or \"new\". Leave it out to write a new track, or the selected one when it is of this kind.";
 
@@ -70,7 +70,8 @@ pub fn tools() -> Tools {
     let registers = generate::register_names();
     let key = json!({ "type": "string", "description": "the tonic: A, F#, Bb; may name the mode too (\"E phrygian\")" });
     let mode = json!({ "type": "string", "enum": modes, "description": "the scale; left out, the key's or the progression's own" });
-    let progression = json!({ "type": "string", "enum": progressions, "description": "chords as roman numerals over the mode; list_progressions gives each one's feel" });
+    let progression = json!({ "type": "string", "enum": progressions, "description": "only when the user names the chords; otherwise leave it out and send feel" });
+    let feel = json!({ "type": "string", "enum": music::feels(), "description": "the mood the chords should have; Shard picks a progression with it" });
     let chord_bars =
         json!({ "type": "number", "enum": [0.5, 1, 2, 4], "description": "bars each chord lasts" });
     Tools::new(vec![
@@ -102,6 +103,7 @@ pub fn tools() -> Tools {
                     "track": { "description": TRACK },
                     "key": key,
                     "mode": mode,
+                    "feel": feel,
                     "progression": progression,
                     "figure": { "type": "string", "enum": generate::figure_names(), "description": "ebm_pulse: sixteenths on the root with gaps; rolling: three sixteenths after each beat, resting on the kick; octave_pulse: root and octave; acid: a new line each bar with accents, jumps and ties; offbeat: eighths between the kicks; root_fifth; gallop: an eighth and two sixteenths; sparse: long notes and space" },
                     "register": { "type": "string", "enum": registers, "description": "sub, low (the default), mid or high" },
@@ -109,7 +111,7 @@ pub fn tools() -> Tools {
                     "chord_bars": chord_bars,
                     "seed": { "type": "integer", "description": SEED },
                 },
-                "required": ["key", "progression", "figure"],
+                "required": ["key", "figure"],
             }),
             access: Access::Write,
         },
@@ -123,6 +125,7 @@ pub fn tools() -> Tools {
                     "track": { "description": TRACK },
                     "key": key,
                     "mode": mode,
+                    "feel": feel,
                     "progression": progression,
                     "pattern": { "type": "string", "enum": generate::pattern_names() },
                     "rate": { "type": "integer", "enum": generate::rates(), "description": "8 for eighths, 16 for sixteenths" },
@@ -132,7 +135,7 @@ pub fn tools() -> Tools {
                     "chord_bars": chord_bars,
                     "seed": { "type": "integer", "description": SEED },
                 },
-                "required": ["key", "progression", "pattern"],
+                "required": ["key", "pattern"],
             }),
             access: Access::Write,
         },
