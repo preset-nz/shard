@@ -7,7 +7,7 @@ summary: "One position in a drums track's grid: how hard each drum hits there."
 
 # Beat
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 One position in a drums track's grid: how hard each drum hits there.
 
 | Control | Range | Default | What it does |

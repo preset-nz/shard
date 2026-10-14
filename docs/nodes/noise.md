@@ -7,7 +7,7 @@ summary: A continuous noise generator, from low rumble to bright hiss, with an o
 
 # Noise
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A continuous noise generator, from low rumble to bright hiss, with an optional pitched band for wind and whistles.
 
 | Control | Range | Default | What it does |

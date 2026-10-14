@@ -7,7 +7,7 @@ summary: Shapes how each note swells in and dies away; at its neutral setting it
 
 # Envelope
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Shapes how each note swells in and dies away; at its neutral setting it passes the sound untouched.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: The loaded sample played as it is, ahead of the effects; the other gene
 
 # Sample
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The loaded sample played as it is, ahead of the effects; the other generators sound alongside it.
 
 | Control | Range | Default | What it does |

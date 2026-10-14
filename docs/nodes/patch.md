@@ -7,7 +7,7 @@ summary: "One sound: its generators, effects and settings, played by one or more
 
 # Patch
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 One sound: its generators, effects and settings, played by one or more tracks.
 
 | Control | Range | Default | What it does |

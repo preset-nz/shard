@@ -7,7 +7,7 @@ summary: Degrades the sound by throwing away resolution and sample rate, for gri
 
 # Crush
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Degrades the sound by throwing away resolution and sample rate, for gritty lo-fi digital crunch.
 
 | Control | Range | Default | What it does |

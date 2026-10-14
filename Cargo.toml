@@ -27,7 +27,6 @@ shard-dsp = { path = "crates/shard-dsp" }
 [patch.crates-io]
 rhizome-core = { path = "../../packages/rhizome/crates/rhizome-core" }
 rhizome-pom = { path = "../../packages/rhizome/crates/rhizome-pom" }
-rhizome-docs = { path = "../../packages/rhizome/crates/rhizome-docs" }
 
 # Decoding a WAV is a tight loop over every sample. Unoptimised, a three-minute
 # stereo file took 2.05 s to decode, against 0.13 s at opt-level 1 (measured

@@ -7,7 +7,7 @@ summary: A resonant filter after all the effects, taking away the highs, the low
 
 # Filter
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.
 
 | Control | Range | Default | What it does |

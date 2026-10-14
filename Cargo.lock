@@ -2948,6 +2948,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "preset-docs"
+version = "0.1.0"
+dependencies = [
+ "rhizome-core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "preset-math"
 version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3227,14 +3236,6 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "ulid",
-]
-
-[[package]]
-name = "rhizome-docs"
-version = "0.1.5"
-dependencies = [
- "rhizome-core",
- "serde_json",
 ]
 
 [[package]]
@@ -3554,9 +3555,9 @@ dependencies = [
  "hound",
  "midir",
  "preset-app-kit",
+ "preset-docs",
  "preset-math",
  "rhizome-core",
- "rhizome-docs",
  "rhizome-pom",
  "serde",
  "serde_json",

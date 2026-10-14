@@ -7,7 +7,7 @@ summary: A simulated space around the sound, from a small room to a long hall or
 
 # Reverb
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A simulated space around the sound, from a small room to a long hall or plate tail.
 
 | Control | Range | Default | What it does |

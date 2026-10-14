@@ -38,5 +38,6 @@ hound.workspace = true
 midir.workspace = true
 
 [dev-dependencies]
-# `just docs`: node pages from the schema (examples/shard-docs.rs).
-rhizome-docs = "0.1.5"
+# `just docs`: node pages from the schema (examples/shard-docs.rs). By path until
+# preset-docs is first published (runbooks/pending-releases.md).
+preset-docs = { path = "../../../packages/preset-docs", features = ["rhizome"] }

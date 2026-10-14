@@ -7,7 +7,7 @@ summary: The patch's master level, after every generator and effect.
 
 # Output
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The patch's master level, after every generator and effect.
 
 | Control | Range | Default | What it does |

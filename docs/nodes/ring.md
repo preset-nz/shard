@@ -7,7 +7,7 @@ summary: Multiplies the sound by a tone, adding metallic, bell-like frequencies 
 
 # Ring modulation
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Multiplies the sound by a tone, adding metallic, bell-like frequencies that do not follow the original harmonics.
 
 | Control | Range | Default | What it does |

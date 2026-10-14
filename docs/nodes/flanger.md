@@ -7,7 +7,7 @@ summary: A very short swept delay mixed with the dry sound, so notches sweep thr
 
 # Flanger
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A very short swept delay mixed with the dry sound, so notches sweep through it with a jet-like whoosh.
 
 | Control | Range | Default | What it does |

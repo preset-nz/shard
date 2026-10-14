@@ -7,7 +7,7 @@ summary: Grabs the last slice of sound and loops it, for stutters and freezes.
 
 # Repeat
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Grabs the last slice of sound and loops it, for stutters and freezes.
 
 | Control | Range | Default | What it does |

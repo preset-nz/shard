@@ -7,7 +7,7 @@ summary: Mixes in gently detuned, swept copies of the sound to widen and thicken
 
 # Chorus
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Mixes in gently detuned, swept copies of the sound to widen and thicken it.
 
 | Control | Range | Default | What it does |

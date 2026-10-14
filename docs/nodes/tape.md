@@ -7,7 +7,7 @@ summary: How the tape slows, stops or runs backwards when a brake or reverse is 
 
 # Tape
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 How the tape slows, stops or runs backwards when a brake or reverse is played.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: "A two-operator FM voice: a pitched tone that one oscillator bends with
 
 # FM
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A two-operator FM voice: a pitched tone that one oscillator bends with another, from soft bell to harsh metal.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: Cuts the sample into tiny grains and scatters them into a cloud, anywhe
 
 # Granular
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Cuts the sample into tiny grains and scatters them into a cloud, anywhere from a shimmer to a stuttering texture.
 
 | Control | Range | Default | What it does |

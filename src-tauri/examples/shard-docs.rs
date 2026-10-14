@@ -19,10 +19,11 @@ fn main() -> ExitCode {
     // rhizome-pom's own `preset` node is bookkeeping for saved presets, not
     // something a person adds; it carries no words and gets no page.
     schema.types.retain(|t| t.name != "preset");
+    let schema = preset_docs::Catalogue::from(&schema);
 
     let dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/../docs/nodes"));
     if !check {
-        match rhizome_docs::write(&dir, &schema, "Shard") {
+        match preset_docs::write(&dir, &schema, "Shard") {
             Ok(files) => {
                 for f in files {
                     println!("wrote {f}");
@@ -34,7 +35,7 @@ fn main() -> ExitCode {
             }
         }
     }
-    let findings = match rhizome_docs::check(&dir, &schema, "Shard") {
+    let findings = match preset_docs::check(&dir, &schema, "Shard") {
         Ok(f) => f,
         Err(e) => {
             eprintln!("shard-docs: {e}");

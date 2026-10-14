@@ -7,7 +7,7 @@ summary: Repeats that each climb in pitch from the last, so the trail rises like
 
 # Rise
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Repeats that each climb in pitch from the last, so the trail rises like a siren.
 
 | Control | Range | Default | What it does |

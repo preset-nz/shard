@@ -7,7 +7,7 @@ summary: A slow wave that a control can follow, so it drifts, wobbles or jumps b
 
 # LFO
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A slow wave that a control can follow, so it drifts, wobbles or jumps by itself.
 
 | Control | Range | Default | What it does |

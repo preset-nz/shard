@@ -7,7 +7,7 @@ summary: Clean, faithful repeats of the sound, darkened only by Tone.
 
 # Delay
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Clean, faithful repeats of the sound, darkened only by Tone.
 
 | Control | Range | Default | What it does |

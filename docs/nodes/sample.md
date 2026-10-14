@@ -7,7 +7,7 @@ summary: A WAV file, or the built-in drone, that a generator reads and plays.
 
 # Sample
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A WAV file, or the built-in drone, that a generator reads and plays.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: A row of steps that plays one patch as a melody.
 
 # Track
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A row of steps that plays one patch as a melody.
 
 | Control | Range | Default | What it does |

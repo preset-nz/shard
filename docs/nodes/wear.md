@@ -7,7 +7,7 @@ summary: "Tape that has been looked after badly: pitch wobble, lurching, level d
 
 # Wear
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Tape that has been looked after badly: pitch wobble, lurching, level dropouts and a dulled top end.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: Sparse random clicks, from the odd tick to a dense crackle, like dust o
 
 # Dust
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Sparse random clicks, from the odd tick to a dense crackle, like dust on a record.
 
 | Control | Range | Default | What it does |

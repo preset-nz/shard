@@ -7,7 +7,7 @@ summary: "One position in a track's row: whether it plays, and how."
 
 # Step
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 One position in a track's row: whether it plays, and how.
 
 | Control | Range | Default | What it does |

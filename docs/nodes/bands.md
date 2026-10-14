@@ -7,7 +7,7 @@ summary: Splits the sound into low, mid and high and gives each band its own ech
 
 # Band Delay
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Splits the sound into low, mid and high and gives each band its own echo, at times that fall into a harmonic series.
 
 | Control | Range | Default | What it does |

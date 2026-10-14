@@ -7,7 +7,7 @@ summary: Two narrow boosted bands that ring like resonators on noise and whistle
 
 # Peaks
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Two narrow boosted bands that ring like resonators on noise and whistle when swept.
 
 | Control | Range | Default | What it does |

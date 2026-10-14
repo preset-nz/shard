@@ -7,7 +7,7 @@ summary: "The level above the patches: tempo, swing and the tracks of steps that
 
 # Arrangement
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The level above the patches: tempo, swing and the tracks of steps that play them.
 
 | Control | Range | Default | What it does |

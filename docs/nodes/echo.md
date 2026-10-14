@@ -7,7 +7,7 @@ summary: "The worn counterpart of the delay: each repeat comes back darker, dirt
 
 # Echo
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The worn counterpart of the delay: each repeat comes back darker, dirtier and slightly wandering, like a loop of tape.
 
 | Control | Range | Default | What it does |

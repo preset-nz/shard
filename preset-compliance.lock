@@ -6,11 +6,11 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "83a9a9c14ad14b27f46d51b21eb1aaa184f13974114bd8d61588501c39879bee"
+sha256 = "f004fb2f223715133590ebed97d773a888d2469e975931190a6df29a0109a1c9"
 
 [[inputs]]
 path = "Cargo.toml"
-sha256 = "03b74a5cd558b2542b0436681b7c4387cf42fab98eb93d01fc3f0b9a43e32d35"
+sha256 = "42eaab59d6afeb83c07bc2c820e36cd535572c8b1427b94986c7b3934cd90090"
 
 [[inputs]]
 path = "crates/shard-dsp/Cargo.toml"
@@ -31,7 +31,7 @@ sha256 = "de14945cc3541e945ea99a520e28d25d366053863c4df261a1bcd1e5e4cf93bd"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "fc7a3f55225c733fc088e60d788d3da57235173f0f185abcd562c06ed7b9e5d5"
+sha256 = "7369f1335cddeb7bd114e96ded0a410eca822d0f6ab299ac53e0602055befc6e"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2331,6 +2331,14 @@ scope = "shipped"
 
 [[packages]]
 ecosystem = "cargo"
+name = "preset-docs"
+version = "0.1.0"
+source = "path"
+declared = "MIT"
+scope = "dev"
+
+[[packages]]
+ecosystem = "cargo"
 name = "preset-math"
 version = "0.1.0"
 source = "registry"
@@ -2536,14 +2544,6 @@ version = "0.1.5"
 source = "path"
 declared = "MIT"
 scope = "shipped"
-
-[[packages]]
-ecosystem = "cargo"
-name = "rhizome-docs"
-version = "0.1.5"
-source = "path"
-declared = "MIT"
-scope = "dev"
 
 [[packages]]
 ecosystem = "cargo"

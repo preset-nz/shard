@@ -7,7 +7,7 @@ summary: Pushes the attack and the tail of a sound up or down, by how fast it ch
 
 # Transient
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Pushes the attack and the tail of a sound up or down, by how fast it changes rather than how loud it is.
 
 | Control | Range | Default | What it does |

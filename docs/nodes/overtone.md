@@ -7,7 +7,7 @@ summary: "Adds layers made from the sound itself: an octave down, an octave up a
 
 # Overtone
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Adds layers made from the sound itself: an octave down, an octave up and a fifth up.
 
 | Control | Range | Default | What it does |

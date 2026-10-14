@@ -7,7 +7,7 @@ summary: A drum kit played by a grid of kick, snare and hat hits.
 
 # Drums
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A drum kit played by a grid of kick, snare and hat hits.
 
 | Control | Range | Default | What it does |

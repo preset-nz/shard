@@ -7,7 +7,7 @@ summary: The arrangement's master level and limiter, after every track and effec
 
 # Output
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 The arrangement's master level and limiter, after every track and effect.
 
 | Control | Range | Default | What it does |

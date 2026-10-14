@@ -7,7 +7,7 @@ summary: A curve drawn over each note that a control can follow, so it swells, d
 
 # Mod envelope
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A curve drawn over each note that a control can follow, so it swells, dips or snaps back as the note plays.
 
 | Control | Range | Default | What it does |

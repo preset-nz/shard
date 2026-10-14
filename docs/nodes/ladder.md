@@ -7,7 +7,7 @@ summary: "A driven four-pole low-pass after the patch filter, modelled on the Mo
 
 # Ladder
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 A driven four-pole low-pass after the patch filter, modelled on the Moog ladder: growls when pushed, whistles at full resonance.
 
 | Control | Range | Default | What it does |

@@ -7,7 +7,7 @@ summary: "Moves every frequency by the same number of hertz, so the sound turns 
 
 # Shifter
 
-<!-- generated:begin — rhizome-docs rewrites this block; write outside it -->
+<!-- generated:begin — preset-docs rewrites this block; write outside it -->
 Moves every frequency by the same number of hertz, so the sound turns inharmonic: clangs, spirals and detuned shimmer.
 
 | Control | Range | Default | What it does |
