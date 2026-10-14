@@ -113,6 +113,17 @@ fn bars_of(p: &Json) -> Option<usize> {
     })
 }
 
+/// What to say when more bars were asked for than a track holds: the
+/// model can't write them, so it must not claim to have.
+fn too_long(p: &Json, bars: usize) -> String {
+    match p.get("bars").and_then(number) {
+        Some(n) if n > bars as f64 => format!(
+            ". {n} bars were asked for, but a track holds at most 4 (64 steps): wrote {bars}, which loop. Tell the user it is {bars} bars, not {n}"
+        ),
+        _ => String::new(),
+    }
+}
+
 /// The seed sent, or one made from the rest of the request: its fields in
 /// sorted order, leaving out the seed and which track it goes to.
 fn seed_of(p: &Json) -> (u32, bool) {
@@ -182,6 +193,7 @@ fn make_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
         if bars == 1 { "" } else { "s" },
         seed_text(seed, sent),
     );
+    out += &too_long(p, bars);
     if at_default {
         out += &format!(
             ". Set the tempo to {} bpm, the style's; call set_tempo if another was asked for",
@@ -404,6 +416,7 @@ fn make_line(d: &mut Document<Shard>, p: &Json, role: Role) -> Result<String, St
         music::note_name(hi),
         seed_text(seed, sent),
     );
+    out += &too_long(p, bars);
     if heard < degrees.len() {
         out += &format!(
             ". Only the first {heard} of its {} chords fit in {bars} bar{}; send chord_bars 0.5 or more bars for all of them",

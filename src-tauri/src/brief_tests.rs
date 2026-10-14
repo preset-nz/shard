@@ -538,3 +538,34 @@ fn a_revised_line_aimed_at_the_drone_leaves_one_new_track() {
         "the revision replaced the first"
     );
 }
+
+#[test]
+fn more_bars_than_a_track_holds_writes_four_and_says_so() {
+    let mut d = doc();
+    let out = run(
+        &mut d,
+        MAKE_DRUMS,
+        json!({ "style": "glitch_broken", "bars": 8 }),
+    )
+    .unwrap();
+    assert!(
+        out.contains("8 bars were asked for, but a track holds at most 4"),
+        "{out}"
+    );
+    assert!(out.contains("Tell the user it is 4 bars, not 8"), "{out}");
+    let out = run(
+        &mut d,
+        MAKE_BASS,
+        json!({ "key": "A", "feel": "dark", "figure": "acid", "bars": 8 }),
+    )
+    .unwrap();
+    assert!(out.contains("wrote 4, which loop"), "{out}");
+    assert_eq!(track(&song(&mut d), "Track 2")["length"], 64);
+    let fits = run(
+        &mut d,
+        MAKE_DRUMS,
+        json!({ "style": "glitch_broken", "bars": 4 }),
+    )
+    .unwrap();
+    assert!(!fits.contains("asked for"), "{fits}");
+}
