@@ -64,6 +64,19 @@ def menu(bar, item):
     )
 
 
+def full_screen():
+    """macOS full screen, before the recording starts, so the take doesn't
+    open on the animation."""
+    subprocess.run(
+        ["osascript",
+         "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true',
+         "-e", 'tell application "System Events" to tell process "shard" to set value of attribute '
+               '"AXFullScreen" of window 1 to true'],
+        check=True, capture_output=True,
+    )
+    time.sleep(2.5)
+
+
 def agent_panel(shown: bool):
     """View > Agent is a toggle: pressed only when it isn't as wanted."""
     mark = subprocess.run(
@@ -97,6 +110,9 @@ def run(considered: bool):
     subprocess.run(["osascript", "-e", 'tell application "System Events" to tell process "shard" to set frontmost to true'])
     hold(1.5)
 
+    # Song, not Loop or Once: the transport's mode is remembered between
+    # launches, and Loop goes quiet once Sustain is at zero.
+    click("Song")
     # The empty session first: the built-in drone, without the agent.
     agent_panel(False)
     hold(1)
@@ -179,8 +195,10 @@ def main():
     ap.add_argument("--rehearse", action="store_true", help="Quick mode, no recording")
     a = ap.parse_args()
     if a.rehearse:
+        full_screen()
         run(considered=False)
         return
+    full_screen()
     out = pathlib.Path.home() / "rhizomatic-preset" / "renders" / f"shard-demo-{datetime.date.today():%Y%m%d}.mov"
     rec = subprocess.Popen([BIN / "rec", out, "600"], stdout=subprocess.PIPE, text=True)
     rec.stdout.readline()  # "recording"
@@ -208,6 +226,18 @@ def edit(raw: pathlib.Path, a: float, b: float, speed: int = 6):
         check=True,
     )
     print(f"{raw}\n{out}")
+    quiet(out)
+
+
+def quiet(video: pathlib.Path):
+    """Says where the take is silent for 4 s or more, so a take that lost
+    its sound is caught before anyone watches it."""
+    log = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-i", video, "-vn", "-af", "silencedetect=n=-60dB:d=4", "-f", "null", "-"],
+        capture_output=True, text=True,
+    ).stderr
+    gaps = [line.split("] ")[1] for line in log.splitlines() if "silence_start" in line or "silence_end" in line]
+    print("silent: " + ("; ".join(gaps) if gaps else "nowhere"))
 
 
 if __name__ == "__main__":
