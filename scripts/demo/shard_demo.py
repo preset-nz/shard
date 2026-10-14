@@ -32,6 +32,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parents[2]
 BIN = ROOT / "target" / "demo"
@@ -255,7 +256,11 @@ def main():
     marks_file = out.with_suffix(".json")
     if a.recut:
         m = json.loads(marks_file.read_text())
-        edit(out, m["wait"][0], m["wait"][1], [tuple(e) for e in m["captions"]])
+        if "meta" not in m:  # a take from before the metadata: dated by its file, kept from now on
+            stamp = datetime.datetime.fromtimestamp(out.stat().st_mtime).astimezone()
+            m["meta"] = {**take_meta(), "date": stamp.isoformat(timespec="seconds")}
+            marks_file.write_text(json.dumps(m, ensure_ascii=False, indent=1))
+        edit(out, m["wait"][0], m["wait"][1], [tuple(e) for e in m["captions"]], m["meta"])
         return
     before = display()
     try:
@@ -275,15 +280,39 @@ def main():
         display(*before[:2])
     wait = (marks["sent"] - t0 + 2, marks["answered"] - t0 - 1)
     captions = [(t - t0, c, d) for t, c, d in EVENTS if t >= t0]
-    marks_file.write_text(json.dumps({"wait": wait, "captions": captions}, ensure_ascii=False, indent=1))
-    edit(out, *wait, captions)
+    meta = take_meta()
+    marks_file.write_text(json.dumps({"wait": wait, "captions": captions, "meta": meta}, ensure_ascii=False, indent=1))
+    edit(out, *wait, captions, meta)
 
 
-def edit(raw: pathlib.Path, a: float, b: float, captions=(), speed: int = 6):
+def take_meta() -> dict:
+    """What the take was made with: the app, its commit, the model, the day."""
+    conf = json.loads((ROOT / "src-tauri" / "tauri.conf.json").read_text())
+    version = json.loads((ROOT / "package.json").read_text())["version"]
+    commit = subprocess.run(["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True).stdout.strip()
+    model = None
+    try:  # LM Studio lists every downloaded model; only a loaded one ran the take.
+        with urllib.request.urlopen("http://localhost:1234/api/v0/models", timeout=3) as r:
+            model = next((m["id"] for m in json.load(r)["data"] if m.get("state") == "loaded"), None)
+    except OSError:
+        pass
+    return {"product": conf["productName"], "version": version, "commit": commit, "model": model,
+            "date": datetime.datetime.now().astimezone().isoformat(timespec="seconds"), "prompt": PROMPT}
+
+
+def chapters(path: pathlib.Path, marks: list[tuple[float, str]], end: float):
+    """An ffmetadata file of chapters, each running to the next."""
+    lines = [";FFMETADATA1"]
+    for (start, title), nxt in zip(marks, [m[0] for m in marks[1:]] + [end]):
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000", f"START={round(start * 1000)}", f"END={round(nxt * 1000)}", f"title={title}"]
+    path.write_text("\n".join(lines) + "\n")
+
+
+def edit(raw: pathlib.Path, a: float, b: float, captions=(), meta=None, speed: int = 6):
     """The take with the model's wait, `a` to `b` seconds in, `speed` times
     faster under a "6×" plate, and each caption on the same plate at the
-    bottom centre for its seconds; halved, as H.264 for every browser, with a
-    poster from the result playing."""
+    bottom centre for its seconds; halved, as H.264 for every browser, with
+    title, credits and chapters, and a poster from the result playing."""
     out = raw.with_name(raw.stem + "-edit.mp4")
 
     def at(t):  # a time in the take, in the edit
@@ -310,9 +339,34 @@ def edit(raw: pathlib.Path, a: float, b: float, captions=(), speed: int = 6):
          "[v0][a0][v1][a1][v2][a2]concat=n=3:v=1:a=1[vc][a];"
          + chain +
          f"[{last}]scale=trunc(iw/4)*2:trunc(ih/4)*2:flags=lanczos,fps=60,format=yuv420p[v]")
+
+    meta = meta or take_meta()
+    length = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", raw],
+                                  capture_output=True, text=True).stdout) - (b - a) * (1 - 1 / speed)
+    when = {c: at(t) for t, c, _ in captions}
+    marks = [(0.0, "The empty session"), (when.get("View › Agent", a - 8), "The prompt"),
+             (a, f"The model thinking, at {speed}×"), (a + (b - a) / speed, "The result"),
+             (when.get("View › Patch"), "Shaping the bass"), (when.get("Hold B · Brake"), "Brake and stop")]
+    chapter_file = BIN / "chapters.txt"
+    chapters(chapter_file, [m for m in marks if m[0] is not None], length)
+    product, model = meta["product"], meta["model"] or "a local model"
+    tags = {
+        "title": f"{product}: a prompt to the agent, then shaping the bass",
+        "artist": "preset.nz",
+        "copyright": f"© {meta['date'][:4]} preset.nz",
+        "date": meta["date"][:10],
+        "creation_time": meta["date"],
+        "description": f"{product} {meta['version']}. {model}, running locally, answers “{meta['prompt']}”; "
+                       f"its wait is shown at {speed}×. Then the bass is shaped by hand: envelope, ladder, drive.",
+        "comment": f"Recorded by just demo at {meta['commit']}.",
+    }
     subprocess.run(
-        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, *inputs, "-filter_complex", v,
-         "-map", "[v]", "-map", "[a]",
+        ["ffmpeg", "-hide_banner", "-v", "error", "-y", "-i", raw, *inputs, "-i", chapter_file,
+         "-filter_complex", v, "-map", "[v]", "-map", "[a]",
+         "-map_metadata", str(len(plates) + 1), "-map_chapters", str(len(plates) + 1),
+         *[x for k, val in tags.items() for x in ("-metadata", f"{k}={val}")],
+         "-metadata:s:v", "handler_name=Video", "-metadata:s:a", "handler_name=Audio",
+         "-metadata:s:a", "language=zxx",
          "-c:v", "libx264", "-preset", "slow", "-crf", "23", "-profile:v", "high",
          "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", out],
         check=True,
