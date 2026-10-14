@@ -18,8 +18,6 @@ import {
   Reasoning,
   ReasoningContent,
   ReasoningTrigger,
-  Suggestion,
-  Suggestions,
   ToolCall,
   ToolCallContent,
   ToolCallHeader,
@@ -86,13 +84,10 @@ function PartView({ part, live }: { part: Part; live: boolean }) {
 }
 
 export function AgentPanel({
-  suggestions,
   onApplied,
   collapsed,
   onCollapsedChange,
 }: {
-  /** Starter prompts, shown while the conversation is empty. */
-  suggestions: string[];
   /** A reply wrote tracks: read the session again. */
   onApplied: () => void;
   /** Folded to the prompt line. */
@@ -240,13 +235,6 @@ export function AgentPanel({
           </ChatScroller>
         )}
         <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
-          {chat.turns.length === 0 && !collapsed && (
-            <Suggestions>
-              {suggestions.map((s) => (
-                <Suggestion key={s} suggestion={s} onClick={setDraft} />
-              ))}
-            </Suggestions>
-          )}
           <PromptInput
             value={draft}
             onValueChange={setDraft}
