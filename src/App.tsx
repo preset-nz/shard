@@ -116,6 +116,7 @@ import {
   wireMaterial,
 } from '@/audio';
 import { AddMenu } from '@/components/AddMenu';
+import { AgentPanel } from '@/components/AgentPanel';
 import { GeneratorTree } from '@/components/GeneratorTree';
 import { GrainInspector } from '@/components/GrainInspector';
 import { Inspector } from '@/components/Inspector';
@@ -193,6 +194,12 @@ function sameList(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
+const AGENT_SUGGESTIONS = [
+  'A four-on-the-floor beat',
+  'A dark bassline in F minor',
+  'A broken beat at 90 bpm, sparse hats',
+];
+
 function formatElapsed(seconds: number): string {
   const whole = Math.max(0, Math.floor(seconds));
   return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
@@ -254,6 +261,11 @@ export default function App() {
   // The grain inspector and the raw parameter list are for debugging, so they
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
+  // View > Agent: the chat under the properties. Off until asked for.
+  const [showAgent, setShowAgent] = usePersistedState('shard.agent.show', false);
+  const [agentFolded, setAgentFolded] = usePersistedState('shard.agent.folded', false);
+  // The chat's height in the right-hand column; the properties take the rest.
+  const [agentHeight, setAgentHeight] = usePersistedState('shard.agent.height', 320);
   const [mode, setMode] = usePersistedState<Mode>('shard.mode', 'soundscape');
   // How the waveform scrubs (roadmap row 45). UI state only: Tape is the
   // Sample's Scrub row on, Freeze is the cloud's Position, Off leaves the
@@ -876,6 +888,20 @@ export default function App() {
     };
   }, [showTracker]);
 
+  // A finished agent reply wrote tracks as one undo step, and told nothing
+  // else: read back what an undo reads back (a new melody track brings a new
+  // patch, so the patch list too).
+  const refreshAfterAgent = useCallback(async () => {
+    try {
+      showTracker(await getTracker());
+      setMod(await readModulation());
+      setPool(await readMaterials());
+      setPatches(await listPatches());
+    } catch (err) {
+      setError(String(err));
+    }
+  }, [showTracker]);
+
   const togglePlay = useCallback(async () => {
     await setPlaying(!meter.playing);
   }, [meter.playing]);
@@ -1320,6 +1346,9 @@ export default function App() {
       case 'view-inspector':
         setShowDebugger((v) => !v);
         break;
+      case 'view-agent':
+        setShowAgent((v) => !v);
+        break;
       default:
         break;
     }
@@ -1349,6 +1378,7 @@ export default function App() {
     const pressed: Record<string, boolean> = {
       'track.mute': mode === 'tracker' && selectedMute,
       'track.solo': mode === 'tracker' && selectedSolo,
+      'view-agent': showAgent,
     };
     return Object.fromEntries(
       (commandTable ?? []).map((c) => [
@@ -1371,6 +1401,7 @@ export default function App() {
     mode,
     selectedMute,
     selectedSolo,
+    showAgent,
     waveZoomable,
     canRepeatBar,
   ]);
@@ -2087,52 +2118,92 @@ export default function App() {
             )}
           </main>
 
-          <aside className="w-80 shrink-0 overflow-y-auto border-l border-border">
-            {defs ? (
-              <Inspector
-                selection={selection}
-                defs={defs}
-                values={values}
-                ctx={panelCtx}
-                pool={pool}
-                onMaterialChange={(m) => void changeMaterial(m)}
-                limits={limits}
-                linkedCounts={linkedCounts}
-                onSelect={select}
-                onLfoChange={(next) => void editMod(() => setLfo(next))}
-                onEnvelopeChange={(next, coalesce) =>
-                  void editMod(() => setModEnvelope(next, coalesce))
-                }
-                envelopeGesture={{
-                  begin: (id) => void envelopeGestureBegin(id).catch((e) => setError(String(e))),
-                  apply: (next) => void editMod(() => envelopeGestureApply(next)),
-                  end: () => void envelopeGestureEnd().catch((e) => setError(String(e))),
-                  cancel: () => void editMod(envelopeGestureCancel),
-                }}
-                onError={setError}
-                onNote={setNote}
-                onPresetApplied={refreshMod}
-              />
-            ) : (
-              <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
-            )}
+          <div className="flex w-80 shrink-0 flex-col border-l border-border">
+            <aside className="min-h-0 flex-1 overflow-y-auto">
+              {defs ? (
+                <Inspector
+                  selection={selection}
+                  defs={defs}
+                  values={values}
+                  ctx={panelCtx}
+                  pool={pool}
+                  onMaterialChange={(m) => void changeMaterial(m)}
+                  limits={limits}
+                  linkedCounts={linkedCounts}
+                  onSelect={select}
+                  onLfoChange={(next) => void editMod(() => setLfo(next))}
+                  onEnvelopeChange={(next, coalesce) =>
+                    void editMod(() => setModEnvelope(next, coalesce))
+                  }
+                  envelopeGesture={{
+                    begin: (id) => void envelopeGestureBegin(id).catch((e) => setError(String(e))),
+                    apply: (next) => void editMod(() => envelopeGestureApply(next)),
+                    end: () => void envelopeGestureEnd().catch((e) => setError(String(e))),
+                    cancel: () => void editMod(envelopeGestureCancel),
+                  }}
+                  onError={setError}
+                  onNote={setNote}
+                  onPresetApplied={refreshMod}
+                />
+              ) : (
+                <p className="p-3 text-xs text-muted-foreground">Loading parameters…</p>
+              )}
 
-            {defs && showDebugger && (
-              <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
-                {defs.map((d) => (
-                  <div
-                    key={d.id}
-                    className="flex justify-between gap-2 text-[11px] text-muted-foreground"
-                  >
-                    <span className="truncate font-mono">{d.id}</span>
-                    <span className="shrink-0 tabular-nums">
-                      {format(d, values[d.id] ?? d.default)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </aside>
+              {defs && showDebugger && (
+                <div className="m-3 mt-4 space-y-1 border-t border-border pt-3">
+                  {defs.map((d) => (
+                    <div
+                      key={d.id}
+                      className="flex justify-between gap-2 text-[11px] text-muted-foreground"
+                    >
+                      <span className="truncate font-mono">{d.id}</span>
+                      <span className="shrink-0 tabular-nums">
+                        {format(d, values[d.id] ?? d.default)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </aside>
+            {/* Mounted while hidden, so a reply and its chat survive View > Agent. */}
+            <div
+              className={showAgent ? 'flex min-h-0 shrink-0 flex-col' : 'hidden'}
+              style={agentFolded ? undefined : { height: agentHeight }}
+            >
+              {!agentFolded && (
+                // biome-ignore lint/a11y/useSemanticElements: a drag handle, not a rule
+                <div
+                  role="separator"
+                  aria-orientation="horizontal"
+                  aria-label="Resize the agent panel"
+                  className="h-1 shrink-0 cursor-row-resize border-t border-border hover:bg-accent"
+                  onPointerDown={(e) => {
+                    const column = e.currentTarget.parentElement?.parentElement;
+                    if (!column) return;
+                    e.preventDefault();
+                    const bottom = column.getBoundingClientRect().bottom;
+                    const room = column.getBoundingClientRect().height;
+                    const move = (m: PointerEvent) =>
+                      setAgentHeight(
+                        Math.round(Math.min(room - 120, Math.max(120, bottom - m.clientY))),
+                      );
+                    const up = () => {
+                      window.removeEventListener('pointermove', move);
+                      window.removeEventListener('pointerup', up);
+                    };
+                    window.addEventListener('pointermove', move);
+                    window.addEventListener('pointerup', up);
+                  }}
+                />
+              )}
+              <AgentPanel
+                suggestions={AGENT_SUGGESTIONS}
+                onApplied={() => void refreshAfterAgent()}
+                collapsed={agentFolded}
+                onCollapsedChange={setAgentFolded}
+              />
+            </div>
+          </div>
         </div>
 
         <SettingsDialog
