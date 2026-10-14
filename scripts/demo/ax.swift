@@ -8,6 +8,8 @@
 //                         n-th element named <name>: a slider after its label
 //   ax slider <label> [n] the slider after the n-th (default last) text exactly <label>, as
 //                         "thumbX y trackX trackWidth", to drag to a fraction
+//   ax window [x y w h]   the main window's frame as "x y w h" (points); with
+//                         numbers, leaves full screen and moves it there first
 //
 // Names are matched without case against title, description, label and value.
 import AppKit
@@ -39,6 +41,28 @@ func frame(_ e: AXUIElement) -> CGRect? {
     AXValueGetValue(p as! AXValue, .cgPoint, &pt)
     AXValueGetValue(s as! AXValue, .cgSize, &sz)
     return CGRect(origin: pt, size: sz)
+}
+
+if args.count > 1, args[1] == "window" {
+    guard let w = (attr(root, kAXMainWindowAttribute) ?? (attr(root, kAXWindowsAttribute) as? [AnyObject])?.first)
+    else { FileHandle.standardError.write("no window\n".data(using: .utf8)!); exit(1) }
+    let win = w as! AXUIElement
+    if args.count >= 6, let x = Double(args[2]), let y = Double(args[3]),
+       let wd = Double(args[4]), let ht = Double(args[5]) {
+        if (attr(win, "AXFullScreen") as? Bool) == true {
+            AXUIElementSetAttributeValue(win, "AXFullScreen" as CFString, kCFBooleanFalse)
+            Thread.sleep(forTimeInterval: 1.2) // the exit animation
+        }
+        var p = CGPoint(x: x, y: y), s = CGSize(width: wd, height: ht)
+        // Size, move, size again: a window clamped by the screen edge on the
+        // first resize takes its full size once it has moved.
+        AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &s)!)
+        AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, AXValueCreate(.cgPoint, &p)!)
+        AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, AXValueCreate(.cgSize, &s)!)
+    }
+    guard let f = frame(win) else { exit(1) }
+    print(Int(f.minX), Int(f.minY), Int(f.width), Int(f.height))
+    exit(0)
 }
 
 struct Found { let role: String; let name: String; let value: String; let frame: CGRect }

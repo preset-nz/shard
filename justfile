@@ -168,6 +168,14 @@ demo *args:
     for t in rec ui ax; do [ target/demo/$t -nt scripts/demo/$t.swift ] || swiftc -O scripts/demo/$t.swift -o target/demo/$t; done
     python3 scripts/demo/shard_demo.py {{args}}
 
+# Example: just window 100 100 1280 720 (points; a 2× screen records 2560×1440)
+# Print Shard's window frame as "x y w h", or move and size it first
+[group('eval')]
+window *args:
+    mkdir -p target/demo
+    [ target/demo/ax -nt scripts/demo/ax.swift ] || swiftc -O scripts/demo/ax.swift -o target/demo/ax
+    target/demo/ax window {{args}}
+
 # Example: just agent-logs search 'kind:tool refused'
 # Index File > Save Agent Session's folders: digests, a table, full-text search
 [group('eval')]
