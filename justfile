@@ -75,6 +75,13 @@ shard-write sketch out:
 docs:
     cargo run -q -p shard --example shard-docs
 
+# The node pages' sound clips: a voice reading docs/quote.txt over the drone,
+# then every recipe through an offline session, to docs/nodes/audio/. Rewrites
+# each page's Examples block. Needs macOS `say` and ffmpeg.
+[group('docs')]
+examples:
+    cargo run -q --release -p shard --example shard-examples
+
 # Fails if a page is missing, stale or orphaned, or a kind has no summary.
 [group('docs')]
 docs-check:

@@ -84,8 +84,19 @@ pub fn load(path: &str, target_rate: f32) -> Result<Loaded, String> {
 /// Two seconds of detuned drone, so the app makes sound the moment it opens
 /// rather than sitting silent until someone finds a file.
 pub fn startup_drone(sample_rate: f32) -> Loaded {
-    let n = (sample_rate * 2.0) as usize;
-    let samples = (0..n)
+    let samples = drone(sample_rate, 2.0);
+    Loaded {
+        name: "built-in drone".into(),
+        peaks: peaks(&samples, PEAKS),
+        samples,
+    }
+}
+
+/// The built-in drone at any length: three detuned partials over A2, swelling
+/// every two seconds. The node pages' example sample lays a voice over it.
+pub fn drone(sample_rate: f32, seconds: f32) -> Vec<f32> {
+    let n = (sample_rate * seconds) as usize;
+    (0..n)
         .map(|i| {
             let t = i as f32 / sample_rate;
             let body = (core::f32::consts::TAU * 110.0 * t).sin() * 0.5
@@ -93,12 +104,7 @@ pub fn startup_drone(sample_rate: f32) -> Loaded {
                 + (core::f32::consts::TAU * 220.7 * t).sin() * 0.2;
             body * (0.4 + 0.6 * (core::f32::consts::TAU * 0.25 * t).sin().abs())
         })
-        .collect::<Vec<f32>>();
-    Loaded {
-        name: "built-in drone".into(),
-        peaks: peaks(&samples, PEAKS),
-        samples,
-    }
+        .collect()
 }
 
 /// The most buckets a zoomed view may ask for.

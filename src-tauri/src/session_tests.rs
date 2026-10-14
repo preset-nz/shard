@@ -8,58 +8,14 @@ use std::sync::Arc;
 
 use shard_dsp::arrangement;
 use shard_dsp::fx;
-use shard_dsp::{Engine, ParamBank};
 
-use crate::session::{Feeds, Session, VoiceFeed, Voices};
-use crate::source;
 use crate::tracker::{self, Tracker};
 
 /// A session with no sound card, and the engine inputs it feeds.
-pub(crate) struct Rig {
-    pub(crate) session: Session,
-    /// The current patch's values, as the patch view reads them.
-    pub(crate) bank: Arc<ParamBank>,
-    pub(crate) arrangement: Arc<ParamBank>,
-    pub(crate) voices: Arc<Voices>,
-    /// What the voice playing the current patch heard, as `render` writes it.
-    pub(crate) heard: ParamBank,
-}
-
-impl Rig {
-    /// Voice `i`'s feed: track `i`'s, or the audition's.
-    pub(crate) fn voice(&self, i: usize) -> &VoiceFeed {
-        &self.voices.voice[i]
-    }
-
-    /// One block through the audio callback's own hand-offs and render, as
-    /// `lib.rs` makes them, then what `meters` frees collected.
-    pub(crate) fn block(&self, e: &mut Engine, out: &mut [f32], held: &mut crate::Held) {
-        crate::hand_over(e, &self.voices, &self.arrangement, held);
-        crate::render(e, &self.voices, &self.heard, out);
-        self.voices.collect_retired();
-    }
-}
+pub(crate) type Rig = crate::offline::Offline;
 
 pub(crate) fn rig() -> Rig {
-    let sample_rate = 48_000.0;
-    let bank = Arc::new(ParamBank::new());
-    let arrangement = Arc::new(ParamBank::for_table(arrangement::params()));
-    let voices = Arc::new(Voices::new());
-    voices.prime();
-    let feeds = Feeds {
-        bank: Arc::clone(&bank),
-        arrangement: Arc::clone(&arrangement),
-        voices: Arc::clone(&voices),
-    };
-    let drone = Arc::new(source::startup_drone(sample_rate));
-    let session = Session::new(feeds, drone, sample_rate).expect("a session starts");
-    Rig {
-        session,
-        bank,
-        arrangement,
-        voices,
-        heard: ParamBank::new(),
-    }
+    Rig::new(48_000.0)
 }
 
 /// A session holding one melody track and no drums track: a new session

@@ -45,6 +45,7 @@ mod midi;
 mod mix_tests;
 mod modulation;
 pub mod object_model;
+pub mod offline;
 #[cfg(test)]
 mod patch_tests;
 mod profile;
