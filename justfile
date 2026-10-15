@@ -146,11 +146,16 @@ package: build
     cp -R "target/release/bundle/macos/${product}.app" "$outdir/"
     sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
     cp THIRD-PARTY-LICENSES LICENSE "$outdir/"
+    # Work adapted into Shard and its packages, with the full licence texts:
+    # free-midi-chords (ours) and the chat components (ux-kit's). The full
+    # texts for every package wait on `preset-compliance notices`.
+    cat THIRD_PARTY_NOTICES.md node_modules/@preset.nz/ux-kit/THIRD_PARTY_NOTICES.md \
+        > "$outdir/THIRD-PARTY-NOTICES.md"
     # ditto, not zip, for the .app: plain zip drops the metadata the
     # signature depends on, which is another way to get "app is damaged".
     (cd "$outdir" && \
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
-        zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-LICENSES)
+        zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-LICENSES THIRD-PARTY-NOTICES.md)
     echo "Packaged: $outdir/${product}-v${version}.zip"
 
 # Example: just eval-agent run --model qwen/qwen3.6-35b-a3b --think off on
