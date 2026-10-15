@@ -91,6 +91,20 @@ export function agentSettings(): Promise<AgentSettings> {
   return invoke('agent_settings');
 }
 
+/** A model the server offers. `loaded` is known only from LM Studio. */
+export interface ModelEntry {
+  id: string;
+  loaded: boolean | null;
+}
+
+/**
+ * The chat models the server at `baseUrl` offers, for the Settings dropdown.
+ * Rejects when nothing answers there; empty when the server doesn't list them.
+ */
+export function agentModels(baseUrl: string): Promise<ModelEntry[]> {
+  return invoke('agent_models', { baseUrl });
+}
+
 /** Saves where the model is; an empty address goes back to LM Studio's. */
 export function setAgentSettings(settings: AgentSettings): Promise<AgentSettings> {
   return invoke('set_agent_settings', { settings });

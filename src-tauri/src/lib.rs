@@ -1125,6 +1125,21 @@ fn agent_settings(agent: tauri::State<'_, AgentState>) -> agent::client::Setting
         .clone()
 }
 
+/// The models the server at `base_url` offers, for the Settings dropdown.
+/// Fails when nothing answers there; empty when it doesn't list them.
+#[tauri::command]
+async fn agent_models(base_url: String) -> Result<Vec<agent::client::ModelEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let settings = agent::client::Settings {
+            base_url,
+            ..agent::client::Settings::default()
+        };
+        agent::client::Http::new(&settings).models()
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
 /// Sets where the model is, and keeps it for the next launch.
 #[tauri::command]
 fn set_agent_settings(
@@ -2776,6 +2791,7 @@ pub fn run() {
             agent_dump,
             copy_text,
             agent_settings,
+            agent_models,
             set_agent_settings,
         ])
         .build(tauri::generate_context!())

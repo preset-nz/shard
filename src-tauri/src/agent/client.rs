@@ -438,6 +438,56 @@ impl Http {
     }
 }
 
+/// A model the server offers, for the Settings dropdown. `loaded` is known
+/// only from LM Studio's listing; a plain OpenAI listing says nothing of it.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ModelEntry {
+    pub id: String,
+    pub loaded: Option<bool>,
+}
+
+/// The chat models in a listing: LM Studio's (`/api/v0/models`, with type and
+/// state, embeddings left out) or OpenAI's (`/v1/models`, ids only).
+pub fn model_entries(listing: &Json) -> Vec<ModelEntry> {
+    listing
+        .get("data")
+        .and_then(Json::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|m| match m.get("type").and_then(Json::as_str) {
+            Some(t) => matches!(t, "llm" | "vlm"),
+            None => true,
+        })
+        .filter_map(|m| {
+            let id = m.get("id").and_then(Json::as_str)?.to_string();
+            let loaded = m.get("state").and_then(Json::as_str).map(|s| s == "loaded");
+            Some(ModelEntry { id, loaded })
+        })
+        .collect()
+}
+
+impl Http {
+    /// The models the server offers: LM Studio's listing, else the OpenAI
+    /// one, else none (the dialog then takes a typed name).
+    pub fn models(&self) -> Result<Vec<ModelEntry>, String> {
+        if let Some(listing) = self.listing()? {
+            return Ok(model_entries(&listing));
+        }
+        let openai = self
+            .agent
+            .get(&format!("{}/models", self.base))
+            .config()
+            .timeout_global(Some(Duration::from_secs(5)))
+            .build()
+            .call()
+            .ok()
+            .filter(|r| r.status().is_success())
+            .and_then(|mut r| r.body_mut().read_to_string().ok())
+            .and_then(|t| serde_json::from_str::<Json>(&t).ok());
+        Ok(openai.as_ref().map(model_entries).unwrap_or_default())
+    }
+}
+
 /// What a reply says when no server answers at the configured address.
 pub fn unreachable(base: &str) -> String {
     format!("Nothing answers at {base}. Start the server in LM Studio, then ask again.")
@@ -633,6 +683,27 @@ mod tests {
             pick_model(Some(&none), "").unwrap_err(),
             "No model loaded in LM Studio. Load one there, then ask again."
         );
+    }
+
+    #[test]
+    fn the_dropdown_lists_chat_models_with_their_state() {
+        let ids = |l: &Json| -> Vec<(String, Option<bool>)> {
+            model_entries(l)
+                .into_iter()
+                .map(|m| (m.id, m.loaded))
+                .collect()
+        };
+        assert_eq!(
+            ids(&listing()),
+            [
+                ("prism-ml/bonsai-27b".into(), Some(false)),
+                ("qwen/qwen3.6-35b-a3b".into(), Some(true)),
+                ("some/vision".into(), Some(true)),
+            ]
+        );
+        // OpenAI's listing: ids only, state unknown.
+        let openai = json!({ "object": "list", "data": [{ "id": "llama3", "object": "model" }] });
+        assert_eq!(ids(&openai), [("llama3".into(), None)]);
     }
 
     #[test]

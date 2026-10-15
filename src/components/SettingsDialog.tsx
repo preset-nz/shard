@@ -11,17 +11,38 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
-import { type AgentSettings, agentSettings, setAgentSettings } from '@/lib/agent';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
+import {
+  type AgentSettings,
+  agentModels,
+  agentSettings,
+  type ModelEntry,
+  setAgentSettings,
+} from '@/lib/agent';
+
+/** The dropdown's value for "whatever is loaded", which saves as empty. */
+const AUTO = 'auto';
+
 import { type ParamValues, scopeKeyFor } from '@/scope';
 
 /**
  * Where the agent's model is. Read when the dialog opens, saved when a field
  * is left (or Enter is pressed); Rust cleans the values and says what it kept.
+ * The model is a dropdown of what the server lists, read again whenever the
+ * address is saved; a server that lists nothing gets a typed name instead.
  */
 function AgentFields({ open, onError }: { open: boolean; onError: (message: string) => void }) {
   const [saved, setSaved] = useState<AgentSettings | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
+  // Null until listed, or when nothing answers at the address.
+  const [models, setModels] = useState<ModelEntry[] | null>(null);
   const urlId = useId();
   const modelId = useId();
 
@@ -36,9 +57,23 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
       .catch((e) => onError(String(e)));
   }, [open, onError]);
 
-  const commit = () => {
-    if (!saved || (baseUrl === saved.baseUrl && model === saved.model)) return;
-    setAgentSettings({ baseUrl, model })
+  const listedAt = saved?.baseUrl;
+  useEffect(() => {
+    if (!open || listedAt === undefined) return;
+    let current = true;
+    setModels(null);
+    agentModels(listedAt).then(
+      (m) => current && setModels(m),
+      () => current && setModels(null),
+    );
+    return () => {
+      current = false;
+    };
+  }, [open, listedAt]);
+
+  const save = (next: AgentSettings) => {
+    if (!saved || (next.baseUrl === saved.baseUrl && next.model === saved.model)) return;
+    setAgentSettings(next)
       .then((s) => {
         setSaved(s);
         setBaseUrl(s.baseUrl);
@@ -46,6 +81,7 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
       })
       .catch((e) => onError(String(e)));
   };
+  const commit = () => save({ baseUrl, model });
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') commit();
   };
@@ -71,21 +107,80 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
         <label htmlFor={modelId} className="text-muted-foreground">
           Model
         </label>
-        <Input
-          id={modelId}
-          value={model}
-          placeholder="Whatever is loaded in LM Studio"
-          onChange={(e) => setModel(e.target.value)}
-          onBlur={commit}
-          onKeyDown={onEnter}
-          disabled={!saved}
-          spellCheck={false}
-        />
+        {models?.length ? (
+          <ModelSelect
+            id={modelId}
+            models={models}
+            value={model}
+            onPick={(m) => {
+              setModel(m);
+              save({ baseUrl: saved?.baseUrl ?? baseUrl, model: m });
+            }}
+          />
+        ) : (
+          <Input
+            id={modelId}
+            value={model}
+            placeholder="Whatever is loaded in LM Studio"
+            onChange={(e) => setModel(e.target.value)}
+            onBlur={commit}
+            onKeyDown={onEnter}
+            disabled={!saved}
+            spellCheck={false}
+          />
+        )}
       </div>
       <p className="text-xs text-muted-foreground">
         Sampling: Qwen&apos;s recommended values (edit agent.json to change them)
       </p>
     </div>
+  );
+}
+
+/**
+ * The model, from the server's list. A model that isn't loaded can be picked,
+ * but a reply asks the server only for a loaded one and says so otherwise:
+ * LM Studio would load a named model, 20 GB or more, behind your back.
+ */
+function ModelSelect({
+  id,
+  models,
+  value,
+  onPick,
+}: {
+  id: string;
+  models: ModelEntry[];
+  value: string;
+  onPick: (model: string) => void;
+}) {
+  const label = (m: ModelEntry) => (m.loaded === false ? `${m.id} (not loaded)` : m.id);
+  const items: Record<string, string> = {
+    [AUTO]: 'Whatever is loaded',
+    ...Object.fromEntries(models.map((m) => [m.id, label(m)])),
+  };
+  const current = value.trim() === '' || value.trim().toLowerCase() === AUTO ? AUTO : value;
+  // A saved model the server no longer lists still shows, rather than a blank.
+  if (!(current in items)) items[current] = `${current} (not listed)`;
+  return (
+    <Select
+      items={items}
+      value={current}
+      onValueChange={(v) => {
+        const next = v === AUTO ? '' : String(v);
+        if (next !== value) onPick(next);
+      }}
+    >
+      <SelectTrigger id={id} size="sm" className="w-full text-xs">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {Object.entries(items).map(([v, l]) => (
+          <SelectItem key={v} value={v} className="text-xs">
+            {l}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 
