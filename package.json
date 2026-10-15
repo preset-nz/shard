@@ -15,7 +15,7 @@
     "@preset.nz/app-kit": "^0.1.3",
     "@preset.nz/facets": "^0.2.0",
     "@preset.nz/math": "^0.1.0",
-    "@preset.nz/ux-kit": "link:../../packages/ux-kit",
+    "@preset.nz/ux-kit": "^0.1.1",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-fs": "^2",
