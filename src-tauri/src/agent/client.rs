@@ -391,6 +391,7 @@ impl Stream {
 /// The server, over plain HTTP.
 pub struct Http {
     agent: ureq::Agent,
+    base: String,
     url: String,
     models: String,
 }
@@ -404,6 +405,7 @@ impl Http {
             .build();
         Self {
             agent: ureq::Agent::new_with_config(config),
+            base: settings.base_url.trim().trim_end_matches('/').to_string(),
             url: format!(
                 "{}/chat/completions",
                 settings.base_url.trim().trim_end_matches('/')
@@ -413,8 +415,9 @@ impl Http {
     }
 
     /// LM Studio's listing of its models with their state, or none when the
-    /// server has no such listing or can't be reached.
-    fn listing(&self) -> Option<Json> {
+    /// server has no such listing. An error when nothing answers at all.
+    fn listing(&self) -> Result<Option<Json>, String> {
+        // Statuses aren't errors on this agent, so an error is the transport.
         let mut response = self
             .agent
             .get(&self.models)
@@ -422,20 +425,27 @@ impl Http {
             .timeout_global(Some(Duration::from_secs(5)))
             .build()
             .call()
-            .ok()?;
+            .map_err(|_| unreachable(&self.base))?;
         if !response.status().is_success() {
-            return None;
+            return Ok(None);
         }
-        let text = response.body_mut().read_to_string().ok()?;
-        serde_json::from_str::<Json>(&text)
+        let Ok(text) = response.body_mut().read_to_string() else {
+            return Ok(None);
+        };
+        Ok(serde_json::from_str::<Json>(&text)
             .ok()
-            .filter(|j| j.get("data").is_some_and(Json::is_array))
+            .filter(|j| j.get("data").is_some_and(Json::is_array)))
     }
+}
+
+/// What a reply says when no server answers at the configured address.
+pub fn unreachable(base: &str) -> String {
+    format!("Nothing answers at {base}. Start the server in LM Studio, then ask again.")
 }
 
 impl Model for Http {
     fn resolve(&mut self, configured: &str) -> Result<String, String> {
-        pick_model(self.listing().as_ref(), configured)
+        pick_model(self.listing()?.as_ref(), configured)
     }
 
     fn turn(
@@ -623,6 +633,22 @@ mod tests {
             pick_model(Some(&none), "").unwrap_err(),
             "No model loaded in LM Studio. Load one there, then ask again."
         );
+    }
+
+    #[test]
+    fn no_server_says_so_rather_than_asking_for_a_model() {
+        // A port that was just free: nothing listens on it.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .unwrap()
+            .local_addr()
+            .unwrap()
+            .port();
+        let base = format!("http://127.0.0.1:{port}/v1");
+        let mut http = Http::new(&Settings {
+            base_url: format!("{base}/"),
+            ..Settings::default()
+        });
+        assert_eq!(http.resolve("").unwrap_err(), unreachable(&base));
     }
 
     #[test]
