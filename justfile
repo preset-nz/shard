@@ -148,7 +148,7 @@ package: build
     # Every shipped package's licence text, from the lock (ux-kit's chat
     # notices included), and the work adapted into Shard itself. By path
     # until compliance releases `notices` (pending-releases).
-    cargo run -q --release --manifest-path ../../packages/compliance/Cargo.toml -- \
+    cargo run -q --release --manifest-path ../../tools/compliance/Cargo.toml -- \
         notices --title "${product}: third-party notices" --out "$outdir/THIRD-PARTY-NOTICES.txt"
     cp THIRD_PARTY_NOTICES.md "$outdir/"
     # ditto, not zip, for the .app: plain zip drops the metadata the
