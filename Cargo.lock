@@ -3230,7 +3230,7 @@ dependencies = [
 
 [[package]]
 name = "rhizome-core"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "serde",
  "serde_json",
@@ -3240,7 +3240,7 @@ dependencies = [
 
 [[package]]
 name = "rhizome-pom"
-version = "0.1.5"
+version = "0.1.7"
 dependencies = [
  "rhizome-core",
  "serde",

@@ -22,8 +22,8 @@ shard-dsp = { path = "crates/shard-dsp" }
 
 # rhizome by path, until its next publish (family rule: path dependencies are
 # allowed, family-alignment "Path dependencies are allowed", 2026-10-12). A clean
-# clone builds only beside the packages/ checkouts, and CI fails until Shard is
-# back on versions. Listed in runbooks/pending-releases.md.
+# clone builds only beside a checkout of the preset-nz/packages monorepo, which
+# CI clones (`packages: true`). Listed in runbooks/pending-releases.md.
 [patch.crates-io]
 rhizome-core = { path = "../../packages/rhizome/crates/rhizome-core" }
 rhizome-pom = { path = "../../packages/rhizome/crates/rhizome-pom" }

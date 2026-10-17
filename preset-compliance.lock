@@ -6,11 +6,11 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "f004fb2f223715133590ebed97d773a888d2469e975931190a6df29a0109a1c9"
+sha256 = "e135ebb3aaeb84fb330b1da9138664c87f914737ed80ab222ed792ffcb00e651"
 
 [[inputs]]
 path = "Cargo.toml"
-sha256 = "42eaab59d6afeb83c07bc2c820e36cd535572c8b1427b94986c7b3934cd90090"
+sha256 = "75f2045f9a4ed2466ab67b4c5e98957c58b1c4e65540f85e58463a64fcd7857d"
 
 [[inputs]]
 path = "crates/shard-dsp/Cargo.toml"
@@ -31,7 +31,7 @@ sha256 = "de14945cc3541e945ea99a520e28d25d366053863c4df261a1bcd1e5e4cf93bd"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "7369f1335cddeb7bd114e96ded0a410eca822d0f6ab299ac53e0602055befc6e"
+sha256 = "3418d75a9ca9563e1bebf2966f886995c4119bce88ad0a8ec4b397b8c17c8f4c"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2540,7 +2540,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "rhizome-core"
-version = "0.1.5"
+version = "0.1.7"
 source = "path"
 declared = "MIT"
 scope = "shipped"
@@ -2548,7 +2548,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "rhizome-pom"
-version = "0.1.5"
+version = "0.1.7"
 source = "path"
 declared = "MIT"
 scope = "shipped"

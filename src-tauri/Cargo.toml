@@ -24,8 +24,8 @@ tauri-plugin-fs = "2.5.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # The session lives in rhizome (epic 32). The workspace Cargo.toml patches it to
-# the sibling checkout in packages/ until the next publish (family rule: path
-# dependencies are allowed); the patch wins over these versions.
+# the packages monorepo checkout beside the app until the next publish (family
+# rule: path dependencies are allowed); the patch wins over these versions.
 rhizome-core = "0.1.5"
 rhizome-pom = "0.1.5"
 # Menus, undo titles, files and relaunch, shared with the family (epic 32, story 4).
