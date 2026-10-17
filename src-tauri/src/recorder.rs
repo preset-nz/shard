@@ -911,8 +911,10 @@ mod tests {
         let thr = 10f32.powf(-50.0 / 20.0);
         let n = fake
             .heard
-            .chunks_exact(2)
-            .position(|f| f[0].abs() >= thr || f[1].abs() >= thr)
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .position(|&[l, r]| l.abs() >= thr || r.abs() >= thr)
             .expect("the tone is heard");
         let pre = fake.arm.preroll_frames();
         assert_eq!(pre, 960, "20 ms at 48 kHz");
