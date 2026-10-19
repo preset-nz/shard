@@ -20,14 +20,6 @@ hound = "3"
 midir = "0.11"
 shard-dsp = { path = "crates/shard-dsp" }
 
-# rhizome-core by path while preset-docs is: preset-docs isn't published yet,
-# takes rhizome-core by path inside the packages monorepo, and `just docs` hands
-# it Shard's schema, so both must be the one crate. Drop this when preset-docs
-# is on crates.io (runbooks/pending-releases.md). CI clones the monorepo
-# (`packages: true`).
-[patch.crates-io]
-rhizome-core = { path = "../../packages/rhizome/crates/rhizome-core" }
-
 # Decoding a WAV is a tight loop over every sample. Unoptimised, a three-minute
 # stereo file took 2.05 s to decode, against 0.13 s at opt-level 1 (measured
 # 2026-09-15). hound's sample reader is generic, so it compiles into `shard`

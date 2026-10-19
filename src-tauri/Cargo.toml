@@ -23,8 +23,7 @@ tauri-plugin-dialog = "2.7.1"
 tauri-plugin-fs = "2.5.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# The session lives in rhizome (epic 32). The workspace Cargo.toml patches
-# rhizome-core to the packages monorepo while preset-docs needs it by path.
+# The session lives in rhizome (epic 32).
 rhizome-core = "0.1.7"
 rhizome-pom = "0.1.7"
 # Menus, undo titles, files and relaunch, shared with the family (epic 32, story 4).
@@ -37,6 +36,5 @@ hound.workspace = true
 midir.workspace = true
 
 [dev-dependencies]
-# `just docs`: node pages from the schema (examples/shard-docs.rs). By path until
-# preset-docs is first published (runbooks/pending-releases.md).
-preset-docs = { path = "../../../packages/preset-docs", features = ["rhizome"] }
+# `just docs`: node pages from the schema (examples/shard-docs.rs).
+preset-docs = { version = "0.1", features = ["rhizome"] }

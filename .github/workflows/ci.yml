@@ -17,5 +17,3 @@ jobs:
     uses: preset-nz/workflows/.github/workflows/check.yml@v1
     with:
       tauri: true
-      # rhizome and preset-docs come from ../../packages until they are on the registries.
-      packages: true
