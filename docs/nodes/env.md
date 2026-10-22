@@ -2,6 +2,7 @@
 title: Envelope
 node: env
 group: effect
+category: dynamics
 summary: Shapes how each note swells in and dies away; at its neutral setting it passes the sound untouched.
 ---
 

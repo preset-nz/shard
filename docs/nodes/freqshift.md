@@ -2,6 +2,7 @@
 title: Shifter
 node: freqshift
 group: effect
+category: modulation
 summary: "Moves every frequency by the same number of hertz, so the sound turns inharmonic: clangs, spirals and detuned shimmer."
 ---
 

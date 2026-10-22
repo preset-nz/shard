@@ -2,6 +2,7 @@
 title: FM
 node: fm
 group: generator
+category: synthesis
 summary: "A two-operator FM voice: a pitched tone that one oscillator bends with another, from soft bell to harsh metal."
 ---
 

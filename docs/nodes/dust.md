@@ -2,6 +2,7 @@
 title: Dust
 node: dust
 group: generator
+category: synthesis
 summary: Sparse random clicks, from the odd tick to a dense crackle, like dust on a record.
 ---
 

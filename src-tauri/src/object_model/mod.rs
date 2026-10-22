@@ -402,10 +402,39 @@ fn words(t: NodeType, label: &str, summary: &str, group: &str) -> NodeType {
 /// A kind with a switch row (`<kind>.on`) is named and summed up by it: the
 /// row's name is the label, its description the summary.
 fn words_from_switch(t: NodeType, rows: &[ParamDef], group: &str) -> NodeType {
-    match rows.iter().find(|r| r.id.ends_with(".on")) {
+    let t = match rows.iter().find(|r| r.id.ends_with(".on")) {
         Some(sw) => words(t, sw.name, sw.description, group),
         None => t,
+    };
+    match category_of(t.name()) {
+        Some(c) => t.category(c),
+        None => t,
     }
+}
+
+/// What each generator and effect is to someone browsing (Georg,
+/// 2026-10-23): the docs index sorts by it. Words on the kind, never in a
+/// saved file. The other kinds have none, and the index falls back to their
+/// group.
+pub const CATEGORIES: &[(&str, &[&str])] = &[
+    ("sample", &["material", "grain"]),
+    ("synthesis", &["fm", "noise", "dust"]),
+    (
+        "time",
+        &["delay", "echo", "rise", "bands", "repeat", "reverb"],
+    ),
+    ("modulation", &["chorus", "flanger", "ring", "freqshift"]),
+    ("filter", &["filter", "ladder", "peaks"]),
+    ("distortion", &["drive", "crush", "wear"]),
+    ("dynamics", &["env", "shaper"]),
+    ("pitch", &["overtone"]),
+];
+
+fn category_of(kind: &str) -> Option<&'static str> {
+    CATEGORIES
+        .iter()
+        .find(|(_, kinds)| kinds.contains(&kind))
+        .map(|(c, _)| *c)
 }
 
 fn with_rows(mut t: NodeType, rows: &[ParamDef]) -> NodeType {

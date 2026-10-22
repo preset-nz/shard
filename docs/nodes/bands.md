@@ -2,6 +2,7 @@
 title: Band Delay
 node: bands
 group: effect
+category: time
 summary: Splits the sound into low, mid and high and gives each band its own echo, at times that fall into a harmonic series.
 ---
 

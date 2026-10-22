@@ -2,6 +2,7 @@
 title: Flanger
 node: flanger
 group: effect
+category: modulation
 summary: A very short swept delay mixed with the dry sound, so notches sweep through it with a jet-like whoosh.
 ---
 

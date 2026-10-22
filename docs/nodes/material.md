@@ -2,6 +2,7 @@
 title: Sample
 node: material
 group: generator
+category: sample
 summary: The loaded sample played as it is, ahead of the effects; the other generators sound alongside it.
 ---
 

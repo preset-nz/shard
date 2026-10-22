@@ -2,6 +2,7 @@
 title: Ladder
 node: ladder
 group: effect
+category: filter
 summary: "A driven four-pole low-pass after the patch filter, modelled on the Moog ladder: growls when pushed, whistles at full resonance."
 ---
 

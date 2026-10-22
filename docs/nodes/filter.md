@@ -2,6 +2,7 @@
 title: Filter
 node: filter
 group: effect
+category: filter
 summary: A resonant filter after all the effects, taking away the highs, the lows or everything outside a band.
 ---
 
