@@ -2,6 +2,7 @@
 title: Reverb
 node: reverb
 group: effect
+category: time
 summary: A simulated space around the sound, from a small room to a long hall or plate tail.
 ---
 

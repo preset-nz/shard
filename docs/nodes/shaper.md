@@ -2,6 +2,7 @@
 title: Transient
 node: shaper
 group: effect
+category: dynamics
 summary: Pushes the attack and the tail of a sound up or down, by how fast it changes rather than how loud it is.
 ---
 

@@ -2,6 +2,7 @@
 title: Overtone
 node: overtone
 group: effect
+category: pitch
 summary: "Adds layers made from the sound itself: an octave down, an octave up and a fifth up."
 ---
 

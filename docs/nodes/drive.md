@@ -2,6 +2,7 @@
 title: Drive
 node: drive
 group: effect
+category: distortion
 summary: Bends the sound out of shape with a curve, then darkens it with a tone filter, from warm overdrive to harsh fold.
 ---
 
