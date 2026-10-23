@@ -188,6 +188,7 @@ pub fn kind_name(kind: LaneKind) -> &'static str {
         LaneKind::Kick => "kick",
         LaneKind::Snare => "snare",
         LaneKind::Hat => "hat",
+        LaneKind::Material => "material",
     }
 }
 

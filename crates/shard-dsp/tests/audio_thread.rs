@@ -848,8 +848,15 @@ fn adding_and_removing_lanes_while_playing_never_touches_the_allocator() {
         // replaced or loses it, and what came back is freed.
         if block % 15 == 5 {
             let v = (block / 15) % MAX_LANES;
-            let lane =
-                ((block / 15) % 4 != 3).then(|| Lane::new(KINDS[(block / 7) % KINDS.len()], SR));
+            let lane = ((block / 15) % 4 != 3).then(|| match (block / 7) % (KINDS.len() + 1) {
+                // A material lane, trimmed, longer than a few blocks.
+                3 => Lane::material(
+                    (0..3_000).map(|i| (i as f32 * 0.03).sin()).collect(),
+                    0.1,
+                    0.9,
+                ),
+                k => Lane::new(KINDS[k], SR),
+            });
             swap.lock().unwrap()[v] = Some(lane);
             changes += 1;
             *retired.lock().unwrap() = Default::default();

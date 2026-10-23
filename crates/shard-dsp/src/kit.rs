@@ -1,4 +1,5 @@
-//! The drum kit: kick, snare and hat, synthesised, on the transport's clock.
+//! The drum kit: lanes of synthesised drums or materials, on the transport's
+//! clock.
 //!
 //! A stop-gap until roadmap row 25 (a kit sliced from a material). Georg,
 //! 2026-10-03: *"I need a quick way to play a drum beat, base, snare, hihat
@@ -24,13 +25,22 @@
 //!   thread (`Lane::new`), and swapped into its slot (`Kit::swap_lane`); the
 //!   lane it replaces is handed back to be dropped there too. An empty slot
 //!   costs nothing and holds no lane. A lane's slot is its identity: it keeps
-//!   it however the grid orders the lanes. Every drums track has the three
-//!   lanes `STANDARD`, kick, snare and hat, in slots `KICK`, `SNARE` and
-//!   `HAT`, until lanes are nodes (story b).
+//!   it however the grid orders the lanes. A drums track has the
+//!   lanes its `lane` nodes say (story b1); `STANDARD` is the kick, snare
+//!   and hat an engine no session feeds is built with.
 //! - **One noise for the kit.** Every lane reads the same noise sample a
 //!   frame, so adding a lane does not change another's hiss.
 //!
-//! No samples: each drum is a few lines of synthesis, sized when its lane is
+//! - **A lane can play a material** (epic 49, story d). `Lane::material` takes
+//!   the samples (mono, at the engine's rate) and a trim, and keeps the
+//!   trimmed window. A hit plays it once from its start, linearly in
+//!   velocity, to its end, whatever the step's length; the next hit cuts it
+//!   with the same tail as a drum. Kit `tune` repitches it (linear
+//!   interpolation, as a drum's pitch follows it); `decay` does not apply.
+//!   It joins the sum without the drums' glue. The buffer is freed when the
+//!   lane is handed back, off the audio thread.
+//!
+//! Each synthesised drum is a few lines of synthesis, sized when its lane is
 //! built, with nothing allocated per hit.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
@@ -46,15 +56,18 @@ pub const KICK: usize = 0;
 pub const SNARE: usize = 1;
 pub const HAT: usize = 2;
 
-/// What a lane plays: one synthesised drum.
+/// What a lane plays: one synthesised drum, or a material (its samples are
+/// on the `Lane`, so this stays a cheap tag).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LaneKind {
     Kick,
     Snare,
     Hat,
+    Material,
 }
 
-/// The lanes every drums track has, by slot: kick, snare, hat.
+/// The lanes an engine no session feeds is built with, by slot: kick,
+/// snare, hat.
 pub const STANDARD: [LaneKind; 3] = [LaneKind::Kick, LaneKind::Snare, LaneKind::Hat];
 
 /// A hit at full velocity.
@@ -298,12 +311,27 @@ fn hat(v: &mut Voice, noise: f32, hp: f32) -> f32 {
     (noise - v.lp1) * v.amp
 }
 
+/// A material's next sample, read at `phase` and moved on by `rest`, by
+/// linear interpolation. Past the end the voice stops and plays zero.
+fn play(v: &mut Voice, samples: &[f32]) -> f32 {
+    let i = v.phase as usize;
+    if i >= samples.len() {
+        v.sounding = false;
+        return 0.0;
+    }
+    let frac = v.phase - i as f32;
+    let next = samples.get(i + 1).copied().unwrap_or(0.0);
+    v.phase += v.rest;
+    (samples[i] + (next - samples[i]) * frac) * v.amp
+}
+
 impl LaneKind {
     fn render(self) -> Render {
         match self {
             Self::Kick => kick,
             Self::Snare => snare,
             Self::Hat => hat,
+            Self::Material => |_, _, _| 0.0,
         }
     }
 }
@@ -320,6 +348,10 @@ pub struct Lane {
     /// The one-pole coefficient its noise is highpassed with: the snare's
     /// and the hat's. The kick's noise is not.
     hp: f32,
+    /// A material lane's trimmed samples; empty (no allocation) for a drum.
+    /// Its voice reads them: `phase` is the position in samples, `rest` the
+    /// step a sample, `amp` the velocity.
+    samples: Vec<f32>,
 }
 
 impl Lane {
@@ -329,6 +361,7 @@ impl Lane {
             LaneKind::Kick => 0.0,
             LaneKind::Snare => one_pole(1_200.0, sample_rate),
             LaneKind::Hat => one_pole(5_000.0, sample_rate),
+            LaneKind::Material => 0.0,
         };
         Box::new(Self {
             kind,
@@ -336,7 +369,27 @@ impl Lane {
             tail: Voice::default(),
             tail_left: 0.0,
             hp,
+            samples: Vec::new(),
         })
+    }
+
+    /// A lane playing `samples` (mono, at the engine's rate) from
+    /// `trim_start` to `trim_end`, 0 to 1 of them in either order, as a
+    /// `sources::Reading` reads them. Trims in place; the window is all it
+    /// keeps. Empty samples play silence. Allocates: never on the audio
+    /// thread.
+    pub fn material(mut samples: Vec<f32>, trim_start: f32, trim_end: f32) -> Box<Self> {
+        let (lo, hi) = crate::sources::Reading {
+            trim_start,
+            trim_end,
+            ..Default::default()
+        }
+        .window(samples.len());
+        samples.truncate(hi);
+        samples.drain(..lo);
+        let mut lane = Self::new(LaneKind::Material, 0.0);
+        lane.samples = samples;
+        lane
     }
 
     pub fn kind(&self) -> LaneKind {
@@ -455,6 +508,9 @@ impl Kit {
         let Some(lane) = self.lanes[v].as_deref_mut() else {
             return;
         };
+        if lane.kind == LaneKind::Material && lane.samples.is_empty() {
+            return;
+        }
         if lane.voice.sounding {
             lane.tail = lane.voice;
             lane.tail_left = CUT_MS * 0.001 * sr;
@@ -490,6 +546,11 @@ impl Kit {
                 voice.fall = fall_over(0.12 * decay, sr);
                 voice.amp *= 1.1;
             }
+            LaneKind::Material => {
+                voice.rest = tune;
+                voice.fall = 1.0;
+                voice.amp = velocity;
+            }
         }
     }
 
@@ -512,21 +573,32 @@ impl Kit {
         for lane in self.lanes.iter_mut().flatten() {
             // This drum's own channel: its tail fading out and its hit.
             let render = lane.kind.render();
+            let material = lane.kind == LaneKind::Material;
             let mut drum = 0.0;
             if lane.tail_left > 0.0 {
                 let gain = lane.tail_left * cut;
-                drum += render(&mut lane.tail, noise, lane.hp) * gain;
+                drum += if material {
+                    play(&mut lane.tail, &lane.samples)
+                } else {
+                    render(&mut lane.tail, noise, lane.hp)
+                } * gain;
                 lane.tail_left = (lane.tail_left - 1.0).max(0.0);
             }
             let voice = &mut lane.voice;
             if voice.sounding {
-                drum += render(voice, noise, lane.hp);
+                drum += if material {
+                    play(voice, &lane.samples)
+                } else {
+                    render(voice, noise, lane.hp)
+                };
                 voice.amp *= voice.fall;
                 if voice.amp < SILENT {
                     voice.sounding = false;
                 }
             }
-            if drum != 0.0 {
+            if material {
+                out += drum;
+            } else if drum != 0.0 {
                 out += (drum * GLUE).tanh();
             }
         }
@@ -636,6 +708,92 @@ mod tests {
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0f32, f32::max);
         assert!(seam <= steady * 1.5, "seam {seam} against {steady}");
+    }
+
+    fn sine(n: usize) -> Vec<f32> {
+        (0..n)
+            .map(|i| 0.5 * (i as f32 * 0.05).sin() + 0.1)
+            .collect()
+    }
+
+    fn material_kit(samples: Vec<f32>) -> Kit {
+        let mut kit = Kit::new(SR);
+        kit.swap_lane(0, Some(Lane::material(samples, 0.0, 1.0)));
+        kit
+    }
+
+    #[test]
+    fn a_material_hit_plays_from_its_start_scaled_by_velocity() {
+        let m = sine(2_000);
+        let mut kit = material_kit(m.clone());
+        kit.hit(0, 0.5, &KitParams::default());
+        let out = render(&mut kit, 3_000);
+        for i in 0..2_000 {
+            assert!((out[i] - m[i] * 0.5).abs() < 1e-6, "sample {i}");
+        }
+        // Then silence, an exact zero, and the lane is done.
+        assert!(out[2_000..].iter().all(|&s| s == 0.0));
+        assert!(!kit.sounding());
+    }
+
+    #[test]
+    fn a_material_trim_keeps_its_window() {
+        let m = sine(1_000);
+        let mut kit = Kit::new(SR);
+        kit.swap_lane(0, Some(Lane::material(m.clone(), 0.5, 0.25)));
+        kit.hit(0, 1.0, &KitParams::default());
+        let out = render(&mut kit, 400);
+        assert!((out[0] - m[250]).abs() < 1e-6);
+        assert!((out[249] - m[499]).abs() < 1e-6);
+        assert!(out[250..].iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn tune_repitches_a_material() {
+        let m = sine(2_000);
+        let mut kit = material_kit(m.clone());
+        let p = KitParams {
+            tune: 12.0,
+            ..KitParams::default()
+        };
+        kit.hit(0, 1.0, &p);
+        let out = render(&mut kit, 1_200);
+        // An octave up reads twice as fast: half as long.
+        assert!((out[100] - m[200]).abs() < 1e-5);
+        assert!(out[1_000..].iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn a_material_hit_again_cuts_with_a_fade_not_a_click() {
+        let m: Vec<f32> = (0..20_000).map(|i| 0.5 * (i as f32 * 0.05).sin()).collect();
+        let mut kit = material_kit(m);
+        let p = KitParams::default();
+        kit.hit(0, 1.0, &p);
+        let mut out = render(&mut kit, 5_003);
+        kit.hit(0, 1.0, &p);
+        out.extend(render(&mut kit, 1_000));
+        // The old tail fading under the new hit can add two slopes, but a
+        // cut with no fade would jump by up to 0.5.
+        let steady = 0.5 * 0.05;
+        let seam = out[4_990..5_100]
+            .windows(2)
+            .map(|w| (w[1] - w[0]).abs())
+            .fold(0.0f32, f32::max);
+        assert!(seam <= steady * 2.0, "seam {seam} against {steady}");
+    }
+
+    #[test]
+    fn empty_material_is_silent() {
+        for samples in [Vec::new(), vec![0.9]] {
+            let mut kit = material_kit(samples.clone());
+            kit.hit(0, 1.0, &KitParams::default());
+            let out = render(&mut kit, 100);
+            assert!(out.iter().skip(1).all(|&s| s == 0.0));
+            assert!(!kit.sounding() || samples.len() == 1);
+        }
+        let mut kit = material_kit(Vec::new());
+        kit.hit(0, 1.0, &KitParams::default());
+        assert!(!kit.sounding());
     }
 
     #[test]
