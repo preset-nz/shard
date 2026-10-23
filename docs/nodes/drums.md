@@ -2,13 +2,13 @@
 title: Drums
 node: drums
 group: arrangement
-summary: A drum kit played by a grid of kick, snare and hat hits.
+summary: A drum kit played by a grid, a lane of hits for each drum.
 ---
 
 # Drums
 
 <!-- generated:begin — preset-docs rewrites this block; write outside it -->
-A drum kit played by a grid of kick, snare and hat hits.
+A drum kit played by a grid, a lane of hits for each drum.
 
 | Control | Range | Default | What it does |
 |---|---|---|---|

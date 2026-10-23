@@ -1,9 +1,7 @@
 import { listen } from '@tauri-apps/api/event';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
-  KIT_VOICES,
   type Kit,
-  type KitVoice,
   type PatchInfo,
   type Step,
   type Track,
@@ -48,7 +46,7 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
  * Every change hands the whole tracker up; App shows it at once and Rust
  * answers with it brought into range.
  *
- * A drums track (epic 28, story d) shows its kick, snare and hat grid
+ * A drums track (epic 28, story d) shows its grid, a row per lane,
  * instead of steps (`DrumsStrip`), and a melody track no longer shows the
  * drums under it.
  */
@@ -477,7 +475,6 @@ function MelodyStrip({
   );
 }
 
-const KIT_LABELS: Record<KitVoice, string> = { kick: 'Kick', snare: 'Snare', hat: 'Hat' };
 /** A hit at full velocity, and the ghost note a second click leaves. `HIT_MAX` and `HIT_GHOST` in Rust. */
 const HIT_MAX = 127;
 const HIT_GHOST = 48;
@@ -485,8 +482,9 @@ const HIT_GHOST = 48;
 const nextHit = (v: number) => (v === 0 ? HIT_MAX : v === HIT_MAX ? HIT_GHOST : 0);
 
 /**
- * A drums track's grid (Georg, 2026-10-03, a stop-gap until roadmap row 25):
- * a row per drum, a column a sixteenth, and any number of drums on one step.
+ * A drums track's grid (Georg, 2026-10-03): a row per lane, in the kit's
+ * order and named for it (epic 49), a column a sixteenth, and any number of
+ * lanes on one step.
  * It runs on the tracks' clock with the track's own length, so a bar of
  * drums loops under a longer line. Its switch, level, tune and decay are the
  * track's card.
@@ -508,10 +506,10 @@ function KitGrid({
   onChange: (next: Kit) => void;
 }) {
   const bars = Array.from({ length: Math.ceil(length / BAR) }, (_, b) => b);
-  const setHit = (voice: KitVoice, i: number, v: number) => {
-    const row = Array.from({ length: STEPS }, (_, j) => kit[voice][j] ?? 0);
-    row[i] = v;
-    onChange({ ...kit, [voice]: row });
+  const setHit = (lane: number, i: number, v: number) => {
+    const hits = Array.from({ length: STEPS }, (_, j) => kit.lanes[lane]?.hits[j] ?? 0);
+    hits[i] = v;
+    onChange({ ...kit, lanes: kit.lanes.map((l, n) => (n === lane ? { ...l, hits } : l)) });
   };
   return (
     <div className="flex basis-full flex-col gap-2">
@@ -520,16 +518,17 @@ function KitGrid({
         const cells = Array.from({ length: Math.min(BAR, length - first) }, (_, k) => first + k);
         return (
           <div key={bar} className="flex min-w-0 flex-col gap-1">
-            {KIT_VOICES.map((voice) => (
+            {kit.lanes.map((lane, n) => (
               <fieldset
-                key={voice}
+                // biome-ignore lint/suspicious/noArrayIndexKey: a lane is its place until lanes can move (story b2)
+                key={n}
                 className="flex min-w-0 items-center gap-1"
-                aria-label={`${name}, ${KIT_LABELS[voice]}, bar ${bar + 1}`}
+                aria-label={`${name}, ${lane.label}, bar ${bar + 1}`}
               >
                 {cells.map((i) => {
-                  const v = kit[voice][i] ?? 0;
+                  const v = lane.hits[i] ?? 0;
                   const playing = step === i;
-                  const label = `${KIT_LABELS[voice]}, step ${i + 1}`;
+                  const label = `${lane.label}, step ${i + 1}`;
                   return (
                     <button
                       key={i}
@@ -542,7 +541,7 @@ function KitGrid({
                           : `${label}: velocity ${v}. Click to ${v === HIT_MAX ? 'make it a ghost note' : 'clear it'}.`
                       }
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setHit(voice, i, nextHit(v))}
+                      onClick={() => setHit(n, i, nextHit(v))}
                       className={`h-4 w-6 shrink-0 rounded-sm border transition-colors ${
                         i % BAR > 0 && i % 4 === 0 ? 'ml-2' : ''
                       } ${
@@ -555,7 +554,7 @@ function KitGrid({
                     />
                   );
                 })}
-                {bar === 0 && <span className="pl-1 text-[10px]">{KIT_LABELS[voice]}</span>}
+                {bar === 0 && <span className="pl-1 text-[10px]">{lane.label}</span>}
               </fieldset>
             ))}
           </div>

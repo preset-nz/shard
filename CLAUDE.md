@@ -77,7 +77,11 @@ arrangement's one order `tracks` holds melody tracks (`track` nodes) and
 drums tracks (`drums` nodes, story d). The *k*-th melody track plays its own
 patch on engine voice *k*, through its own feed (`session::VoiceFeed`: bank,
 steps, readings, fader, switch and swap slots); the *k*-th drums track plays
-engine kit *k* through `session::KitFeed`. Map a track's place to its voice
+engine kit *k* through `session::KitFeed`. A drums track's lanes (epic 49)
+are `lane` nodes in its order `lanes`, the grid's, each owning its hits as
+`beat` children; a new drums track is written with four. Each lane node
+holds one kit slot for its life (`Sent::kit_slots`), so the grid's order
+never reaches the engine. Map a track's place to its voice
 or kit only through `tracker::Slot` (`Tracker::slots`), never by index. The **current patch** (epic 10) is the session's, not the
 document's: every patch-scoped command acts on it (`patch_node(tree,
 current)`, `locate`) and the patch view shows it, but it never decides what
@@ -95,7 +99,7 @@ reference to the key track's node (`om::duck_keys`), never a place; set it
 only through `Session::set_track_duck`, and Remove Track clears the
 references to the removed track in the same step. Depth, Release and Key
 only are tree values like the fader, and unlike mute. The key's steps dip
-the volume, velocity scaling depth; a drums key keys by its kick lane. A key
+the volume, velocity scaling depth; a drums key keys by its first kick lane. A key
 pumps while heard, or while Key only and not muted: a muted key, or one
 silenced by another's solo, does not. The engine finds every channel's step
 onsets for a frame before mixing any channel, so a dip starts on its key's

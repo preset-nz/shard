@@ -39,7 +39,7 @@
 //!
 //! **Sidechain ducking** (`duck.rs`, roadmap row 41): any channel can be
 //! ducked by another's steps (`set_voice_duck`, `set_kit_duck`), a kit by
-//! its kick lane. Every frame finds the steps that begin on it, for every
+//! its key lane (`set_kit_key`, slot `KICK` until set). Every frame finds the steps that begin on it, for every
 //! voice and kit, before any channel is mixed, so a dip starts on the very
 //! sample its key's step sounds, whichever order the channels are in. The
 //! dip multiplies the channel before its fader, beside the mute gate. A Key
@@ -205,11 +205,13 @@ impl Reel {
 }
 
 /// One drums track's kit in the pool (story d): its grid, its sound, its
-/// place in its own loop and its fader. Its kick lane keys whatever a drums
+/// place in its own loop and its fader. Its key lane keys whatever a drums
 /// track ducks (`duck.rs`).
 struct Drums {
     kit: Kit,
     pattern: KitPattern,
+    /// The slot whose hits key, or none: the kick's until told otherwise.
+    key: Option<usize>,
     params: KitParams,
     clock: KitClock,
     /// Its track's fader as the host last set it, and the glide.
@@ -231,6 +233,7 @@ impl Drums {
         Self {
             kit: Kit::seeded(sample_rate, salt(index)),
             pattern: KitPattern::default(),
+            key: Some(KICK),
             params: KitParams::default(),
             clock: KitClock::default(),
             gain_target: arrangement::TRACK_GAIN_DEFAULT,
@@ -519,6 +522,17 @@ impl Engine {
         lane: Option<Box<Lane>>,
     ) -> Option<Box<Lane>> {
         self.drums[k].kit.swap_lane(v, lane)
+    }
+
+    /// Which of kit `k`'s slots keys what its track ducks, or none. Slot
+    /// `KICK` until set.
+    pub fn set_kit_key(&mut self, k: usize, slot: Option<usize>) {
+        self.drums[k].key = slot.filter(|v| *v < MAX_LANES);
+    }
+
+    /// Whether anything of kit `k` still rings.
+    pub fn kit_sounding(&self, k: usize) -> bool {
+        self.drums[k].kit.sounding()
     }
 
     /// Kit `k` given the standard lanes (`kit::STANDARD`) at once.
@@ -1062,7 +1076,7 @@ impl Engine {
             // The kits, on the same clock: each reads how far the steps have
             // run, so it stays on their grid at any length of its own. Its
             // clock runs while its switch is off, so switching it on lands in
-            // step. A kit keys by its kick.
+            // step. A kit keys by its key lane.
             if self.transport.running() {
                 for &k in kits {
                     let d = &mut self.drums[k];
@@ -1075,7 +1089,7 @@ impl Engine {
                             for v in 0..MAX_LANES {
                                 d.kit.hit(v, pattern.hit(v, step), &d.params);
                             }
-                            fired[VOICES + k] = pattern.hit(KICK, step);
+                            fired[VOICES + k] = d.key.map_or(0.0, |v| pattern.hit(v, step));
                         }
                     }
                 }

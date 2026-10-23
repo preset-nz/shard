@@ -9,8 +9,9 @@ title: Shard nodes
 ## Arrangement
 
 - [Arrangement](arrangement.md): The level above the patches: tempo, swing and the tracks of steps that play them.
-- [Beat](beat.md): One position in a drums track's grid: how hard each drum hits there.
-- [Drums](drums.md): A drum kit played by a grid of kick, snare and hat hits.
+- [Beat](beat.md): One step a lane hits on, and how hard.
+- [Drums](drums.md): A drum kit played by a grid, a lane of hits for each drum.
+- [Lane](lane.md): One row of a drums track's grid: a named drum and the steps it hits on.
 - [Output](master.md): The arrangement's master level and limiter, after every track and effect.
 - [Step](step.md): One position in a track's row: whether it plays, and how.
 - [Track](track.md): A row of steps that plays one patch as a melody.

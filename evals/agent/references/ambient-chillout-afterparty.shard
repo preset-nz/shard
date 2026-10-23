@@ -44,149 +44,242 @@
         "drums.length": 32,
         "drums.on": true,
         "drums.tune": -3.0
+      },
+      "orders": {
+        "lanes": [
+          "01M5K5QB3R6QWWWRDF0E3W9EYF",
+          "01M5K5QB3RE8J3HM9JSZSTRC2Z",
+          "01M5K5QB3RXB11CGXGKPHGNH6J",
+          "01M5K5QB3RQTSJEX2ZF3EYFHBV"
+        ]
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/1",
-      "id": "01M48E19QDSWDJD1J8D9T41PD2",
-      "type": "beat",
+      "path": "/arrangements/arrangement/drums/lane",
+      "id": "01M5K5QB3R6QWWWRDF0E3W9EYF",
+      "type": "lane",
       "values": {
-        "beat.hat": 32,
-        "beat.kick": 95
+        "lane.kind": "kick",
+        "lane.label": "Kick"
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/11",
-      "id": "01M48E19QD42KTC67Q8Z7JCWF7",
-      "type": "beat",
+      "path": "/arrangements/arrangement/drums/lane-2",
+      "id": "01M5K5QB3RE8J3HM9JSZSTRC2Z",
+      "type": "lane",
       "values": {
-        "beat.hat": 60,
-        "beat.kick": 70
+        "lane.kind": "snare",
+        "lane.label": "Snare"
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/13",
-      "id": "01M48E19QDVSG16MK158374E1X",
+      "path": "/arrangements/arrangement/drums/lane-2/25",
+      "id": "01M5K5QB3RJBSQ6FBEJSQP70QE",
       "type": "beat",
       "values": {
-        "beat.hat": 32
+        "beat.velocity": 70
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/15",
-      "id": "01M48E19QDRCJX9ANPHWR7YQKQ",
+      "path": "/arrangements/arrangement/drums/lane-2/31",
+      "id": "01M5K5QB3R6M4157A7S233G4MK",
       "type": "beat",
       "values": {
-        "beat.hat": 60
+        "beat.velocity": 30
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/17",
-      "id": "01M48E19QEC1R5CB7X95NCYGS6",
+      "path": "/arrangements/arrangement/drums/lane-2/9",
+      "id": "01M5K5QB3R327JG9P6ZY66F972",
       "type": "beat",
       "values": {
-        "beat.hat": 32,
-        "beat.kick": 95
+        "beat.velocity": 70
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/19",
-      "id": "01M48E19QE9FAD7T7MRTWJHXF8",
-      "type": "beat",
+      "path": "/arrangements/arrangement/drums/lane-3",
+      "id": "01M5K5QB3RXB11CGXGKPHGNH6J",
+      "type": "lane",
       "values": {
-        "beat.hat": 60
+        "lane.kind": "hat",
+        "lane.label": "Hat closed"
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/21",
-      "id": "01M48E19QEH58DSPCRHFAX0RJ2",
+      "path": "/arrangements/arrangement/drums/lane-3/1",
+      "id": "01M5K5QB3RXJTKYMYPDSASS0CR",
       "type": "beat",
       "values": {
-        "beat.hat": 32
+        "beat.velocity": 32
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/23",
-      "id": "01M48E19QESJFP5T265RYGKV8S",
+      "path": "/arrangements/arrangement/drums/lane-3/11",
+      "id": "01M5K5QB3R9KNRX5J23BJ231M4",
       "type": "beat",
       "values": {
-        "beat.hat": 60
+        "beat.velocity": 60
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/25",
-      "id": "01M48E19QEJQZNG36YJZ8N210J",
+      "path": "/arrangements/arrangement/drums/lane-3/13",
+      "id": "01M5K5QB3RWQQE21BQEPW0Z5V5",
       "type": "beat",
       "values": {
-        "beat.hat": 32,
-        "beat.snare": 70
+        "beat.velocity": 32
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/27",
-      "id": "01M48E19QE0WTCPTDFJFD3BK29",
+      "path": "/arrangements/arrangement/drums/lane-3/15",
+      "id": "01M5K5QB3RHVV9CX6Y5QTM0ASJ",
       "type": "beat",
       "values": {
-        "beat.hat": 60,
-        "beat.kick": 70
+        "beat.velocity": 60
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/29",
-      "id": "01M48E19QER0CV4DJ13V050K5H",
+      "path": "/arrangements/arrangement/drums/lane-3/17",
+      "id": "01M5K5QB3RW8WWASQ3FP3EW5Z5",
       "type": "beat",
       "values": {
-        "beat.hat": 32
+        "beat.velocity": 32
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/3",
-      "id": "01M48E19QD0KYDJNHFRNZFRBJZ",
+      "path": "/arrangements/arrangement/drums/lane-3/19",
+      "id": "01M5K5QB3R5F1M088X0BJE86Z0",
       "type": "beat",
       "values": {
-        "beat.hat": 60
+        "beat.velocity": 60
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/30",
-      "id": "01M48E19QEP194AX5SX2D54KR8",
+      "path": "/arrangements/arrangement/drums/lane-3/21",
+      "id": "01M5K5QB3R95Z453FF2RJHQRT6",
       "type": "beat",
       "values": {
-        "beat.kick": 45
+        "beat.velocity": 32
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/31",
-      "id": "01M48E19QEFN45WC06QXTXK6D3",
+      "path": "/arrangements/arrangement/drums/lane-3/23",
+      "id": "01M5K5QB3R89YZFZNZCYEFXY86",
       "type": "beat",
       "values": {
-        "beat.hat": 60,
-        "beat.snare": 30
+        "beat.velocity": 60
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/5",
-      "id": "01M48E19QDWKM1XZ9D43FG9X3D",
+      "path": "/arrangements/arrangement/drums/lane-3/25",
+      "id": "01M5K5QB3RQGCTQQE3J3BXWBZV",
       "type": "beat",
       "values": {
-        "beat.hat": 32
+        "beat.velocity": 32
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/7",
-      "id": "01M48E19QDTARCVDAJMR1D1979",
+      "path": "/arrangements/arrangement/drums/lane-3/27",
+      "id": "01M5K5QB3RC62T1MQX75YZCZ3R",
       "type": "beat",
       "values": {
-        "beat.hat": 60
+        "beat.velocity": 60
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/9",
-      "id": "01M48E19QDX3XY8VEE77526XSB",
+      "path": "/arrangements/arrangement/drums/lane-3/29",
+      "id": "01M5K5QB3RSB54SBWXWT8NKCEC",
       "type": "beat",
       "values": {
-        "beat.hat": 32,
-        "beat.snare": 70
+        "beat.velocity": 32
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/3",
+      "id": "01M5K5QB3RFG0Z9DGAFPE6H26M",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 60
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/31",
+      "id": "01M5K5QB3RCKACMRHF6N6X85B2",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 60
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/5",
+      "id": "01M5K5QB3RGM5E01GDNG478CD5",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 32
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/7",
+      "id": "01M5K5QB3REMAN2P3QCGVWRMSF",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 60
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/9",
+      "id": "01M5K5QB3RBS3MV7ZM7WX9JWC5",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 32
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-4",
+      "id": "01M5K5QB3RQTSJEX2ZF3EYFHBV",
+      "type": "lane",
+      "values": {
+        "lane.kind": "hat",
+        "lane.label": "Hat open"
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/1",
+      "id": "01M5K5QB3RW7TRZPZCYRYHW0RE",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 95
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/11",
+      "id": "01M5K5QB3R5NZQV7NGZEDDAB1T",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 70
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/17",
+      "id": "01M5K5QB3RFFG6Q2WE7W75S8S0",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 95
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/27",
+      "id": "01M5K5QB3RYX28444RVN6X034Z",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 70
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/30",
+      "id": "01M5K5QB3R85J14MHZ8S5ATH0V",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 45
       }
     },
     {

@@ -20,7 +20,8 @@
 //! - the modulators and links as `Modulation` records, built into a `ModSet`
 //!   by the code that builds one today, and the global LFOs as `LfoRecord`s,
 //!   built into the engine's one `Globals` set;
-//! - the arrangement as a `Tracker`, and the materials as a `Pool`.
+//! - the arrangement as a `Tracker`, each drums track's lane nodes beside
+//!   it (`kit_lanes`), and the materials as a `Pool`.
 //!
 //! Records carry runtime ids for modulators and materials, as the engine and
 //! the material cache want. They are never saved; a node keeps its id for as
@@ -44,7 +45,7 @@ use crate::materials::{MaterialRecord, Pool, Wires};
 use crate::modulation::{
     build_globals, EnvelopeRecord, LfoRecord, LinkRecord, Modulation, Refused,
 };
-use crate::tracker::{Duck, Kit, Step, Track, Tracker};
+use crate::tracker::{Duck, Kit, KitLane, Step, Track, Tracker};
 
 /// What the engine reads, compiled from a session.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,6 +55,9 @@ pub struct Plan {
     pub current: Option<NodeId>,
     /// The patch each track plays, by place, as `tracker.tracks` lists them.
     pub track_patches: Vec<Option<NodeId>>,
+    /// Each drums track's lane nodes, the *k*-th for kit *k*, in the order
+    /// its `Kit::lanes` lists them: what the session gives each a slot by.
+    pub kit_lanes: Vec<Vec<NodeId>>,
     /// The current patch's values, indexed as `PARAMS`.
     pub patch: Vec<f32>,
     /// The generators the current patch holds (`GENERATORS`), in table
@@ -90,6 +94,7 @@ impl Default for Plan {
         Self {
             current: None,
             track_patches: Vec::new(),
+            kit_lanes: Vec::new(),
             patch: PARAMS.iter().map(|p| p.default).collect(),
             generators: Vec::new(),
             arrangement: arrangement::params().iter().map(|p| p.default).collect(),
@@ -371,6 +376,11 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
     for (t, patch) in plan.tracker.tracks.iter_mut().zip(&plan.track_patches) {
         t.patch = patch.map(|p| ids.of(p));
     }
+    plan.kit_lanes = tracks(tree)
+        .into_iter()
+        .filter(|t| t.type_name() == DRUMS)
+        .map(|t| lanes(t).iter().map(|l| l.id()).collect())
+        .collect();
 
     plan.ids = ids.new;
 }
@@ -502,20 +512,26 @@ fn read_duck(t: Node<'_>, order: &[Node<'_>]) -> Duck {
 
 /// A drums track node as a track: the inverse of `ShardEdit::write_track`.
 fn read_drums(t: Node<'_>) -> Track {
-    let mut kit = Kit {
+    let kit = Kit {
         on: t.value("drums.on") == Some(Value::Bool(true)),
         tune: float(&t, "drums.tune"),
         decay: float(&t, "drums.decay"),
-        kick: vec![0; STEPS],
-        snare: vec![0; STEPS],
-        hat: vec![0; STEPS],
+        lanes: lanes(t)
+            .into_iter()
+            .map(|l| {
+                let mut hits = vec![0; STEPS];
+                for b in l.children().filter(|c| c.type_name() == BEAT) {
+                    let Some(n) = step_number(&b) else { continue };
+                    hits[n - 1] = int(&b, BEAT_VELOCITY) as u8;
+                }
+                KitLane {
+                    label: text(&l, LANE_LABEL),
+                    kind: text(&l, LANE_KIND),
+                    hits,
+                }
+            })
+            .collect(),
     };
-    for b in t.children().filter(|c| c.type_name() == BEAT) {
-        let Some(n) = step_number(&b) else { continue };
-        kit.kick[n - 1] = int(&b, "beat.kick") as u8;
-        kit.snare[n - 1] = int(&b, "beat.snare") as u8;
-        kit.hat[n - 1] = int(&b, "beat.hat") as u8;
-    }
     Track {
         length: int(&t, "drums.length") as u32,
         gain: float(&t, "drums.gain"),
@@ -589,6 +605,15 @@ pub fn patches(tree: &Tree) -> Vec<Node<'_>> {
     tree.at(format!("/{PATCHES}").as_str())
         .map(patches_in)
         .unwrap_or_default()
+}
+
+/// A drums track's lanes, in its order `lanes`: the grid's.
+pub fn lanes(drums: Node<'_>) -> Vec<Node<'_>> {
+    drums
+        .order(LANES)
+        .into_iter()
+        .filter(|l| l.type_name() == LANE)
+        .collect()
 }
 
 /// The arrangement's tracks of both kinds, in their order. The *k*-th of

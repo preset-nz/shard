@@ -208,8 +208,8 @@ fn a_tracker_round_trips_through_the_tree() {
         decay: 1.3,
         ..Kit::default()
     };
-    kit.snare[3] = VELOCITY_MAX;
-    kit.hat[63] = 1;
+    kit.lanes[1].hits[3] = VELOCITY_MAX;
+    kit.lanes[2].hits[63] = 1;
     // A drums track between the melody tracks, and a blank one at the end.
     let drums = Track {
         length: 32,

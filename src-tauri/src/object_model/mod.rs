@@ -18,7 +18,10 @@
 //!   patch when it names none) at its fader `track.gain`, each step a child
 //!   named by its number and made only once it differs from a blank step. A
 //!   `drums` track (story d) holds its kit's switch, fader, tune, decay and
-//!   length, its beats made the same way. The *k*-th of each kind plays on
+//!   length, and its lanes (epic 49), listed in its order `lanes`, the
+//!   grid's: each a `lane` named `lane.label` playing the drum `lane.kind`,
+//!   its hits `beat` children made the same way as steps, a velocity each.
+//!   The *k*-th of each kind plays on
 //!   voice or kit *k* (`tracker::Slot`). A track of either kind may be
 //!   ducked by another (roadmap row 41): its reference `<kind>.duck` names
 //!   the key track's node, beside its depth, release and Key only switch
@@ -49,7 +52,7 @@ use serde_json::{json, Value as Json};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
 use shard_dsp::duck::{DEPTH_DEFAULT, RELEASE_DEFAULT_MS, RELEASE_MAX_MS, RELEASE_MIN_MS};
 use shard_dsp::fx::{self, Kind as Fx};
-use shard_dsp::kit::{DECAY_MAX, DECAY_MIN, HIT_MAX, TUNE_RANGE};
+use shard_dsp::kit::{LaneKind, DECAY_MAX, DECAY_MIN, HIT_MAX, MAX_LANES, TUNE_RANGE};
 use shard_dsp::modulation::{Shape as LfoShape, MAX_RATE_HZ, MIN_RATE_HZ};
 use shard_dsp::params::{ParamDef, Taper, Unit, GENERATORS, PARAMS};
 use shard_dsp::sources::OCTAVE_RANGE;
@@ -57,7 +60,10 @@ use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX}
 
 use crate::materials::Pool;
 use crate::modulation::{pluck_curve, MODES, NEW_RATE_HZ, NEW_SHAPE};
-use crate::tracker::{Kit, Step, Track, Tracker, LENGTHS, SWING_MAX, TEMPO_MAX, TEMPO_MIN};
+use crate::tracker::{
+    kind_name, lane_kind, Kit, Step, Track, Tracker, KIND_NAMES, LENGTHS, SWING_MAX, TEMPO_MAX,
+    TEMPO_MIN,
+};
 use shard_dsp::KITS;
 
 mod compile;
@@ -89,9 +95,9 @@ pub fn regions_value(regions: &[crate::materials::Region]) -> Value {
 }
 
 pub use compile::{
-    arrangement_node, as_f32, compile, global_lfos, home, instance_of, locate, patch_node, patches,
-    patches_in, played_by, read_tracker, to_value, track_patch, tracks, write_values, Home,
-    PatchPlan, Plan,
+    arrangement_node, as_f32, compile, global_lfos, home, instance_of, lanes, locate, patch_node,
+    patches, patches_in, played_by, read_tracker, to_value, track_patch, tracks, write_values,
+    Home, PatchPlan, Plan,
 };
 
 pub const EXTENSION: &str = "shard";
@@ -108,6 +114,8 @@ pub const TRACK: &str = "track";
 pub const STEP: &str = "step";
 /// A drums track (epic 28, story d).
 pub const DRUMS: &str = "drums";
+/// A lane of a drums track's kit (epic 49), and one of its hits.
+pub const LANE: &str = "lane";
 pub const BEAT: &str = "beat";
 pub const MASTER: &str = "master";
 pub const LFO: &str = "lfo";
@@ -120,6 +128,8 @@ pub const CHAIN: &str = "chain";
 pub const MODULATORS: &str = "modulators";
 /// The order of the arrangement's tracks.
 pub const TRACKS: &str = "tracks";
+/// The order of a drums track's lanes: the grid's, top to bottom.
+pub const LANES: &str = "lanes";
 /// The order of the materials, as they were added.
 pub const POOL: &str = "pool";
 /// The order of the patches, as they were added (epic 10), so "Patch 10" never
@@ -129,6 +139,11 @@ pub const PATCH_ORDER: &str = "order";
 /// A patch's name, as the scene view shows it. Empty in a file written
 /// before patches had names, which shows the patch's place instead.
 pub const PATCH_LABEL: &str = "patch.label";
+/// A lane's name and the drum it plays (`tracker::kind_name`).
+pub const LANE_LABEL: &str = "lane.label";
+pub const LANE_KIND: &str = "lane.kind";
+/// A hit's velocity, 1 to `HIT_MAX`: a step a lane does not hit has no beat.
+pub const BEAT_VELOCITY: &str = "beat.velocity";
 /// The patch a track plays, a reference to it. Unset, or naming a patch that
 /// has gone, the track plays the first patch.
 pub const TRACK_PATCH: &str = "track.patch";
@@ -305,6 +320,7 @@ enum Under {
     Either,
     Track,
     Drums,
+    Lane,
     /// A patch, or the globals category: LFOs.
     PatchOrGlobals,
 }
@@ -474,6 +490,7 @@ fn lives_under(node: &Node<'_>, under: Under) -> std::result::Result<(), String>
         Under::Either => matches!(parent.type_name(), PATCH | ARRANGEMENT),
         Under::Track => parent.type_name() == TRACK,
         Under::Drums => parent.type_name() == DRUMS,
+        Under::Lane => parent.type_name() == LANE,
         Under::PatchOrGlobals => {
             parent.type_name() == PATCH || (parent.is_category() && parent.name() == GLOBALS)
         }
@@ -1139,7 +1156,7 @@ pub fn kinds() -> Vec<KindDecl> {
 
     // A drums track (story d): a generator, so its switch and then its
     // level, which is its fader; its kit's sound, its length, its mute and
-    // solo (only a saved file carries them), and its grid as beats.
+    // solo (only a saved file carries them), and its lanes (epic 49).
     let kit = Kit::default();
     let t = NodeType::new(DRUMS)
         .in_categories(&[ARRANGEMENTS])
@@ -1187,47 +1204,52 @@ pub fn kinds() -> Vec<KindDecl> {
     let t = words(
         t,
         "Drums",
-        "A drum kit played by a grid of kick, snare and hat hits.",
+        "A drum kit played by a grid, a lane of hits for each drum.",
         "arrangement",
     );
     push(
         checked(t, Under::Arrangement, |n| {
             length_holds(n, "drums.length")?;
-            duck_holds(n)
+            duck_holds(n)?;
+            order_holds(n, LANES, |c| c.type_name() == LANE)?;
+            if n.order(LANES).len() > MAX_LANES {
+                return Err(format!("a kit holds at most {MAX_LANES} lanes"));
+            }
+            Ok(())
         }),
         Role::Generator,
         false,
         Some(KITS),
     );
 
-    let hit = |key: &str, label: &str, what: &str| {
-        ValueSpec::int(key, 0..=i64::from(HIT_MAX), 0).described(label, what)
-    };
+    // A lane of a drums track (epic 49): its name, the drum it plays, and
+    // its hits as beats.
+    let t = NodeType::new(LANE)
+        .in_categories(&[ARRANGEMENTS])
+        .text(LANE_LABEL, "")
+        .described("Name", "What the lane is called in the grid.")
+        .choice(LANE_KIND, &KIND_NAMES, kind_name(LaneKind::Kick))
+        .described("Plays", "The synthesised drum the lane plays.");
+    let t = words(
+        t,
+        "Lane",
+        "One row of a drums track's grid: a named drum and the steps it hits on.",
+        "arrangement",
+    );
+    push(checked(t, Under::Drums, none), Role::Structure, false, None);
+
     let t = NodeType::new(BEAT)
         .in_categories(&[ARRANGEMENTS])
-        .value(hit(
-            "beat.kick",
-            "Kick",
-            "How hard the kick hits on this step; 0 is silent.",
-        ))
-        .value(hit(
-            "beat.snare",
-            "Snare",
-            "How hard the snare hits on this step; 0 is silent.",
-        ))
-        .value(hit(
-            "beat.hat",
-            "Hat",
-            "How hard the hat hits on this step; 0 is silent.",
-        ));
+        .int(BEAT_VELOCITY, 1..=i64::from(HIT_MAX), i64::from(HIT_MAX))
+        .described("Velocity", "How hard the lane's drum hits on this step.");
     let t = words(
         t,
         "Beat",
-        "One position in a drums track's grid: how hard each drum hits there.",
+        "One step a lane hits on, and how hard.",
         "arrangement",
     );
     push(
-        checked(t, Under::Drums, |n| {
+        checked(t, Under::Lane, |n| {
             step_number(n)
                 .map(|_| ())
                 .ok_or_else(|| format!("a beat is named 1 to {STEPS}"))
@@ -1421,9 +1443,12 @@ pub trait ShardEdit {
     /// filter and output at their defaults.
     fn add_arrangement(&mut self, tracker: &Tracker) -> Result<NodeId>;
     /// A track at the end of the arrangement's order, written from `track`:
-    /// a `drums` node for a drums track, else a melody `track`, whose patch
-    /// is left unset (the first patch).
+    /// a `drums` node for a drums track, with its kit's lanes, else a melody
+    /// `track`, whose patch is left unset (the first patch).
     fn add_track(&mut self, arr: NodeId, track: &Track) -> Result<NodeId>;
+    /// A lane at the end of drums track `drums`'s order, named `label` and
+    /// playing `kind`, with no hits.
+    fn add_lane(&mut self, drums: NodeId, label: &str, kind: LaneKind) -> Result<NodeId>;
     /// Makes the arrangement's tempo, swing, and its tracks' steps or grids,
     /// lengths, faders and kits what `tracker` says, writing only what
     /// differs. Tracks are matched by place, and none is added or removed:
@@ -1433,7 +1458,8 @@ pub trait ShardEdit {
     /// `track.patch`'s, never written here.
     fn write_tracker(&mut self, arr: NodeId, tracker: &Tracker) -> Result<()>;
     /// One track's steps or grid, length, fader and kit, writing only what
-    /// differs.
+    /// differs. A drums track's lanes have their hits written by place, and
+    /// no lane is ever added, removed, renamed or replayed here.
     fn write_track(&mut self, node: NodeId, track: &Track) -> Result<()>;
     /// A track's sidechain depth, release and Key only, writing only what
     /// differs. Who keys it is `Session::set_track_duck`'s, never written
@@ -1609,7 +1635,20 @@ impl ShardEdit for Edit<'_> {
         let kind = if track.is_drums() { DRUMS } else { TRACK };
         let node = self.add_unique(arr, kind, kind)?;
         self.append_to_order(arr, TRACKS, node)?;
+        let lanes = track.drums.as_ref().map_or(&[][..], |k| &k.lanes[..]);
+        for lane in lanes.iter().take(MAX_LANES) {
+            let kind = lane_kind(&lane.kind).unwrap_or(LaneKind::Kick);
+            self.add_lane(node, &lane.label, kind)?;
+        }
         self.write_track(node, track)?;
+        Ok(node)
+    }
+
+    fn add_lane(&mut self, drums: NodeId, label: &str, kind: LaneKind) -> Result<NodeId> {
+        let node = self.add_unique(drums, LANE, LANE)?;
+        self.append_to_order(drums, LANES, node)?;
+        self.set_value(node, LANE_LABEL, Value::Text(label.into()))?;
+        self.set_value(node, LANE_KIND, Value::Choice(kind_name(kind).into()))?;
         Ok(node)
     }
 
@@ -1638,15 +1677,15 @@ impl ShardEdit for Edit<'_> {
             self.put(node, "drums.decay", Value::Float(float(kit.decay)))?;
             self.put(node, "drums.length", int(track.length))?;
             self.write_duck(node, DRUMS_DUCK, track)?;
-            for i in 0..STEPS {
-                let hit = |row: &Vec<u8>| row.get(i).copied().unwrap_or(0);
-                let hits = [hit(&kit.kick), hit(&kit.snare), hit(&kit.hat)];
-                let fields = [
-                    ("beat.kick", int(hits[0])),
-                    ("beat.snare", int(hits[1])),
-                    ("beat.hat", int(hits[2])),
-                ];
-                self.put_cell(node, BEAT, i, hits == [0; 3], fields)?;
+            let lanes: Vec<NodeId> = self
+                .at(node)
+                .map(|n| n.order(LANES).iter().map(|l| l.id()).collect())
+                .unwrap_or_default();
+            for (&l, lane) in lanes.iter().zip(&kit.lanes) {
+                for i in 0..STEPS {
+                    let hit = lane.hits.get(i).copied().unwrap_or(0);
+                    self.put_cell(l, BEAT, i, hit == 0, [(BEAT_VELOCITY, int(hit))])?;
+                }
             }
             return Ok(());
         }

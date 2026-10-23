@@ -2011,6 +2011,8 @@ pub(crate) fn hand_over(
     // The drums tracks' kits: lanes, grid and sound, fader, mix, then the
     // switch. A lane given back waits, as a retired source does, and no new
     // one is taken while it does, so a lane is never freed on this thread.
+    // A slot emptied waits until its kit is quiet, so a removed track rings
+    // out.
     for (k, feed) in voices.kits.iter().enumerate() {
         let retiring = &mut held.lanes[k];
         if retiring.iter().any(Option::is_some) {
@@ -2022,7 +2024,11 @@ pub(crate) fn hand_over(
         }
         if retiring.iter().all(Option::is_none) {
             if let Ok(mut pending) = feed.lane_swap.try_lock() {
+                let quiet = !engine.kit_sounding(k);
                 for (v, change) in pending.iter_mut().enumerate() {
+                    if matches!(change, Some(None)) && !quiet {
+                        continue;
+                    }
                     if let Some(lane) = change.take() {
                         retiring[v] = engine.swap_kit_lane(k, v, lane);
                     }
@@ -2033,6 +2039,7 @@ pub(crate) fn hand_over(
         engine.set_kit(k, pattern, params);
         engine.set_kit_gain(k, feed.gain());
         engine.set_kit_duck(k, feed.duck.load());
+        engine.set_kit_key(k, feed.key());
         let placed = feed.placed.load(Ordering::Acquire);
         let mix = Mix::from_bits(feed.mix.load(Ordering::Acquire));
         if placed != held.kit_placed[k] {
@@ -2633,10 +2640,16 @@ mod tests {
                 "Track lost `{key}`"
             );
         }
-        for key in ["on", "tune", "decay", "kick", "snare", "hat"] {
+        for key in ["on", "tune", "decay", "lanes"] {
             assert!(
                 tracker["tracks"][1]["drums"].get(key).is_some(),
                 "Kit lost `{key}`"
+            );
+        }
+        for key in ["label", "kind", "hits"] {
+            assert!(
+                tracker["tracks"][1]["drums"]["lanes"][0].get(key).is_some(),
+                "KitLane lost `{key}`"
             );
         }
 

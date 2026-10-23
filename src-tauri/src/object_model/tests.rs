@@ -92,7 +92,9 @@ fn a_new_session_holds_what_a_new_session_holds_today() {
     assert_eq!(kinds, [TRACK, DRUMS]);
     let drums = a.order(TRACKS)[1];
     assert_eq!(drums.value("drums.on"), Some(Value::Bool(false)));
-    assert!(drums.children().any(|b| b.type_name() == BEAT));
+    let lanes = drums.order(LANES);
+    assert_eq!(lanes.len(), 4, "Kick, Snare, Hat closed and Hat open");
+    assert!(lanes[0].children().any(|b| b.type_name() == BEAT));
     assert!(a.child("kit").is_none(), "no kit beside the tracks");
     assert_eq!(a.child("amp").unwrap().type_name(), MASTER);
     assert!(a.order(CHAIN).is_empty());

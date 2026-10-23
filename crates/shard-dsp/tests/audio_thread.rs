@@ -742,7 +742,8 @@ fn every_drums_track_never_touches_the_allocator() {
     // Every kit of the pool (story d) on every step, so hits cut hits and
     // tails overlap; each kit's length, tune, decay and fader move along the
     // way, its switch goes off and on, kits are switched out (ringing out)
-    // and back in mid-loop, and their mutes and solos land on the bars.
+    // and back in mid-loop, their key lane moves, and their mutes and solos
+    // land on the bars.
     use shard_dsp::kit::{KitParams, KitPattern, MAX_LANES as DRUMS};
     use shard_dsp::steps::STEPS;
     use shard_dsp::KITS;
@@ -781,6 +782,8 @@ fn every_drums_track_never_touches_the_allocator() {
                     },
                 );
                 e.set_kit_gain(k, ((block + k * 7) % 40) as f32 * 0.05);
+                // The slot that keys it, moving and gone (epic 49).
+                e.set_kit_key(k, [Some(0), Some(3), None][(block / 90 + k) % 3]);
                 let m = Mix {
                     mute: (block / (17 + k)) % 3 == 0,
                     solo: (block / (31 + k)) % 5 == 0,
@@ -800,6 +803,7 @@ fn every_drums_track_never_touches_the_allocator() {
                 black_box(e.kit_mix(k));
                 black_box(e.kit_audible(k));
                 black_box(e.kit_step(k));
+                black_box(e.kit_sounding(k));
             }
             e.process_block(&mut out, &bank);
             assert!(out.iter().all(|v| v.is_finite()), "block {block}");

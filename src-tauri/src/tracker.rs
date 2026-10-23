@@ -15,9 +15,10 @@
 //!   runtime id, for the webview's *Plays* pickers, and is never written
 //!   back). Monophonic, as in a tracker: a new step cuts the last. Up to
 //!   `shard_dsp::VOICES` of them.
-//! - **A drums track** (story d) plays a synthesised kit: a kick, snare and
-//!   hat grid (`drums`), its own length, fader, switch, tune and decay, and
-//!   no patch. Up to `shard_dsp::KITS` of them.
+//! - **A drums track** (story d) plays a synthesised kit: its lanes, each
+//!   named, playing one drum and holding its own row of hits (`drums`, epic
+//!   49), its own length, fader, switch, tune and decay, and no patch. Up to
+//!   `shard_dsp::KITS` of them.
 //!
 //! **One order, two pools.** The tracks are one list, in the arrangement's
 //! order `tracks`, and a drums track can sit anywhere in it. Each kind maps
@@ -27,7 +28,7 @@
 //!
 //! **Sidechain** (roadmap row 41): any track may be ducked by another, its
 //! volume dipping on the key track's steps (`Duck`, `shard_dsp::duck`). A
-//! drums track keys by its kick lane.
+//! drums track keys by its first kick lane.
 //!
 //! Saved in the same `.shard` file as the patch, in the arrangement node
 //! (`object_model::write_tracker`).
@@ -36,7 +37,8 @@ use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{TRACK_GAIN_DEFAULT, TRACK_GAIN_MAX};
 use shard_dsp::duck::{self, DEPTH_DEFAULT, RELEASE_DEFAULT_MS, RELEASE_MAX_MS, RELEASE_MIN_MS};
 use shard_dsp::kit::{
-    KitParams, KitPattern, DECAY_MAX, DECAY_MIN, HAT, HIT_MAX, KICK, SNARE, TUNE_RANGE,
+    KitParams, KitPattern, LaneKind, DECAY_MAX, DECAY_MIN, HAT, HIT_MAX, KICK, MAX_LANES, SNARE,
+    TUNE_RANGE,
 };
 use shard_dsp::steps::{HOLD_MAX, NUDGE_MAX_MS, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::{StepParams, KITS, VOICES};
@@ -131,10 +133,8 @@ fn key_of(slot: Slot) -> Option<duck::Key> {
     }
 }
 
-/// A drums track's kit: its kick, snare and hat grid, synthesised
-/// (`shard_dsp::kit`), its switch and its sound. Each row is a velocity a
-/// step, zero for none, so several drums land on one step. Its length and
-/// fader are the track's.
+/// A drums track's kit: its lanes, in the grid's order, its switch and its
+/// sound. Its length and fader are the track's.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Kit {
@@ -145,45 +145,110 @@ pub struct Kit {
     pub tune: f32,
     /// A factor on every drum's decay, `DECAY_MIN` to `DECAY_MAX`.
     pub decay: f32,
-    pub kick: Vec<u8>,
-    pub snare: Vec<u8>,
-    pub hat: Vec<u8>,
+    /// Its lanes (epic 49), at most `MAX_LANES`. A lane's place is the
+    /// grid's; which kit slot plays it is the session's.
+    pub lanes: Vec<KitLane>,
+}
+
+/// One lane of a kit (epic 49): its name, the drum it plays and its row of
+/// hits, a velocity a step, zero for none, so several lanes land on one step.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KitLane {
+    pub label: String,
+    /// What it plays, by the name `lane.kind` stores (`kind_name`). Read
+    /// only, as the label is: `set_tracker` writes only the hits.
+    pub kind: String,
+    pub hits: Vec<u8>,
+}
+
+impl Default for KitLane {
+    fn default() -> Self {
+        Self {
+            label: String::new(),
+            kind: kind_name(LaneKind::Kick).into(),
+            hits: vec![0; STEPS],
+        }
+    }
+}
+
+/// The lanes a new drums track is written with (epic 49): Kick, Snare, Hat
+/// closed and Hat open. The open hat plays the hat until it has a sound of
+/// its own.
+pub const STANDARD_LANES: [(&str, LaneKind); 4] = [
+    ("Kick", LaneKind::Kick),
+    ("Snare", LaneKind::Snare),
+    ("Hat closed", LaneKind::Hat),
+    ("Hat open", LaneKind::Hat),
+];
+
+/// The name `lane.kind` stores for each drum.
+pub fn kind_name(kind: LaneKind) -> &'static str {
+    match kind {
+        LaneKind::Kick => "kick",
+        LaneKind::Snare => "snare",
+        LaneKind::Hat => "hat",
+    }
+}
+
+/// Every `lane.kind` there is, as `kind_name` names them.
+pub const KIND_NAMES: [&str; 3] = ["kick", "snare", "hat"];
+
+/// The drum a `lane.kind` names, or none for a name this build lacks.
+pub fn lane_kind(name: &str) -> Option<LaneKind> {
+    [LaneKind::Kick, LaneKind::Snare, LaneKind::Hat]
+        .into_iter()
+        .find(|k| kind_name(*k) == name)
 }
 
 impl Default for Kit {
-    /// The kit a new session has: off, with a beat in it, so switching it on
-    /// does something.
+    /// The kit a new session has: off, with a beat in it on the kick, snare
+    /// and closed hat, so switching it on does something.
     fn default() -> Self {
         let p = KitPattern::default();
         let q = KitParams::default();
-        Self {
+        let mut kit = Self {
             on: q.on,
             tune: q.tune,
             decay: q.decay,
-            kick: p.hits[KICK].to_vec(),
-            snare: p.hits[SNARE].to_vec(),
-            hat: p.hits[HAT].to_vec(),
+            lanes: Vec::new(),
+        };
+        kit.lanes = Self::standard_lanes();
+        for (lane, slot) in kit.lanes.iter_mut().zip([KICK, SNARE, HAT]) {
+            lane.hits = p.hits[slot].to_vec();
         }
+        kit
     }
 }
 
 impl Kit {
-    /// What Add Track › Drums adds: on, an empty grid.
+    /// What Add Track › Drums adds: on, the standard lanes, an empty grid.
     pub fn blank() -> Self {
         Self {
             on: true,
-            kick: vec![0; STEPS],
-            snare: vec![0; STEPS],
-            hat: vec![0; STEPS],
+            lanes: Self::standard_lanes(),
             ..Self::default()
         }
     }
 
-    /// The grid for the engine, `length` steps long.
-    pub fn pattern(&self, length: u32) -> KitPattern {
-        let mut hits = [[0u8; STEPS]; shard_dsp::kit::MAX_LANES];
-        for (v, row) in [(KICK, &self.kick), (SNARE, &self.snare), (HAT, &self.hat)] {
-            for (i, hit) in row.iter().take(STEPS).enumerate() {
+    /// `STANDARD_LANES`, with no hits.
+    fn standard_lanes() -> Vec<KitLane> {
+        STANDARD_LANES
+            .iter()
+            .map(|(label, kind)| KitLane {
+                label: (*label).into(),
+                kind: kind_name(*kind).into(),
+                hits: vec![0; STEPS],
+            })
+            .collect()
+    }
+
+    /// The grid for the engine, `length` steps long: the lane at place `i`
+    /// in slot `slots[i]`. A lane with no slot plays nothing.
+    pub fn pattern(&self, length: u32, slots: &[usize]) -> KitPattern {
+        let mut hits = [[0u8; STEPS]; MAX_LANES];
+        for (lane, &v) in self.lanes.iter().zip(slots) {
+            for (i, hit) in lane.hits.iter().take(STEPS).enumerate() {
                 hits[v][i] = *hit;
             }
         }
@@ -199,6 +264,11 @@ impl Kit {
         }
     }
 }
+
+/// Each lane in the slot of its place, for an engine handed the lanes in
+/// their order, as a render with no session is.
+#[cfg(test)]
+pub const IN_ORDER: [usize; MAX_LANES] = [0, 1, 2, 3, 4, 5, 6, 7];
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -384,9 +454,10 @@ impl Tracker {
                 } else {
                     fallback.decay
                 };
-                for row in [&mut kit.kick, &mut kit.snare, &mut kit.hat] {
-                    row.resize(STEPS, 0);
-                    for hit in row.iter_mut() {
+                kit.lanes.truncate(MAX_LANES);
+                for lane in &mut kit.lanes {
+                    lane.hits.resize(STEPS, 0);
+                    for hit in lane.hits.iter_mut() {
                         *hit = (*hit).min(HIT_MAX);
                     }
                 }
@@ -458,12 +529,13 @@ impl Tracker {
         }
     }
 
-    /// What the `k`-th drums track's kit plays (`Engine::set_kit`), and its
-    /// fader; none when there is no such track.
-    pub fn kit(&self, k: usize) -> Option<(KitPattern, KitParams, f32)> {
+    /// What the `k`-th drums track's kit plays (`Engine::set_kit`), its
+    /// lanes in `slots` (`Kit::pattern`), and its fader; none when there is
+    /// no such track.
+    pub fn kit(&self, k: usize, slots: &[usize]) -> Option<(KitPattern, KitParams, f32)> {
         let t = self.drums().nth(k)?;
         let kit = t.drums.as_ref()?;
-        Some((kit.pattern(t.length), kit.params(), t.gain))
+        Some((kit.pattern(t.length, slots), kit.params(), t.gain))
     }
 
     /// What voice `k` plays (`Engine::set_voice_steps`): the `k`-th melody
@@ -733,13 +805,15 @@ mod tests {
         let mut drums = Track::drums();
         drums.length = 30;
         drums.patch = Some(4);
+        let lane = |hits: Vec<u8>| KitLane {
+            hits,
+            ..KitLane::default()
+        };
         drums.drums = Some(Kit {
             on: true,
             tune: 40.0,
             decay: f32::NAN,
-            kick: vec![200; 3],
-            snare: vec![9; 100],
-            hat: Vec::new(),
+            lanes: vec![lane(vec![200; 3]), lane(vec![9; 100]), lane(Vec::new())],
         });
         let kept = Tracker {
             tracks: vec![track(16, 0), drums],
@@ -747,7 +821,7 @@ mod tests {
         }
         .sanitised();
         assert_eq!(kept.tracks[1].patch, None);
-        let (pattern, params, gain) = kept.kit(0).expect("one drums track");
+        let (pattern, params, gain) = kept.kit(0, &IN_ORDER).expect("one drums track");
         assert_eq!(pattern.length, 32);
         let mut hits = [[0; STEPS]; shard_dsp::kit::MAX_LANES];
         hits[KICK][..3].fill(HIT_MAX);
@@ -762,7 +836,7 @@ mod tests {
             }
         );
         assert_eq!(gain, TRACK_GAIN_DEFAULT);
-        assert_eq!(kept.kit(1), None);
+        assert_eq!(kept.kit(1, &IN_ORDER), None);
     }
 
     #[test]
@@ -790,8 +864,11 @@ mod tests {
             ]
         );
         assert_eq!((t.params(1).length, t.params(1).pattern), (8, 0b11));
-        assert!(t.kit(1).unwrap().1.on, "Add Track › Drums arrives on");
-        assert_eq!(t.kit(0).unwrap().1.on, Kit::default().on);
+        assert!(
+            t.kit(1, &IN_ORDER).unwrap().1.on,
+            "Add Track › Drums arrives on"
+        );
+        assert_eq!(t.kit(0, &IN_ORDER).unwrap().1.on, Kit::default().on);
     }
 
     #[test]
@@ -819,7 +896,7 @@ mod tests {
     fn a_new_session_has_a_melody_track_and_a_drums_track_switched_off() {
         let t = Tracker::default();
         assert_eq!(t.slots(), vec![Slot::Melody(0), Slot::Drums(0)]);
-        let (pattern, params, _) = t.kit(0).unwrap();
+        let (pattern, params, _) = t.kit(0, &IN_ORDER).unwrap();
         assert_eq!(pattern, KitPattern::default());
         assert!(!params.on);
     }
@@ -929,7 +1006,7 @@ mod tests {
             velocity: 90,
             nudge: 15,
         };
-        t.tracks[1].drums.as_mut().unwrap().snare[9] = 33;
+        t.tracks[1].drums.as_mut().unwrap().lanes[1].hits[9] = 33;
         let text = serde_json::to_string(&t).unwrap();
         let back: Tracker = serde_json::from_str(&text).unwrap();
         assert_eq!(back, t);

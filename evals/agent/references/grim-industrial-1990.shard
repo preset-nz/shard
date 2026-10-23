@@ -42,276 +42,375 @@
         "drums.length": 32,
         "drums.on": true,
         "drums.tune": -2.0
+      },
+      "orders": {
+        "lanes": [
+          "01M5K5QB3P5W2P5MRYH6WJRGQB",
+          "01M5K5QB3P0W5XZFVFBVFCFSA4",
+          "01M5K5QB3P94X59XHHPHMSC49A",
+          "01M5K5QB3P1S92VNHK8F855K6H"
+        ]
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/1",
-      "id": "01M48E19P91R9CYXWN3M6QDHWQ",
-      "type": "beat",
+      "path": "/arrangements/arrangement/drums/lane",
+      "id": "01M5K5QB3P5W2P5MRYH6WJRGQB",
+      "type": "lane",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127
+        "lane.kind": "kick",
+        "lane.label": "Kick"
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/10",
-      "id": "01M48E19PA3KG71990DG42ZBVR",
-      "type": "beat",
+      "path": "/arrangements/arrangement/drums/lane-2",
+      "id": "01M5K5QB3P0W5XZFVFBVFCFSA4",
+      "type": "lane",
       "values": {
-        "beat.hat": 38
+        "lane.kind": "snare",
+        "lane.label": "Snare"
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/11",
-      "id": "01M48E19P9HV93E3Z90BERVQMR",
+      "path": "/arrangements/arrangement/drums/lane-2/13",
+      "id": "01M5K5QB3PAFSF4X7ARH1RC8GA",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-2/21",
+      "id": "01M5K5QB3PQCHHP5B59CKSF6C8",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-2/29",
+      "id": "01M5K5QB3PQJEWA7RTY6A136WK",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-2/30",
+      "id": "01M5K5QB3PHJQAFWV8R6F0TX7E",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/12",
-      "id": "01M48E19PA1EQQ6ZBVCDR2N262",
+      "path": "/arrangements/arrangement/drums/lane-2/31",
+      "id": "01M5K5QB3PPWF210Q4QK9EPCX1",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 80
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/13",
-      "id": "01M48E19P96BB5FR3789KQG6TJ",
+      "path": "/arrangements/arrangement/drums/lane-2/32",
+      "id": "01M5K5QB3PMP0S6Y0ZT6Q05FCT",
       "type": "beat",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127,
-        "beat.snare": 127
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/14",
-      "id": "01M48E19PA83SA8QSYKQ0F61P5",
-      "type": "beat",
+      "path": "/arrangements/arrangement/drums/lane-2/5",
+      "id": "01M5K5QB3PQWK276HR6TA9SGRF",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3",
+      "id": "01M5K5QB3P94X59XHHPHMSC49A",
+      "type": "lane",
       "values": {
-        "beat.hat": 38
+        "lane.kind": "hat",
+        "lane.label": "Hat closed"
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/15",
-      "id": "01M48E19P9ZQ16ZMVM3SSHNR6B",
+      "path": "/arrangements/arrangement/drums/lane-3/1",
+      "id": "01M5K5QB3PZFHZKW4ZQCCHVSN8",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/16",
-      "id": "01M48E19PA3G91T2967FYP7PZW",
+      "path": "/arrangements/arrangement/drums/lane-3/10",
+      "id": "01M5K5QB3PKN3E1NWPWHRD6H3P",
       "type": "beat",
       "values": {
-        "beat.hat": 38,
-        "beat.kick": 70
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/17",
-      "id": "01M48E19PATMP4V8S8WPDD0BAM",
+      "path": "/arrangements/arrangement/drums/lane-3/11",
+      "id": "01M5K5QB3PJKWCWKBRN1454TC5",
       "type": "beat",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/18",
-      "id": "01M48E19PA2T7MWNEX8Q1CV7SJ",
+      "path": "/arrangements/arrangement/drums/lane-3/12",
+      "id": "01M5K5QB3PKR3TM4D57CH66M6N",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/19",
-      "id": "01M48E19PASM8JDDSBH07SK4TB",
+      "path": "/arrangements/arrangement/drums/lane-3/13",
+      "id": "01M5K5QB3PD7FSFBGBD31GV15K",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/2",
-      "id": "01M48E19PAHF5ESCTZQY5B4KYP",
+      "path": "/arrangements/arrangement/drums/lane-3/14",
+      "id": "01M5K5QB3PNNFK3AAMBTN432MT",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/20",
-      "id": "01M48E19PAXFXA39243EN232AA",
+      "path": "/arrangements/arrangement/drums/lane-3/15",
+      "id": "01M5K5QB3PDM8KSBQVV65EKCYX",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/21",
-      "id": "01M48E19PA9JCP99BH0JAJM0TP",
+      "path": "/arrangements/arrangement/drums/lane-3/16",
+      "id": "01M5K5QB3PZJSTMVFYY6EH042G",
       "type": "beat",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127,
-        "beat.snare": 127
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/22",
-      "id": "01M48E19PAPFYWRWB2172Y7EJH",
+      "path": "/arrangements/arrangement/drums/lane-3/17",
+      "id": "01M5K5QB3P04CZBJ2D17P7M2WT",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/23",
-      "id": "01M48E19PAT0C37VD582361K23",
+      "path": "/arrangements/arrangement/drums/lane-3/18",
+      "id": "01M5K5QB3PNT71KRV3GN12RQ2Y",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/24",
-      "id": "01M48E19PADY6N6206QWW6HDSV",
+      "path": "/arrangements/arrangement/drums/lane-3/19",
+      "id": "01M5K5QB3PFJJ394E3180XDMG9",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/25",
-      "id": "01M48E19PANDHBBVEXA84TZAZ5",
+      "path": "/arrangements/arrangement/drums/lane-3/2",
+      "id": "01M5K5QB3PSRW58BRPMG88VYKM",
       "type": "beat",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/26",
-      "id": "01M48E19PANGMHW3TW0NDAWRPQ",
+      "path": "/arrangements/arrangement/drums/lane-3/20",
+      "id": "01M5K5QB3PF3PMNCH706YRQ8QH",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/27",
-      "id": "01M48E19PASEC7FF9C40YF2TXA",
+      "path": "/arrangements/arrangement/drums/lane-3/21",
+      "id": "01M5K5QB3P6R6ZSJMQEB7ZR2HB",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/28",
-      "id": "01M48E19PAXCMR6W3KZ8AT9ZAR",
+      "path": "/arrangements/arrangement/drums/lane-3/22",
+      "id": "01M5K5QB3PCVJD7XKCQ6F2GZHJ",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/29",
-      "id": "01M48E19PAX8KZACCMPZ37M2B4",
+      "path": "/arrangements/arrangement/drums/lane-3/23",
+      "id": "01M5K5QB3PGRPBP7FGS4NAQ9C7",
       "type": "beat",
       "values": {
-        "beat.kick": 127,
-        "beat.snare": 127
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/3",
-      "id": "01M48E19P9XT4GFQ7RKXMANWSN",
+      "path": "/arrangements/arrangement/drums/lane-3/24",
+      "id": "01M5K5QB3P4C3CAM9GFPFACGJM",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/30",
-      "id": "01M48E19PACCWE1KBRABH90J9S",
+      "path": "/arrangements/arrangement/drums/lane-3/25",
+      "id": "01M5K5QB3PJQSSJK7S65S11DHJ",
       "type": "beat",
       "values": {
-        "beat.snare": 55
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/31",
-      "id": "01M48E19PATZVWF2YWWB9D79T1",
+      "path": "/arrangements/arrangement/drums/lane-3/26",
+      "id": "01M5K5QB3P27PQPK2FAYN2T50D",
       "type": "beat",
       "values": {
-        "beat.kick": 90,
-        "beat.snare": 80
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/32",
-      "id": "01M48E19PAETV7SMB1AYVJPFJJ",
+      "path": "/arrangements/arrangement/drums/lane-3/27",
+      "id": "01M5K5QB3PP054BX731HDN0Q1Y",
       "type": "beat",
       "values": {
-        "beat.snare": 110
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/4",
-      "id": "01M48E19PASCGH55EWKNSYW3NJ",
+      "path": "/arrangements/arrangement/drums/lane-3/28",
+      "id": "01M5K5QB3P45HNDCEVCPBEV2WE",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/5",
-      "id": "01M48E19P9KKVYFGYTJ9YRD5XV",
+      "path": "/arrangements/arrangement/drums/lane-3/3",
+      "id": "01M5K5QB3PVV0BAMJE7FY4B5YH",
       "type": "beat",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127,
-        "beat.snare": 127
+        "beat.velocity": 110
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/6",
-      "id": "01M48E19PAHTZ51JNC4Z387GC5",
+      "path": "/arrangements/arrangement/drums/lane-3/4",
+      "id": "01M5K5QB3PF369G7B07W0W53SF",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/7",
-      "id": "01M48E19P993R60WD4SF587563",
+      "path": "/arrangements/arrangement/drums/lane-3/5",
+      "id": "01M5K5QB3P8ZXX4A3GJV47TQER",
       "type": "beat",
       "values": {
-        "beat.hat": 110
+        "beat.velocity": 55
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/8",
-      "id": "01M48E19PA8MTBGYB0ZQ256ZYC",
+      "path": "/arrangements/arrangement/drums/lane-3/6",
+      "id": "01M5K5QB3P62JGB2P30SGRA3Q3",
       "type": "beat",
       "values": {
-        "beat.hat": 38
+        "beat.velocity": 38
       }
     },
     {
-      "path": "/arrangements/arrangement/drums/9",
-      "id": "01M48E19P9H76V90RMN8JMQ67X",
+      "path": "/arrangements/arrangement/drums/lane-3/7",
+      "id": "01M5K5QB3PVGG7DCMPP1W4AGDC",
       "type": "beat",
       "values": {
-        "beat.hat": 55,
-        "beat.kick": 127
+        "beat.velocity": 110
       }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/8",
+      "id": "01M5K5QB3PHT6Y0AECPPCB686W",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 38
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-3/9",
+      "id": "01M5K5QB3PTCPVFT1AN65DSF2X",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 55
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane-4",
+      "id": "01M5K5QB3P1S92VNHK8F855K6H",
+      "type": "lane",
+      "values": {
+        "lane.kind": "hat",
+        "lane.label": "Hat open"
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/1",
+      "id": "01M5K5QB3PV2EB6CE731HYPV7P",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/13",
+      "id": "01M5K5QB3PQGHQ3TFYVDTV70JX",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/16",
+      "id": "01M5K5QB3PEDXHFZBN8W4C78QZ",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 70
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/17",
+      "id": "01M5K5QB3PMGZJGX2SABKCQEVP",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/21",
+      "id": "01M5K5QB3PZETM10XFJX9EFYP1",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/25",
+      "id": "01M5K5QB3PG7ZBAYZQ57TWG6HA",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/29",
+      "id": "01M5K5QB3P03C90PN27SDC1WN3",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/31",
+      "id": "01M5K5QB3PTGFGPWM0EEGX438M",
+      "type": "beat",
+      "values": {
+        "beat.velocity": 90
+      }
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/5",
+      "id": "01M5K5QB3P18AZ6R3Y2ECYX1GP",
+      "type": "beat"
+    },
+    {
+      "path": "/arrangements/arrangement/drums/lane/9",
+      "id": "01M5K5QB3PHBF6BFKB373VZHV5",
+      "type": "beat"
     },
     {
       "path": "/arrangements/arrangement/filter",

@@ -10,7 +10,7 @@ use shard_dsp::{Engine, Mix, KITS};
 use crate::object_model as om;
 use crate::session::{self, MixState};
 use crate::session_tests::{rig, Rig};
-use crate::tracker::{Kit, Slot};
+use crate::tracker::{Kit, Slot, IN_ORDER};
 
 fn kit_active(r: &Rig, k: usize) -> bool {
     r.voices.kits[k].active.load(Ordering::Relaxed)
@@ -46,7 +46,7 @@ fn add_drums_is_one_undo_step_and_refused_once_every_kit_has_one() {
     assert_eq!(r.session.history_labels().0.len(), before + 1);
     let t = r.session.tracker();
     assert_eq!(t.slots()[2], Slot::Drums(1));
-    let (grid, sound, gain) = t.kit(1).unwrap();
+    let (grid, sound, gain) = t.kit(1, &IN_ORDER).unwrap();
     assert!(sound.on, "an added drums track is on");
     assert!(grid.hits.iter().flatten().all(|h| *h == 0), "and empty");
     assert_eq!((grid.length, gain), (16, 1.0));
@@ -101,7 +101,7 @@ fn removing_a_drums_track_is_one_step_and_undo_brings_its_grid_back() {
     r.session.add_track(true).unwrap();
     let mut t = r.session.tracker();
     let kit = t.tracks[2].drums.as_mut().unwrap();
-    kit.snare[6] = 90;
+    kit.lanes[1].hits[6] = 90;
     kit.tune = 3.0;
     t.tracks[2].length = 8;
     r.session.set_tracker(t).unwrap();
@@ -149,7 +149,7 @@ fn a_drums_tracks_settings_are_one_step_each() {
     r.session.set_tracker(t.clone()).unwrap();
     assert_eq!(r.session.history().0.as_deref(), Some("Set Drums"));
     assert!(r.voices.kits[0].bank.load().1.on);
-    t.tracks[1].drums.as_mut().unwrap().kick[3] = 127;
+    t.tracks[1].drums.as_mut().unwrap().lanes[0].hits[3] = 127;
     r.session.set_tracker(t).unwrap();
     assert_eq!(r.session.history().0.as_deref(), Some("Edit the steps"));
     let labels: Vec<String> = r.session.history_labels().0;
@@ -245,13 +245,13 @@ fn several_drums_tracks_save_and_open_as_they_were() {
         let k = t.tracks[1].drums.as_mut().unwrap();
         k.on = true;
         k.decay = 2.5;
-        k.hat[40] = 48;
+        k.lanes[2].hits[40] = 48;
     }
     t.tracks[1].length = 64;
     {
         let k = t.tracks[2].drums.as_mut().unwrap();
         k.tune = -7.0;
-        k.kick[0] = 127;
+        k.lanes[0].hits[0] = 127;
     }
     t.tracks[2].gain = 1.6;
     t.tracks[2].length = 4;
@@ -314,4 +314,185 @@ fn a_stale_patch_sent_back_with_a_fader_drag_is_still_set_gain() {
     }
     assert_eq!(r.session.undo().unwrap().as_deref(), Some("Set Gain"));
     assert_eq!(r.voice(0).gain(), 1.0, "the whole drag was one step");
+}
+
+/// Kit `k`'s lane changes waiting, taken as the callback takes them: which
+/// slots are built (`Some(true)`), emptied (`Some(false)`) or untouched.
+fn take_lane_swaps(r: &Rig, k: usize) -> Vec<Option<bool>> {
+    let mut pending = r.voices.kits[k].lane_swap.lock().unwrap();
+    pending
+        .iter_mut()
+        .map(|change| change.take().map(|lane| lane.is_some()))
+        .collect()
+}
+
+/// The first drums track's lane nodes, in the grid's order.
+fn lane_nodes(r: &Rig) -> Vec<rhizome_core::NodeId> {
+    r.session.read(|d| {
+        let drums = om::tracks(d.tree())
+            .into_iter()
+            .find(|t| t.type_name() == om::DRUMS)
+            .unwrap();
+        om::lanes(drums).iter().map(|l| l.id()).collect()
+    })
+}
+
+#[test]
+fn a_new_drums_track_is_written_with_four_lanes() {
+    // A new session's and Add Track › Drums both: Kick, Snare, Hat closed
+    // and Hat open, each a node in the track's order, the new session's
+    // with today's beat on the first three.
+    let r = rig();
+    r.session.add_track(true).unwrap();
+    let written = r.session.read(|d| {
+        om::tracks(d.tree())
+            .into_iter()
+            .filter(|t| t.type_name() == om::DRUMS)
+            .map(|t| {
+                om::lanes(t)
+                    .iter()
+                    .map(|l| {
+                        let text = |key| match l.value(key) {
+                            Some(rhizome_core::Value::Text(s) | rhizome_core::Value::Choice(s)) => {
+                                s
+                            }
+                            _ => String::new(),
+                        };
+                        (text(om::LANE_LABEL), text(om::LANE_KIND))
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+    });
+    let four: Vec<(String, String)> = [
+        ("Kick", "kick"),
+        ("Snare", "snare"),
+        ("Hat closed", "hat"),
+        ("Hat open", "hat"),
+    ]
+    .iter()
+    .map(|(l, k)| (l.to_string(), k.to_string()))
+    .collect();
+    assert_eq!(written, vec![four.clone(), four]);
+    let t = r.session.tracker();
+    let beat = t.tracks[1].drums.as_ref().unwrap();
+    let p = shard_dsp::KitPattern::default();
+    for (lane, slot) in beat.lanes.iter().zip(0..4) {
+        assert_eq!(lane.hits[..], p.hits[slot][..], "{}", lane.label);
+    }
+    let added = t.tracks[2].drums.as_ref().unwrap();
+    assert!(added.lanes.iter().all(|l| l.hits.iter().all(|h| *h == 0)));
+    // Each lane built into its own slot, in order.
+    assert_eq!(
+        take_lane_swaps(&r, 1),
+        [vec![Some(true); 4], vec![None; 4]].concat()
+    );
+}
+
+#[test]
+fn reordering_lanes_moves_no_slot_and_builds_nothing() {
+    let r = rig();
+    let before = r.voices.kits[0].bank.load().0;
+    take_lane_swaps(&r, 0);
+    let mut lanes = lane_nodes(&r);
+    lanes.reverse();
+    let drums = r.session.read(|d| om::tracks(d.tree())[1].id());
+    r.session
+        .edit("Move", None, |tx| tx.set_order(drums, om::LANES, lanes))
+        .unwrap();
+    let t = r.session.tracker();
+    assert_eq!(
+        t.tracks[1].drums.as_ref().unwrap().lanes[0].label,
+        "Hat open",
+        "the grid's order is the tree's"
+    );
+    assert_eq!(
+        r.voices.kits[0].bank.load().0,
+        before,
+        "every hit in its slot"
+    );
+    assert_eq!(take_lane_swaps(&r, 0), vec![None; 8]);
+    // The kick still keys what the track ducks, from its own slot.
+    assert_eq!(r.voices.kits[0].key(), Some(0));
+}
+
+#[test]
+fn removing_a_lane_empties_its_slot_and_rebuilds_nothing_else() {
+    let r = rig();
+    take_lane_swaps(&r, 0);
+    let snare = lane_nodes(&r)[1];
+    r.session
+        .edit("Remove", None, |tx| tx.remove(snare))
+        .unwrap();
+    let mut want = vec![None; 8];
+    want[1] = Some(false);
+    assert_eq!(take_lane_swaps(&r, 0), want);
+    let grid = r.voices.kits[0].bank.load().0;
+    assert!(grid.hits[1].iter().all(|h| *h == 0), "its hits are gone");
+    assert_eq!(grid.hits[2], shard_dsp::KitPattern::default().hits[2]);
+    // A lane added later takes the free slot.
+    r.session.undo().unwrap();
+    assert_eq!(
+        take_lane_swaps(&r, 0),
+        want.iter().map(|w| w.map(|_| true)).collect::<Vec<_>>()
+    );
+
+    // Its track removed, every lane of its kit is let go.
+    r.session.remove_track(1).unwrap();
+    assert_eq!(
+        take_lane_swaps(&r, 0),
+        [vec![Some(false); 4], vec![None; 4]].concat()
+    );
+}
+
+#[test]
+fn a_hit_is_one_undo_step() {
+    let r = rig();
+    let before = r.session.tracker();
+    let mut t = before.clone();
+    t.tracks[1].drums.as_mut().unwrap().lanes[3].hits[5] = 90;
+    let steps = r.session.history_labels().0.len();
+    r.session.set_tracker(t).unwrap();
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    assert_eq!(r.voices.kits[0].bank.load().0.hits[3][5], 90);
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Edit the steps"));
+    assert_eq!(r.session.tracker(), before);
+    assert_eq!(r.voices.kits[0].bank.load().0.hits[3][5], 0);
+}
+
+#[test]
+fn a_removed_tracks_lanes_ring_out_before_they_go() {
+    // Through the callback's hand-offs: a slot emptied waits while its kit
+    // still sounds, then is let go off the audio thread.
+    let r = rig();
+    let mut t = r.session.tracker();
+    t.tracks[1].drums.as_mut().unwrap().on = true;
+    r.session.set_tracker(t).unwrap();
+    let mut e = Engine::new(48_000.0, 64);
+    e.set_playing(true);
+    let mut out = vec![0.0f32; 512];
+    let mut held = crate::Held::new();
+    while !e.kit_sounding(0) {
+        r.block(&mut e, &mut out, &mut held);
+    }
+    r.session.remove_track(1).unwrap();
+    r.block(&mut e, &mut out, &mut held);
+    assert!(e.kit_sounding(0), "still ringing");
+    let waiting = |r: &Rig| {
+        r.voices.kits[0]
+            .lane_swap
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|c| c.is_some())
+            .count()
+    };
+    assert_eq!(waiting(&r), 4, "its four lanes wait");
+    for _ in 0..2000 {
+        if !e.kit_sounding(0) && waiting(&r) == 0 {
+            break;
+        }
+        r.block(&mut e, &mut out, &mut held);
+    }
+    assert_eq!(waiting(&r), 0, "and go once it is quiet");
 }

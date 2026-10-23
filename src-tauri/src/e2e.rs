@@ -15,11 +15,12 @@
 
 use std::path::Path;
 
-use shard_dsp::kit::{KitParams, KitPattern, MAX_LANES as DRUMS};
+use shard_dsp::kit::{KitParams, KitPattern, Lane, LaneKind, MAX_LANES as DRUMS};
 use shard_dsp::steps::STEPS;
 use shard_dsp::{Engine, StepParams};
 
 use crate::session_tests::{rig, Rig};
+use crate::tracker::{lane_kind, IN_ORDER};
 
 const SR: f32 = 48_000.0;
 const BLOCK: usize = 256;
@@ -37,6 +38,8 @@ struct Loaded {
     rig: Rig,
     steps: StepParams,
     drums: Drums,
+    /// What its lanes play, in their order and so in slots from 0.
+    lanes: Vec<LaneKind>,
 }
 
 /// The same drums with every hit taken out: the track heard without them.
@@ -52,11 +55,32 @@ fn open(path: &str) -> (Loaded, crate::session::LoadReport) {
     // transport, and the first drums track's kit; none, a silent one.
     let plan = rig.session.plan();
     let steps = plan.tracker.params(0);
-    let drums = plan
+    let drums = plan.tracker.kit(0, &IN_ORDER).unwrap_or((
+        KitPattern::default(),
+        KitParams::default(),
+        0.0,
+    ));
+    let lanes = plan
         .tracker
-        .kit(0)
-        .unwrap_or((KitPattern::default(), KitParams::default(), 0.0));
-    (Loaded { rig, steps, drums }, report)
+        .drums()
+        .next()
+        .and_then(|t| t.drums.as_ref())
+        .map(|kit| {
+            kit.lanes
+                .iter()
+                .filter_map(|l| lane_kind(&l.kind))
+                .collect()
+        })
+        .unwrap_or_default();
+    (
+        Loaded {
+            rig,
+            steps,
+            drums,
+            lanes,
+        },
+        report,
+    )
 }
 
 fn load() -> Loaded {
@@ -76,7 +100,9 @@ fn render(l: &Loaded, steps: StepParams, drums: Drums, bars: usize) -> Vec<f32> 
     e.set_modulation(set);
     // The global LFOs too, or a link to one would sit at the hand's value.
     e.set_globals(plan.global_set().0);
-    e.standard_kit_lanes(0);
+    for (v, kind) in l.lanes.iter().enumerate() {
+        e.swap_kit_lane(0, v, Some(Lane::new(*kind, SR)));
+    }
     e.set_playing(true);
     let frames = (bars as f32 * step_len(&steps) * 16.0) as usize;
     let mut out = vec![0.0; BLOCK * 2];

@@ -704,7 +704,7 @@ export const DUCK_RELEASE_MAX = 1000;
 /**
  * A track's sidechain (roadmap row 41). Each step of the key track dips this
  * track's volume, the step's velocity scaling the depth; a drums track keys
- * by its kick. A muted key does not pump, nor one silenced by a solo, unless
+ * by its first kick lane. A muted key does not pump, nor one silenced by a solo, unless
  * it is Key only.
  */
 export interface Duck {
@@ -737,22 +737,26 @@ export function trackName(tracks: Track[], i: number): string {
   return `${drums ? 'Drums' : 'Track'} ${Math.max(1, nth)}`;
 }
 
-/** The kit's voices, in the order its rows are drawn. */
-export const KIT_VOICES = ['kick', 'snare', 'hat'] as const;
-export type KitVoice = (typeof KIT_VOICES)[number];
-
 /** Tune's reach in semitones either way, and Decay's range. `kit.rs` in Rust. */
 export const KIT_TUNE_RANGE = 12;
 export const KIT_DECAY_MIN = 0.25;
 export const KIT_DECAY_MAX = 4;
 
 /**
- * A drums track's kit: kick, snare and hat, synthesised. Each row is a
- * velocity a step, 0 to 127, zero for no hit, so several drums land on one
- * step. Its length and fader are the track's. A stop-gap until a kit sliced
- * from a material (roadmap row 25).
+ * One lane of a drums track's kit (epic 49): its name, the synthesised drum
+ * it plays, and its hits, a velocity a step, 0 to 127, zero for no hit, so
+ * several lanes land on one step. Only the hits are written back.
  */
-export interface Kit extends Record<KitVoice, number[]> {
+export interface KitLane {
+  label: string;
+  /** `kick`, `snare` or `hat`. */
+  kind: string;
+  hits: number[];
+}
+
+/** A drums track's kit: its lanes, in the grid's order. Its length and fader are the track's. */
+export interface Kit {
+  lanes: KitLane[];
   /** Whether it plays. */
   on: boolean;
   /** Semitones, every drum together. */
