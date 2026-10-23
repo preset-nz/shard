@@ -8,8 +8,8 @@
 //!
 //! - **A switch like any node's.** `KitParams::on`, on the track's card. Its
 //!   clock runs while it is off, so switching it on lands on the grid.
-//! - **Its own grid.** A row per voice and a byte per step: zero is off,
-//!   anything else is the hit's velocity. Several voices fire on one step.
+//! - **Its own grid.** A row per lane and a byte per step: zero is off,
+//!   anything else is the hit's velocity. Several lanes fire on one step.
 //! - **The transport's clock.** The kit does not count time itself. It reads
 //!   where the shared transport is (`steps::Beat`), so it stays on every
 //!   track's grid whatever its own length, and through a tempo change. The
@@ -18,20 +18,44 @@
 //!   arrangement's chain, so no patch's envelope, velocity or effects touch
 //!   it, and the arrangement's effects and limiter do. It is on the tape, so
 //!   a brake slows it with everything else (`process_at`).
+//! - **Lanes, each its own voice** (epic 49, story a). A kit holds up to
+//!   `MAX_LANES` lanes, each a drum (`LaneKind`) with its own state and its
+//!   own row of the grid. A lane is built when it is added, off the audio
+//!   thread (`Lane::new`), and swapped into its slot (`Kit::swap_lane`); the
+//!   lane it replaces is handed back to be dropped there too. An empty slot
+//!   costs nothing and holds no lane. A lane's slot is its identity: it keeps
+//!   it however the grid orders the lanes. Every drums track has the three
+//!   lanes `STANDARD`, kick, snare and hat, in slots `KICK`, `SNARE` and
+//!   `HAT`, until lanes are nodes (story b).
+//! - **One noise for the kit.** Every lane reads the same noise sample a
+//!   frame, so adding a lane does not change another's hiss.
 //!
-//! No samples: each voice is a few lines of synthesis, sized at construction,
-//! with nothing allocated per hit.
+//! No samples: each drum is a few lines of synthesis, sized when its lane is
+//! built, with nothing allocated per hit.
 
 use core::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::rng::Rng;
 use crate::steps::STEPS;
 
-/// Kick, snare, hat.
-pub const VOICES: usize = 3;
+/// The most lanes a kit holds: the Launchpad's eight rows (roadmap row 62),
+/// not anything the engine needs.
+pub const MAX_LANES: usize = 8;
+/// The slots of the three standard lanes.
 pub const KICK: usize = 0;
 pub const SNARE: usize = 1;
 pub const HAT: usize = 2;
+
+/// What a lane plays: one synthesised drum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LaneKind {
+    Kick,
+    Snare,
+    Hat,
+}
+
+/// The lanes every drums track has, by slot: kick, snare, hat.
+pub const STANDARD: [LaneKind; 3] = [LaneKind::Kick, LaneKind::Snare, LaneKind::Hat];
 
 /// A hit at full velocity.
 pub const HIT_MAX: u8 = 127;
@@ -44,9 +68,9 @@ pub const HIT_GHOST: u8 = 48;
 pub struct KitPattern {
     /// How many steps the kit's loop runs, 1 to `STEPS`, as a track's does.
     pub length: u32,
-    /// Per voice, a byte a step: zero is no hit, else its velocity up to
-    /// `HIT_MAX`.
-    pub hits: [[u8; STEPS]; VOICES],
+    /// Per lane, by slot, a byte a step: zero is no hit, else its velocity
+    /// up to `HIT_MAX`. A slot with no lane plays nothing.
+    pub hits: [[u8; STEPS]; MAX_LANES],
 }
 
 impl Default for KitPattern {
@@ -54,7 +78,7 @@ impl Default for KitPattern {
     /// and the and of three, snare on two and four, eighth-note hats with the
     /// offbeats softer.
     fn default() -> Self {
-        let mut hits = [[0; STEPS]; VOICES];
+        let mut hits = [[0; STEPS]; MAX_LANES];
         for k in [0, 10] {
             hits[KICK][k] = HIT_MAX;
         }
@@ -69,7 +93,7 @@ impl Default for KitPattern {
 }
 
 impl KitPattern {
-    /// Voice `v`'s hit on step `k`, 0 to 1.
+    /// Slot `v`'s hit on step `k`, 0 to 1.
     #[inline]
     pub fn hit(&self, v: usize, k: u32) -> f32 {
         f32::from(self.hits[v][k as usize % STEPS].min(HIT_MAX)) / f32::from(HIT_MAX)
@@ -147,8 +171,8 @@ const WORDS: usize = STEPS / 8;
 /// read whole once a block.
 pub struct KitBank {
     length: AtomicU32,
-    /// The hits, a voice at a time, a byte a step, step one in the low byte.
-    hits: [[AtomicU64; WORDS]; VOICES],
+    /// The hits, a slot at a time, a byte a step, step one in the low byte.
+    hits: [[AtomicU64; WORDS]; MAX_LANES],
     on: AtomicBool,
     tune: AtomicU32,
     decay: AtomicU32,
@@ -185,7 +209,7 @@ impl KitBank {
 
     #[inline]
     pub fn load(&self) -> (KitPattern, KitParams) {
-        let mut hits = [[0u8; STEPS]; VOICES];
+        let mut hits = [[0u8; STEPS]; MAX_LANES];
         for (v, row) in hits.iter_mut().enumerate() {
             for (i, hit) in row.iter_mut().enumerate() {
                 *hit = (self.hits[v][i / 8].load(Ordering::Relaxed) >> ((i % 8) * 8)) as u8;
@@ -274,24 +298,66 @@ fn hat(v: &mut Voice, noise: f32, hp: f32) -> f32 {
     (noise - v.lp1) * v.amp
 }
 
-const RENDER: [Render; VOICES] = [kick, snare, hat];
+impl LaneKind {
+    fn render(self) -> Render {
+        match self {
+            Self::Kick => kick,
+            Self::Snare => snare,
+            Self::Hat => hat,
+        }
+    }
+}
+
+/// One lane's voice: its drum sounding, and what its next hit cut, fading
+/// out. Built off the audio thread, boxed, and never moved once it plays.
+#[derive(Debug)]
+pub struct Lane {
+    kind: LaneKind,
+    voice: Voice,
+    /// What the voice was when its next hit cut it.
+    tail: Voice,
+    tail_left: f32,
+    /// The one-pole coefficient its noise is highpassed with: the snare's
+    /// and the hat's. The kick's noise is not.
+    hp: f32,
+}
+
+impl Lane {
+    /// A lane playing `kind`, silent. Allocates: never on the audio thread.
+    pub fn new(kind: LaneKind, sample_rate: f32) -> Box<Self> {
+        let hp = match kind {
+            LaneKind::Kick => 0.0,
+            LaneKind::Snare => one_pole(1_200.0, sample_rate),
+            LaneKind::Hat => one_pole(5_000.0, sample_rate),
+        };
+        Box::new(Self {
+            kind,
+            voice: Voice::default(),
+            tail: Voice::default(),
+            tail_left: 0.0,
+            hp,
+        })
+    }
+
+    pub fn kind(&self) -> LaneKind {
+        self.kind
+    }
+
+    fn sounding(&self) -> bool {
+        self.voice.sounding || self.tail_left > 0.0
+    }
+}
 
 pub struct Kit {
     sample_rate: f32,
-    voices: [Voice; VOICES],
-    /// What each voice was when its next hit cut it, fading out.
-    tails: [Voice; VOICES],
-    tail_left: [f32; VOICES],
+    /// The lanes, by slot. Only the pointers are the kit's.
+    lanes: [Option<Box<Lane>>; MAX_LANES],
     noise: Rng,
     /// Tape time: how far between the last two samples the kit made the
     /// output is, and those two samples. See `process_at`.
     tape_at: f32,
     tape_last: f32,
     tape_next: f32,
-    /// The one-pole coefficients the snare's and the hat's noise are
-    /// highpassed with.
-    snare_hp: f32,
-    hat_hp: f32,
 }
 
 /// A one-pole lowpass coefficient for `hz`.
@@ -315,23 +381,37 @@ impl Kit {
     pub fn seeded(sample_rate: f32, salt: u32) -> Self {
         Self {
             sample_rate,
-            voices: [Voice::default(); VOICES],
-            tails: [Voice::default(); VOICES],
-            tail_left: [0.0; VOICES],
+            lanes: Default::default(),
             noise: Rng::new(0x005E_EDD2 ^ salt),
             tape_at: 0.0,
             tape_last: 0.0,
             tape_next: 0.0,
-            snare_hp: one_pole(1_200.0, sample_rate),
-            hat_hp: one_pole(5_000.0, sample_rate),
+        }
+    }
+
+    /// Put `lane` in slot `v`, or empty it with none, and hand back what was
+    /// there, to be dropped off the audio thread. Lands at once: a lane taken
+    /// out mid-hit stops where it is.
+    pub fn swap_lane(&mut self, v: usize, lane: Option<Box<Lane>>) -> Option<Box<Lane>> {
+        core::mem::replace(&mut self.lanes[v], lane)
+    }
+
+    /// The `STANDARD` lanes built into their slots, replacing what was
+    /// there. Allocates: for a kit not yet playing, as a test or a render
+    /// with no session has.
+    pub fn standard_lanes(&mut self) {
+        for (v, kind) in STANDARD.into_iter().enumerate() {
+            self.lanes[v] = Some(Lane::new(kind, self.sample_rate));
         }
     }
 
     /// Nothing sounding, as if no hit had ever happened.
     pub fn reset(&mut self) {
-        self.voices = [Voice::default(); VOICES];
-        self.tails = [Voice::default(); VOICES];
-        self.tail_left = [0.0; VOICES];
+        for lane in self.lanes.iter_mut().flatten() {
+            lane.voice = Voice::default();
+            lane.tail = Voice::default();
+            lane.tail_left = 0.0;
+        }
         self.tape_at = 0.0;
         self.tape_last = 0.0;
         self.tape_next = 0.0;
@@ -361,23 +441,27 @@ impl Kit {
 
     /// Whether anything is still sounding.
     pub fn sounding(&self) -> bool {
-        self.voices.iter().any(|v| v.sounding) || self.tail_left.iter().any(|&t| t > 0.0)
+        self.lanes.iter().flatten().any(|l| l.sounding())
     }
 
-    /// Strike voice `v` at `velocity`, 0 to 1. A voice still sounding hands
-    /// itself to its tail, which fades out under the new hit.
+    /// Strike slot `v`'s lane at `velocity`, 0 to 1; a slot with no lane
+    /// ignores it. A voice still sounding hands itself to its tail, which
+    /// fades out under the new hit.
     pub fn hit(&mut self, v: usize, velocity: f32, p: &KitParams) {
         if velocity <= 0.0 {
             return;
         }
-        if self.voices[v].sounding {
-            self.tails[v] = self.voices[v];
-            self.tail_left[v] = CUT_MS * 0.001 * self.sample_rate;
-        }
         let sr = self.sample_rate;
+        let Some(lane) = self.lanes[v].as_deref_mut() else {
+            return;
+        };
+        if lane.voice.sounding {
+            lane.tail = lane.voice;
+            lane.tail_left = CUT_MS * 0.001 * sr;
+        }
         let tune = (p.tune / 12.0).exp2();
         let decay = p.decay.clamp(0.1, 10.0);
-        let voice = &mut self.voices[v];
+        let voice = &mut lane.voice;
         // Squared, as velocity usually maps to level, so the glue after the
         // sum does not flatten a ghost note into a normal one.
         *voice = Voice {
@@ -385,8 +469,8 @@ impl Kit {
             amp: velocity * velocity,
             ..Voice::default()
         };
-        match v {
-            KICK => {
+        match lane.kind {
+            LaneKind::Kick => {
                 voice.rest = 50.0 * tune / sr;
                 voice.bend = 130.0 * tune / sr;
                 voice.bend_fall = fall_over(0.15, sr);
@@ -395,14 +479,14 @@ impl Kit {
                 voice.fall = fall_over(0.6 * decay, sr);
                 voice.amp *= 0.9;
             }
-            SNARE => {
+            LaneKind::Snare => {
                 voice.rest = 185.0 * tune / sr;
                 voice.tone = 0.5;
                 voice.tone_fall = fall_over(0.12 * decay, sr);
                 voice.fall = fall_over(0.35 * decay, sr);
                 voice.amp *= 0.8;
             }
-            _ => {
+            LaneKind::Hat => {
                 voice.fall = fall_over(0.12 * decay, sr);
                 voice.amp *= 1.1;
             }
@@ -410,7 +494,7 @@ impl Kit {
     }
 
     /// One frame, mono. Each drum is glued by a soft saturation on its own,
-    /// as if on its own channel, then the three are summed. The glue lifts the
+    /// as if on its own channel, then the lanes are summed. The glue lifts the
     /// body of each hit against its peak, so the kit holds its own beside a
     /// sustained patch rather than being only transients the limiter takes
     /// away. On its own channel, a loud kick cannot squash the hat on top of
@@ -423,20 +507,20 @@ impl Kit {
             return 0.0;
         }
         let noise = self.noise.next_bipolar();
-        let hp = [0.0, self.snare_hp, self.hat_hp];
         let cut = 1.0 / (CUT_MS * 0.001 * self.sample_rate);
         let mut out = 0.0;
-        for v in 0..VOICES {
+        for lane in self.lanes.iter_mut().flatten() {
             // This drum's own channel: its tail fading out and its hit.
+            let render = lane.kind.render();
             let mut drum = 0.0;
-            if self.tail_left[v] > 0.0 {
-                let gain = self.tail_left[v] * cut;
-                drum += RENDER[v](&mut self.tails[v], noise, hp[v]) * gain;
-                self.tail_left[v] = (self.tail_left[v] - 1.0).max(0.0);
+            if lane.tail_left > 0.0 {
+                let gain = lane.tail_left * cut;
+                drum += render(&mut lane.tail, noise, lane.hp) * gain;
+                lane.tail_left = (lane.tail_left - 1.0).max(0.0);
             }
-            let voice = &mut self.voices[v];
+            let voice = &mut lane.voice;
             if voice.sounding {
-                drum += RENDER[v](voice, noise, hp[v]);
+                drum += render(voice, noise, lane.hp);
                 voice.amp *= voice.fall;
                 if voice.amp < SILENT {
                     voice.sounding = false;
@@ -456,14 +540,21 @@ mod tests {
 
     const SR: f32 = 48_000.0;
 
+    /// A kit with the standard lanes, salted by `salt`.
+    fn standard(salt: u32) -> Kit {
+        let mut kit = Kit::seeded(SR, salt);
+        kit.standard_lanes();
+        kit
+    }
+
     fn render(kit: &mut Kit, frames: usize) -> Vec<f32> {
         (0..frames).map(|_| kit.process()).collect()
     }
 
     #[test]
     fn every_voice_sounds_then_falls_to_an_exact_zero() {
-        for v in 0..VOICES {
-            let mut kit = Kit::new(SR);
+        for v in 0..STANDARD.len() {
+            let mut kit = standard(0);
             kit.hit(v, 1.0, &KitParams::default());
             let out = render(&mut kit, SR as usize * 3);
             let peak = out.iter().fold(0.0f32, |m, s| m.max(s.abs()));
@@ -494,8 +585,8 @@ mod tests {
     #[test]
     fn two_salts_are_two_hisses() {
         let p = KitParams::default();
-        let mut a = Kit::seeded(SR, 0);
-        let mut b = Kit::seeded(SR, crate::rng::salt(1));
+        let mut a = standard(0);
+        let mut b = standard(crate::rng::salt(1));
         a.hit(HAT, 1.0, &p);
         b.hit(HAT, 1.0, &p);
         assert_ne!(render(&mut a, 480), render(&mut b, 480));
@@ -503,14 +594,14 @@ mod tests {
 
     #[test]
     fn nothing_hit_is_silence() {
-        let mut kit = Kit::new(SR);
+        let mut kit = standard(0);
         assert!(render(&mut kit, 4_800).iter().all(|&s| s == 0.0));
     }
 
     #[test]
     fn velocity_scales_a_hit() {
         let peak = |vel: f32| {
-            let mut kit = Kit::new(SR);
+            let mut kit = standard(0);
             kit.hit(KICK, vel, &KitParams::default());
             render(&mut kit, 4_800)
                 .iter()
@@ -528,14 +619,14 @@ mod tests {
         // old one was from zero. Compare the biggest frame-to-frame step at
         // the second hit with the biggest within a single hit.
         let p = KitParams::default();
-        let mut kit = Kit::new(SR);
+        let mut kit = standard(0);
         kit.hit(KICK, 1.0, &p);
         let first = render(&mut kit, 2_000);
         let steady = first
             .windows(2)
             .map(|w| (w[1] - w[0]).abs())
             .fold(0.0f32, f32::max);
-        let mut kit = Kit::new(SR);
+        let mut kit = standard(0);
         kit.hit(KICK, 1.0, &p);
         let mut out = render(&mut kit, 1_013);
         kit.hit(KICK, 1.0, &p);

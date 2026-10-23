@@ -1896,6 +1896,8 @@ pub(crate) struct Held {
     /// Each voice's `VoiceFeed::placed` as last seen, and each kit's.
     placed: [u32; VOICES],
     kit_placed: [u32; KITS],
+    /// The lanes each kit gave back.
+    lanes: [session::LaneSlots; KITS],
 }
 
 impl Held {
@@ -1906,6 +1908,7 @@ impl Held {
             globals: None,
             placed: [0; VOICES],
             kit_placed: [0; KITS],
+            lanes: Default::default(),
         }
     }
 }
@@ -2005,8 +2008,27 @@ pub(crate) fn hand_over(
             engine.set_voice_active(i, active);
         }
     }
-    // The drums tracks' kits: grid and sound, fader, mix, then the switch.
+    // The drums tracks' kits: lanes, grid and sound, fader, mix, then the
+    // switch. A lane given back waits, as a retired source does, and no new
+    // one is taken while it does, so a lane is never freed on this thread.
     for (k, feed) in voices.kits.iter().enumerate() {
+        let retiring = &mut held.lanes[k];
+        if retiring.iter().any(Option::is_some) {
+            if let Ok(mut slot) = feed.lane_retired.try_lock() {
+                if slot.iter().all(Option::is_none) {
+                    *slot = std::mem::take(retiring);
+                }
+            }
+        }
+        if retiring.iter().all(Option::is_none) {
+            if let Ok(mut pending) = feed.lane_swap.try_lock() {
+                for (v, change) in pending.iter_mut().enumerate() {
+                    if let Some(lane) = change.take() {
+                        retiring[v] = engine.swap_kit_lane(k, v, lane);
+                    }
+                }
+            }
+        }
         let (pattern, params) = feed.bank.load();
         engine.set_kit(k, pattern, params);
         engine.set_kit_gain(k, feed.gain());

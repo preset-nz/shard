@@ -17,7 +17,8 @@
 //! (`tracker::Slot`). Every voice plays its own track's patch: its values,
 //! modulation and materials, handed to its own feed (`VoiceFeed`). Two
 //! tracks on one patch both follow an edit to it. A kit is handed its
-//! track's grid, sound and fader through its own feed (`KitFeed`). Removing
+//! track's grid, sound, fader and lanes through its own feed (`KitFeed`;
+//! the lanes are built here and swapped in, epic 49). Removing
 //! a track moves the later ones of its kind down a voice or kit each; the
 //! fades and smoothers carry the change.
 //!
@@ -86,7 +87,7 @@ use rhizome_pom::{Document, FileStore, PresetRef, Store};
 use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
-use shard_dsp::kit::{KitParams, KitPattern};
+use shard_dsp::kit::{KitParams, KitPattern, Lane, LaneKind, MAX_LANES, STANDARD};
 use shard_dsp::params::{GENERATORS, PARAMS};
 use shard_dsp::steps::StepBank;
 use shard_dsp::{
@@ -181,8 +182,15 @@ impl VoiceFeed {
     }
 }
 
+/// Lane changes waiting for a kit, by slot: a lane built to go in, or none
+/// to empty the slot.
+pub type LaneSwaps = [Option<Option<Box<Lane>>>; MAX_LANES];
+/// Lanes a kit gave back, by slot.
+pub type LaneSlots = [Option<Box<Lane>>; MAX_LANES];
+
 /// One kit's inputs (story d): its drums track's grid, sound, fader and
-/// switches. Atomics only, read once a block.
+/// switches, read once a block, and its lanes (epic 49), whose locks the
+/// audio thread only ever tries.
 pub struct KitFeed {
     /// Its track's grid and sound.
     pub bank: KitBank,
@@ -198,6 +206,9 @@ pub struct KitFeed {
     pub heard_mix: AtomicU8,
     /// Its track's sidechain, as `VoiceFeed::duck`.
     pub duck: DuckBank,
+    /// Lanes built for it, waiting, and the ones it gave back.
+    pub lane_swap: Mutex<LaneSwaps>,
+    pub lane_retired: Mutex<LaneSlots>,
 }
 
 impl KitFeed {
@@ -210,6 +221,8 @@ impl KitFeed {
             placed: AtomicU32::new(0),
             heard_mix: AtomicU8::new(0),
             duck: DuckBank::default(),
+            lane_swap: Mutex::new(Default::default()),
+            lane_retired: Mutex::new(Default::default()),
         }
     }
 
@@ -260,17 +273,24 @@ impl Voices {
             drop(lock(&v.swap));
             drop(lock(&v.retired));
         }
+        for k in &self.kits {
+            drop(lock(&k.lane_swap));
+            drop(lock(&k.lane_retired));
+        }
         drop(lock(&self.globals_swap));
         drop(lock(&self.globals_retired));
     }
 
     /// Frees what the audio thread gave back: every voice's source buffers
-    /// and modulation set, and the global LFOs. Off the audio thread, which
-    /// takes no new set while a retired one waits.
+    /// and modulation set, every kit's lanes, and the global LFOs. Off the
+    /// audio thread, which takes no new set while a retired one waits.
     pub fn collect_retired(&self) {
         for v in &self.voice {
             drop(std::mem::take(&mut *lock(&v.retired)));
             drop(lock(&v.mod_retired).take());
+        }
+        for k in &self.kits {
+            drop(std::mem::take(&mut *lock(&k.lane_retired)));
         }
         drop(lock(&self.globals_retired).take());
     }
@@ -379,8 +399,9 @@ struct Sent {
     voices: [Voiced; VOICES],
     /// The track selected in the scene view, or none with a patch selected.
     selected_track: Option<usize>,
-    /// What each kit was handed.
+    /// What each kit was handed, and the lanes it was built, by slot.
     kits: [KitVoiced; KITS],
+    kit_lanes: [[Option<LaneKind>; MAX_LANES]; KITS],
     /// Every track's node, in the arrangement's order, and where each plays.
     tracks: Vec<NodeId>,
     slots: Vec<Slot>,
@@ -526,6 +547,7 @@ impl Session {
                 play_mode: PlayMode::Song,
                 voices: std::array::from_fn(|_| Voiced::default()),
                 kits: [None; KITS],
+                kit_lanes: [[None; MAX_LANES]; KITS],
                 selected_track: None,
                 tracks: Vec::new(),
                 slots: Vec::new(),
@@ -601,7 +623,9 @@ impl Session {
             // On its own, the patch is all that plays: no kit is handed a
             // track, so each fades out.
             let want = plan.tracker.kit(k).filter(|_| !sent.play_mode.is_alone());
-            self.hand_kit(k, &want, &sent.kits[k], all);
+            let mut lanes = sent.kit_lanes[k];
+            self.hand_kit(k, &want, &sent.kits[k], all, &mut lanes);
+            sent.kit_lanes[k] = lanes;
             sent.kits[k] = want;
         }
         sent.tracks = om::tracks(doc.tree()).iter().map(|t| t.id()).collect();
@@ -653,7 +677,21 @@ impl Session {
     /// Hands kit `k` its drums track's grid, sound and fader where they
     /// differ from what it was last handed (`was`), or everything. Switched
     /// in last; switched out when no drums track is there.
-    fn hand_kit(&self, k: usize, want: &KitVoiced, was: &KitVoiced, all: bool) {
+    ///
+    /// Its lanes are built here, off the audio thread, only for a slot whose
+    /// lane differs from the one it was built (`lanes`), so an edit, a file
+    /// opened or the patch played alone never cuts a lane ringing. Every
+    /// drums track has the `STANDARD` lanes until lanes are nodes (epic 49,
+    /// story b); a kit keeps its lanes when its track goes, and rings out on
+    /// them.
+    fn hand_kit(
+        &self,
+        k: usize,
+        want: &KitVoiced,
+        was: &KitVoiced,
+        all: bool,
+        lanes: &mut [Option<LaneKind>; MAX_LANES],
+    ) {
         let feed = &self.feeds.voices.kits[k];
         let Some((pattern, params, gain)) = want else {
             if all || was.is_some() {
@@ -661,6 +699,17 @@ impl Session {
             }
             return;
         };
+        let mut built = [None; MAX_LANES];
+        built[..STANDARD.len()].copy_from_slice(&STANDARD.map(Some));
+        if built != *lanes {
+            let mut swap = lock(&feed.lane_swap);
+            for (v, (kind, had)) in built.iter().zip(lanes.iter()).enumerate() {
+                if kind != had {
+                    swap[v] = Some(kind.map(|kind| Lane::new(kind, self.sample_rate)));
+                }
+            }
+            *lanes = built;
+        }
         if all || want != was {
             feed.bank.store(pattern, params);
             feed.gain.store(gain.to_bits(), Ordering::Relaxed);

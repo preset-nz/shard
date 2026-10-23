@@ -33,7 +33,9 @@
 //! (`set_kit_mix`) and switch (`set_kit_active`). Kit `k`'s noise is salted
 //! by `k`, so kit 0 keeps the seed the single kit had. A kit switched out
 //! rings out and then costs nothing. Kit 0 starts active, its switch off,
-//! as the single kit did; the rest idle.
+//! as the single kit did; the rest idle. A kit starts with no lanes: each
+//! is built off the audio thread and swapped into its slot
+//! (`swap_kit_lane`, epic 49), and the one it replaces is handed back.
 //!
 //! **Sidechain ducking** (`duck.rs`, roadmap row 41): any channel can be
 //! ducked by another's steps (`set_voice_duck`, `set_kit_duck`), a kit by
@@ -59,7 +61,7 @@ use crate::arrangement::{self, index_of_arrangement};
 use crate::chain::{Chain, ChainParams, ChainSlots};
 use crate::duck::{Duck, Ducker, Key};
 use crate::inspect::{GrainLog, GrainSpawn};
-use crate::kit::{Kit, KitClock, KitParams, KitPattern, KICK, VOICES as KIT_VOICES};
+use crate::kit::{Kit, KitClock, KitParams, KitPattern, Lane, KICK, MAX_LANES};
 use crate::limiter::{Limiter, LimiterParams};
 use crate::mix::{gate_frames, Gate, Mix};
 use crate::modulation::{Globals, ModSet};
@@ -505,6 +507,24 @@ impl Engine {
         let d = &mut self.drums[k];
         d.pattern = pattern;
         d.params = params;
+    }
+
+    /// Put `lane` in kit `k`'s slot `v` (below `MAX_LANES`), or empty the
+    /// slot with none, and hand back what was there: the caller drops it, off
+    /// the audio thread. At a block boundary, like every hand-off.
+    pub fn swap_kit_lane(
+        &mut self,
+        k: usize,
+        v: usize,
+        lane: Option<Box<Lane>>,
+    ) -> Option<Box<Lane>> {
+        self.drums[k].kit.swap_lane(v, lane)
+    }
+
+    /// Kit `k` given the standard lanes (`kit::STANDARD`) at once.
+    /// Allocates: for an engine no session feeds, before it plays.
+    pub fn standard_kit_lanes(&mut self, k: usize) {
+        self.drums[k].kit.standard_lanes();
     }
 
     /// Kit `k`'s fader, as `set_voice_gain`.
@@ -1052,7 +1072,7 @@ impl Engine {
                         if d.rejoin {
                             d.rejoin = false;
                         } else if d.active && d.params.on {
-                            for v in 0..KIT_VOICES {
+                            for v in 0..MAX_LANES {
                                 d.kit.hit(v, pattern.hit(v, step), &d.params);
                             }
                             fired[VOICES + k] = pattern.hit(KICK, step);
@@ -4250,6 +4270,7 @@ mod tests {
                 e.set_voice_active(v, true);
             }
             let arr = ParamBank::for_table(arrangement::params());
+            e.standard_kit_lanes(0);
             e.set_kit(
                 0,
                 KitPattern::default(),
@@ -4460,10 +4481,11 @@ mod tests {
             );
             e.set_voice_gain(1, 0.0);
         }
-        let mut hits = [[0u8; crate::steps::STEPS]; KIT_VOICES];
+        let mut hits = [[0u8; crate::steps::STEPS]; MAX_LANES];
         for k in (0..16).step_by(4) {
             hits[KICK][k] = rig.kick;
         }
+        e.standard_kit_lanes(0);
         e.set_kit(
             0,
             KitPattern { length: 16, hits },
@@ -4691,6 +4713,7 @@ mod tests {
         e.set_voice_active(0, true);
         e.set_voice_gain(0, voice_gain);
         e.place_voice_mix(0, voice_mix);
+        e.standard_kit_lanes(0);
         e.set_kit(
             0,
             KitPattern::default(),

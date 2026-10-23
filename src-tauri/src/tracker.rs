@@ -181,7 +181,7 @@ impl Kit {
 
     /// The grid for the engine, `length` steps long.
     pub fn pattern(&self, length: u32) -> KitPattern {
-        let mut hits = [[0u8; STEPS]; shard_dsp::kit::VOICES];
+        let mut hits = [[0u8; STEPS]; shard_dsp::kit::MAX_LANES];
         for (v, row) in [(KICK, &self.kick), (SNARE, &self.snare), (HAT, &self.hat)] {
             for (i, hit) in row.iter().take(STEPS).enumerate() {
                 hits[v][i] = *hit;
@@ -749,7 +749,7 @@ mod tests {
         assert_eq!(kept.tracks[1].patch, None);
         let (pattern, params, gain) = kept.kit(0).expect("one drums track");
         assert_eq!(pattern.length, 32);
-        let mut hits = [[0; STEPS]; shard_dsp::kit::VOICES];
+        let mut hits = [[0; STEPS]; shard_dsp::kit::MAX_LANES];
         hits[KICK][..3].fill(HIT_MAX);
         hits[SNARE] = [9; STEPS];
         assert_eq!(pattern.hits, hits);

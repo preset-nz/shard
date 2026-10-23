@@ -743,7 +743,7 @@ fn every_drums_track_never_touches_the_allocator() {
     // tails overlap; each kit's length, tune, decay and fader move along the
     // way, its switch goes off and on, kits are switched out (ringing out)
     // and back in mid-loop, and their mutes and solos land on the bars.
-    use shard_dsp::kit::{KitParams, KitPattern, VOICES as DRUMS};
+    use shard_dsp::kit::{KitParams, KitPattern, MAX_LANES as DRUMS};
     use shard_dsp::steps::STEPS;
     use shard_dsp::KITS;
     let mut e = Engine::new(SR, 256);
@@ -751,6 +751,7 @@ fn every_drums_track_never_touches_the_allocator() {
     let bank = ParamBank::new();
     let arr = ParamBank::for_table(arrangement::params());
     for k in 0..KITS {
+        e.standard_kit_lanes(k);
         e.set_kit_active(k, true);
     }
     e.set_playing(true);
@@ -805,6 +806,93 @@ fn every_drums_track_never_touches_the_allocator() {
         }
     });
     assert_eq!(caught, 0, "the kits touched the allocator {caught} time(s)");
+}
+
+#[test]
+fn adding_and_removing_lanes_while_playing_never_touches_the_allocator() {
+    // Epic 49, story a: a kit's lanes built off the audio thread and swapped
+    // in through a primed pair of slots, as the app's callback takes them,
+    // while every slot hits on every step. Lanes are added to empty slots,
+    // replaced mid-hit and taken out ringing; what comes back is handed to
+    // the retired slot and dropped on the command thread, never here.
+    use shard_dsp::kit::{KitParams, KitPattern, Lane, LaneKind, HIT_MAX, MAX_LANES};
+    use shard_dsp::steps::STEPS;
+    type Slots = [Option<Option<Box<Lane>>>; MAX_LANES];
+    type Retired = [Option<Box<Lane>>; MAX_LANES];
+    const KINDS: [LaneKind; 3] = [LaneKind::Kick, LaneKind::Snare, LaneKind::Hat];
+    let mut e = Engine::new(SR, 256);
+    e.set_kit_active(0, true);
+    e.set_transport(&StepParams {
+        on: true,
+        tempo_bpm: 240.0,
+        ..Default::default()
+    });
+    e.set_playing(true);
+    let bank = ParamBank::new();
+    let swap: Mutex<Slots> = Mutex::new(Default::default());
+    let retired: Mutex<Retired> = Mutex::new(Default::default());
+    // On macOS a mutex's first lock allocates: prime both before the stream.
+    drop(swap.lock());
+    drop(retired.lock());
+    let mut held: Retired = Default::default();
+    let mut out = vec![0.0f32; 512];
+    let mut changes = 0;
+    let mut heard = false;
+
+    for block in 0..1_200 {
+        // The command thread: every so often a slot gains a lane, has it
+        // replaced or loses it, and what came back is freed.
+        if block % 15 == 5 {
+            let v = (block / 15) % MAX_LANES;
+            let lane =
+                ((block / 15) % 4 != 3).then(|| Lane::new(KINDS[(block / 7) % KINDS.len()], SR));
+            swap.lock().unwrap()[v] = Some(lane);
+            changes += 1;
+            *retired.lock().unwrap() = Default::default();
+        }
+        let ((), caught) = no_alloc(|| {
+            if held.iter().any(Option::is_some) {
+                if let Ok(mut slot) = retired.try_lock() {
+                    if slot.iter().all(Option::is_none) {
+                        *slot = std::mem::take(&mut held);
+                    }
+                }
+            }
+            if held.iter().all(Option::is_none) {
+                if let Ok(mut pending) = swap.try_lock() {
+                    for (v, change) in pending.iter_mut().enumerate() {
+                        if let Some(lane) = change.take() {
+                            held[v] = e.swap_kit_lane(0, v, lane);
+                        }
+                    }
+                }
+            }
+            e.set_kit(
+                0,
+                KitPattern {
+                    length: 16,
+                    hits: [[HIT_MAX; STEPS]; MAX_LANES],
+                },
+                KitParams {
+                    on: true,
+                    ..KitParams::default()
+                },
+            );
+            e.process_block(&mut out, &bank);
+            assert!(out.iter().all(|v| v.is_finite()), "block {block}");
+        });
+        heard |= out.iter().any(|s| *s != 0.0);
+        assert_eq!(
+            caught, 0,
+            "block {block}: a lane's hand-off touched the allocator {caught} time(s)"
+        );
+    }
+    assert!(heard, "no lane was heard");
+    assert!(changes > 70, "only {changes} lane changes");
+    assert!(
+        swap.lock().unwrap().iter().all(Option::is_none),
+        "every change was taken"
+    );
 }
 
 #[test]
@@ -979,6 +1067,7 @@ fn every_voice_playing_never_touches_the_allocator() {
     let arr = ParamBank::for_table(arrangement::params());
     // Every kit playing too, under the voices.
     for k in 0..shard_dsp::KITS {
+        e.standard_kit_lanes(k);
         e.set_kit(
             k,
             shard_dsp::KitPattern::default(),
@@ -1150,6 +1239,7 @@ fn ducking_never_touches_the_allocator() {
         );
     }
     for k in 0..KITS {
+        e.standard_kit_lanes(k);
         e.set_kit(
             k,
             KitPattern::default(),

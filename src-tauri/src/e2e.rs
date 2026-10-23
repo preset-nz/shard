@@ -15,7 +15,7 @@
 
 use std::path::Path;
 
-use shard_dsp::kit::{KitParams, KitPattern, VOICES as DRUMS};
+use shard_dsp::kit::{KitParams, KitPattern, MAX_LANES as DRUMS};
 use shard_dsp::steps::STEPS;
 use shard_dsp::{Engine, StepParams};
 
@@ -76,6 +76,7 @@ fn render(l: &Loaded, steps: StepParams, drums: Drums, bars: usize) -> Vec<f32> 
     e.set_modulation(set);
     // The global LFOs too, or a link to one would sit at the hand's value.
     e.set_globals(plan.global_set().0);
+    e.standard_kit_lanes(0);
     e.set_playing(true);
     let frames = (bars as f32 * step_len(&steps) * 16.0) as usize;
     let mut out = vec![0.0; BLOCK * 2];
