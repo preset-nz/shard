@@ -193,13 +193,21 @@ pub fn kind_name(kind: LaneKind) -> &'static str {
 }
 
 /// Every `lane.kind` there is, as `kind_name` names them.
-pub const KIND_NAMES: [&str; 3] = ["kick", "snare", "hat"];
+pub const KIND_NAMES: [&str; 4] = ["kick", "snare", "hat", "material"];
+
+/// What Add Lane calls a new lane, in turn, before it falls back on "Lane N".
+pub const ADD_LANE_NAMES: [&str; 4] = ["Clap", "Tom low", "Tom high", "Crash"];
 
 /// The drum a `lane.kind` names, or none for a name this build lacks.
 pub fn lane_kind(name: &str) -> Option<LaneKind> {
-    [LaneKind::Kick, LaneKind::Snare, LaneKind::Hat]
-        .into_iter()
-        .find(|k| kind_name(*k) == name)
+    [
+        LaneKind::Kick,
+        LaneKind::Snare,
+        LaneKind::Hat,
+        LaneKind::Material,
+    ]
+    .into_iter()
+    .find(|k| kind_name(*k) == name)
 }
 
 impl Default for Kit {

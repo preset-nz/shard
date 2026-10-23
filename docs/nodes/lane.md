@@ -13,7 +13,7 @@ One row of a drums track's grid: a named drum and the steps it hits on.
 | Control | Range | Default | What it does |
 |---|---|---|---|
 | Name | text | empty | What the lane is called in the grid. |
-| Plays | kick, snare, hat | kick | The synthesised drum the lane plays. |
+| Plays | kick, snare, hat, material | kick | The synthesised drum the lane plays. |
 <!-- generated:end -->
 
 ## Using it

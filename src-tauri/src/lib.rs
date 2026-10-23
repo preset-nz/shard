@@ -1015,6 +1015,43 @@ fn remove_track(state: tauri::State<'_, Audio>, track: usize) -> Result<(), Stri
     state.session.remove_track(track)
 }
 
+/// Add Lane: a lane at the end of a drums track's grid, one step of Undo,
+/// "Add Lane". Refused at eight. Answers its place.
+#[tauri::command]
+fn add_lane(state: tauri::State<'_, Audio>, track: usize) -> Result<usize, String> {
+    state.session.add_lane(track)
+}
+
+/// Remove Lane: the lane and its hits, one step of Undo, "Remove Kick".
+#[tauri::command]
+fn remove_lane(state: tauri::State<'_, Audio>, track: usize, lane: usize) -> Result<(), String> {
+    state.session.remove_lane(track, lane)
+}
+
+/// Rename Lane: one step of Undo, "Rename Lane"; an unchanged name makes
+/// none. Answers whether it changed.
+#[tauri::command]
+fn rename_lane(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    lane: usize,
+    name: String,
+) -> Result<bool, String> {
+    state.session.rename_lane(track, lane, &name)
+}
+
+/// Move Lane one place earlier (`by` below zero) or later, one step of Undo,
+/// "Move Kick". Answers its new place, or none at an end.
+#[tauri::command]
+fn move_lane(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    lane: usize,
+    by: i32,
+) -> Result<Option<usize>, String> {
+    state.session.move_lane(track, lane, by)
+}
+
 /// Renames a patch. One step of Undo, "Rename Patch 2"; an empty or
 /// unchanged name makes none. Answers whether it changed.
 #[tauri::command]
@@ -2466,6 +2503,10 @@ pub fn run() {
             select_track,
             add_track,
             remove_track,
+            add_lane,
+            remove_lane,
+            rename_lane,
+            move_lane,
             toggle_track_mute,
             toggle_track_solo,
             record_start,

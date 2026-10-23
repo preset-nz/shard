@@ -1316,6 +1316,102 @@ impl Session {
         Ok(())
     }
 
+    /// The drums node of track `track` and its lane nodes, in the grid's
+    /// order, or why there are none.
+    fn lanes_of(&self, track: usize) -> Result<(NodeId, Vec<NodeId>), String> {
+        self.read(|d| {
+            let t = *om::tracks(d.tree())
+                .get(track)
+                .ok_or_else(|| format!("there is no track {}", track + 1))?;
+            if t.type_name() != om::DRUMS {
+                return Err("only a drums track has lanes".to_string());
+            }
+            Ok((t.id(), om::lanes(t).iter().map(|l| l.id()).collect()))
+        })
+    }
+
+    /// A lane's name, for an undo step.
+    fn lane_label(&self, lane: NodeId) -> String {
+        self.read(|d| match d.tree().get(lane)?.value(om::LANE_LABEL) {
+            Some(Value::Text(s)) => Some(s),
+            _ => None,
+        })
+        .unwrap_or_default()
+    }
+
+    /// Add Lane: a lane at the end of drums track `track`'s grid, named from
+    /// `tracker::ADD_LANE_NAMES` (the first not taken, then "Lane 5" and on), playing
+    /// no sound until a material is assigned. One undo step, "Add Lane".
+    /// Refused at `MAX_LANES`. Answers its place.
+    pub fn add_lane(&self, track: usize) -> Result<usize, String> {
+        let (drums, lanes) = self.lanes_of(track)?;
+        if lanes.len() >= MAX_LANES {
+            return Err(format!("a kit holds at most {MAX_LANES} lanes"));
+        }
+        let taken: Vec<String> = lanes.iter().map(|l| self.lane_label(*l)).collect();
+        let label = tracker::ADD_LANE_NAMES
+            .iter()
+            .map(|n| (*n).to_string())
+            .chain((lanes.len() + 1..).map(|n| format!("Lane {n}")))
+            .find(|n| !taken.contains(n))
+            .unwrap_or_default();
+        self.edit("Add Lane", None, |tx| {
+            tx.add_lane(drums, &label, LaneKind::Material).map(|_| ())
+        })?;
+        Ok(lanes.len())
+    }
+
+    /// Remove Lane: lane `lane` of drums track `track` with its hits, one
+    /// undo step named for it, "Remove Kick". Undo brings it back in its
+    /// place and slot. Its slot is emptied once the kit is quiet
+    /// (`crate::hand_over`), so it rings out.
+    pub fn remove_lane(&self, track: usize, lane: usize) -> Result<(), String> {
+        let (_, lanes) = self.lanes_of(track)?;
+        let node = *lanes
+            .get(lane)
+            .ok_or_else(|| format!("there is no lane {}", lane + 1))?;
+        let label = self.lane_label(node);
+        self.edit(&format!("Remove {label}"), None, |tx| tx.remove(node))?;
+        Ok(())
+    }
+
+    /// Rename Lane: lane `lane`'s name, one undo step, "Rename Lane", and
+    /// none when the name is unchanged. Answers whether anything changed.
+    pub fn rename_lane(&self, track: usize, lane: usize, name: &str) -> Result<bool, String> {
+        let (_, lanes) = self.lanes_of(track)?;
+        let node = *lanes
+            .get(lane)
+            .ok_or_else(|| format!("there is no lane {}", lane + 1))?;
+        let name = modulation::valid_name(name, "a lane")?;
+        if name == self.lane_label(node) {
+            return Ok(false);
+        }
+        let (_, changed) = self.edit("Rename Lane", None, |tx| {
+            tx.set_value(node, om::LANE_LABEL, Value::Text(name))
+        })?;
+        Ok(changed)
+    }
+
+    /// Move Lane: lane `lane` one place earlier (`by` below zero) or later,
+    /// one undo step named for it, "Move Kick". Its slot stays, so nothing
+    /// is rebuilt. Answers its new place, or none at an end.
+    pub fn move_lane(&self, track: usize, lane: usize, by: i32) -> Result<Option<usize>, String> {
+        let (drums, mut order) = self.lanes_of(track)?;
+        if lane >= order.len() {
+            return Err(format!("there is no lane {}", lane + 1));
+        }
+        let to = lane as i64 + i64::from(by.signum());
+        if by == 0 || to < 0 || to as usize >= order.len() {
+            return Ok(None);
+        }
+        let label = self.lane_label(order[lane]);
+        order.swap(lane, to as usize);
+        self.edit(&format!("Move {label}"), None, |tx| {
+            tx.set_order(drums, om::LANES, order)
+        })?;
+        Ok(Some(to as usize))
+    }
+
     /// Sets which track ducks track `track` (its *Ducked by* picker, roadmap
     /// row 41): the track at place `key`, or none. One undo step, "Set
     /// Ducked by", and none when nothing changes. Stored as a reference to

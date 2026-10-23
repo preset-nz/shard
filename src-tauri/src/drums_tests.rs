@@ -496,3 +496,136 @@ fn a_removed_tracks_lanes_ring_out_before_they_go() {
     }
     assert_eq!(waiting(&r), 0, "and go once it is quiet");
 }
+
+/// The first drums track's lanes as the grid shows them: name and kind.
+fn lane_names(r: &Rig) -> Vec<(String, String)> {
+    let t = r.session.tracker();
+    let kit = t.tracks[1].drums.as_ref().unwrap();
+    kit.lanes
+        .iter()
+        .map(|l| (l.label.clone(), l.kind.clone()))
+        .collect()
+}
+
+fn labels(r: &Rig) -> Vec<String> {
+    lane_names(r).into_iter().map(|(l, _)| l).collect()
+}
+
+#[test]
+fn add_lane_names_from_the_list_and_stops_at_eight() {
+    let r = rig();
+    take_lane_swaps(&r, 0);
+    let steps = r.session.history_labels().0.len();
+    assert_eq!(r.session.add_lane(1).unwrap(), 4);
+    assert_eq!(r.session.history().0.as_deref(), Some("Add Lane"));
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    assert_eq!(
+        lane_names(&r)[4],
+        ("Clap".to_string(), "material".to_string()),
+        "silent until a material is assigned"
+    );
+    // Built into the free slot, nothing else touched.
+    let mut want = vec![None; 8];
+    want[4] = Some(true);
+    assert_eq!(take_lane_swaps(&r, 0), want);
+
+    for _ in 0..3 {
+        r.session.add_lane(1).unwrap();
+    }
+    assert_eq!(
+        labels(&r)[4..],
+        ["Clap", "Tom low", "Tom high", "Crash"].map(String::from)
+    );
+    assert!(r.session.add_lane(1).is_err(), "a kit holds eight");
+    assert_eq!(labels(&r).len(), 8);
+    assert!(
+        r.session.add_lane(0).is_err(),
+        "a melody track has no lanes"
+    );
+
+    // A name in use is skipped, and past the list a lane is numbered.
+    r.session.remove_lane(1, 0).unwrap();
+    assert_eq!(r.session.add_lane(1).unwrap(), 7);
+    assert_eq!(labels(&r)[7], "Lane 8");
+    r.session.rename_lane(1, 7, "Clap").unwrap();
+    r.session.remove_lane(1, 0).unwrap();
+    assert_eq!(r.session.add_lane(1).unwrap(), 7);
+    assert_eq!(labels(&r)[7], "Lane 8");
+}
+
+#[test]
+fn remove_lane_and_undo_give_back_its_hits_and_slot() {
+    let r = rig();
+    take_lane_swaps(&r, 0);
+    let before = r.session.tracker();
+    let hits = r.voices.kits[0].bank.load().0;
+    r.session.remove_lane(1, 0).unwrap();
+    assert_eq!(r.session.history().0.as_deref(), Some("Remove Kick"));
+    assert_eq!(labels(&r), ["Snare", "Hat closed", "Hat open"]);
+    assert!(r.voices.kits[0].bank.load().0.hits[0]
+        .iter()
+        .all(|h| *h == 0));
+    // The lane after it keeps its slot.
+    assert_eq!(
+        r.voices.kits[0].bank.load().0.hits[1],
+        hits.hits[1],
+        "the snare plays from where it was"
+    );
+    take_lane_swaps(&r, 0);
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Remove Kick"));
+    assert_eq!(r.session.tracker(), before);
+    assert_eq!(r.voices.kits[0].bank.load().0, hits);
+    assert_eq!(r.voices.kits[0].key(), Some(0), "the kick keys again");
+    let mut built = vec![None; 8];
+    built[0] = Some(true);
+    assert_eq!(take_lane_swaps(&r, 0), built);
+}
+
+#[test]
+fn move_lane_is_one_named_step_and_rebuilds_nothing() {
+    let r = rig();
+    take_lane_swaps(&r, 0);
+    let hits = r.voices.kits[0].bank.load().0;
+    let steps = r.session.history_labels().0.len();
+    assert_eq!(r.session.move_lane(1, 0, 1).unwrap(), Some(1));
+    assert_eq!(r.session.history().0.as_deref(), Some("Move Kick"));
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    assert_eq!(labels(&r)[..2], ["Snare", "Kick"].map(String::from));
+    assert_eq!(
+        r.voices.kits[0].bank.load().0,
+        hits,
+        "every hit in its slot"
+    );
+    assert_eq!(take_lane_swaps(&r, 0), vec![None; 8]);
+    assert_eq!(r.voices.kits[0].key(), Some(0));
+    // An end stays put and makes no step.
+    assert_eq!(r.session.move_lane(1, 3, 1).unwrap(), None);
+    assert_eq!(r.session.move_lane(1, 0, -1).unwrap(), None);
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    r.session.undo().unwrap();
+    assert_eq!(labels(&r)[..2], ["Kick", "Snare"].map(String::from));
+}
+
+#[test]
+fn rename_lane_is_one_undo_step() {
+    let r = rig();
+    take_lane_swaps(&r, 0);
+    let steps = r.session.history_labels().0.len();
+    assert!(r.session.rename_lane(1, 2, "  Shaker ").unwrap());
+    assert_eq!(labels(&r)[2], "Shaker");
+    assert_eq!(r.session.history().0.as_deref(), Some("Rename Lane"));
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    assert!(
+        !r.session.rename_lane(1, 2, "Shaker").unwrap(),
+        "no change, no step"
+    );
+    assert!(r.session.rename_lane(1, 2, "  ").is_err());
+    assert_eq!(r.session.history_labels().0.len(), steps + 1);
+    assert_eq!(
+        take_lane_swaps(&r, 0),
+        vec![None; 8],
+        "a name builds nothing"
+    );
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Rename Lane"));
+    assert_eq!(labels(&r)[2], "Hat closed");
+}

@@ -234,6 +234,17 @@ export const addTrack = (drums: boolean) => invoke<number>('add_track', { drums 
  * Refused for the last melody track.
  */
 export const removeTrack = (track: number) => invoke<void>('remove_track', { track });
+/** Add Lane: a lane at the end of a drums track's grid, "Add Lane". Answers its place. */
+export const addLane = (track: number) => invoke<number>('add_lane', { track });
+/** Remove Lane: the lane and its hits, "Remove Kick". */
+export const removeLane = (track: number, lane: number) =>
+  invoke<void>('remove_lane', { track, lane });
+/** Rename Lane: "Rename Lane". Answers whether the name changed. */
+export const renameLane = (track: number, lane: number, name: string) =>
+  invoke<boolean>('rename_lane', { track, lane, name });
+/** Move Lane a place earlier (`by` below zero) or later: "Move Kick". Answers its new place, or null at an end. */
+export const moveLane = (track: number, lane: number, by: number) =>
+  invoke<number | null>('move_lane', { track, lane, by });
 /**
  * Mutes a track, or unmutes it: on the next bar while playing and at once
  * while stopped. Flipped in Rust, so a second press before the bar always
@@ -792,6 +803,8 @@ export const editTracker = (track: number, edit: TrackerEdit) =>
 export const MAX_MELODY_TRACKS = 8;
 /** The most drums tracks: the engine's kits. */
 export const MAX_DRUMS_TRACKS = 4;
+/** Lanes in a kit. `MAX_LANES` in Rust. */
+export const MAX_LANES = 8;
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {

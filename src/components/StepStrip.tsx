@@ -68,8 +68,20 @@ interface StripProps {
   /** The track now plays this patch. */
   onPlays: (id: number) => void;
   onChange: (next: Tracker) => void;
+  /** A drums track's lane selection and renaming, which the Track menu acts on. */
+  lanes: LaneUi;
   /** A whole-pattern edit on this track: clear, paste or repeat a bar, rotate, transpose. */
   onEdit: (edit: TrackerEdit) => void;
+}
+
+/** Which lane of the shown drums track is selected, and whether its name is being edited. */
+export interface LaneUi {
+  selected: number | null;
+  renaming: boolean;
+  onSelect: (lane: number) => void;
+  onRenameStart: (lane: number) => void;
+  /** The new name, or null when Escape cancelled. */
+  onRename: (lane: number, name: string | null) => void;
 }
 
 /** The arrangement's tempo and swing, on every track's strip. */
@@ -172,7 +184,7 @@ const withTrack = (tracker: Tracker, index: number, change: Partial<Track>): Tra
  * A drums track's strip: its name, the tempo and swing, its length and its
  * grid. Its switch, fader, Tune and Decay are its card in the Patches lane.
  */
-function DrumsStrip({ tracker, index, step, onChange, kit }: StripProps & { kit: Kit }) {
+function DrumsStrip({ tracker, index, step, onChange, lanes, kit }: StripProps & { kit: Kit }) {
   const track = tracker.tracks[index];
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
@@ -189,6 +201,7 @@ function DrumsStrip({ tracker, index, step, onChange, kit }: StripProps & { kit:
         length={track.length}
         name={trackName(tracker.tracks, index)}
         step={step}
+        lanes={lanes}
         onChange={(drums) => onChange(withTrack(tracker, index, { drums }))}
       />
     </div>
@@ -494,6 +507,7 @@ function KitGrid({
   length,
   name,
   step,
+  lanes,
   onChange,
 }: {
   kit: Kit;
@@ -503,6 +517,7 @@ function KitGrid({
   name: string;
   /** The kit's step playing, from zero, or -1. */
   step: number;
+  lanes: LaneUi;
   onChange: (next: Kit) => void;
 }) {
   const bars = Array.from({ length: Math.ceil(length / BAR) }, (_, b) => b);
@@ -520,7 +535,7 @@ function KitGrid({
           <div key={bar} className="flex min-w-0 flex-col gap-1">
             {kit.lanes.map((lane, n) => (
               <fieldset
-                // biome-ignore lint/suspicious/noArrayIndexKey: a lane is its place until lanes can move (story b2)
+                // biome-ignore lint/suspicious/noArrayIndexKey: the webview has no lane id, only its place
                 key={n}
                 className="flex min-w-0 items-center gap-1"
                 aria-label={`${name}, ${lane.label}, bar ${bar + 1}`}
@@ -554,13 +569,81 @@ function KitGrid({
                     />
                   );
                 })}
-                {bar === 0 && <span className="pl-1 text-[10px]">{lane.label}</span>}
+                {bar === 0 && (
+                  <LaneName
+                    label={lane.label}
+                    selected={lanes.selected === n}
+                    renaming={lanes.selected === n && lanes.renaming}
+                    onSelect={() => lanes.onSelect(n)}
+                    onRenameStart={() => lanes.onRenameStart(n)}
+                    onRename={(name) => lanes.onRename(n, name)}
+                  />
+                )}
               </fieldset>
             ))}
           </div>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A lane's name beside its row: click to select the lane, double-click to
+ * rename it in place. Enter or leaving the field commits, Escape cancels.
+ */
+function LaneName({
+  label,
+  selected,
+  renaming,
+  onSelect,
+  onRenameStart,
+  onRename,
+}: {
+  label: string;
+  selected: boolean;
+  renaming: boolean;
+  onSelect: () => void;
+  onRenameStart: () => void;
+  onRename: (name: string | null) => void;
+}) {
+  const cancelled = useRef(false);
+  if (renaming) {
+    return (
+      <input
+        // biome-ignore lint/a11y/noAutofocus: the field exists because the person asked to rename
+        autoFocus
+        defaultValue={label}
+        aria-label="Lane name"
+        onFocus={(e) => {
+          cancelled.current = false;
+          e.currentTarget.select();
+        }}
+        onBlur={(e) => onRename(cancelled.current ? null : e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            cancelled.current = true;
+            e.currentTarget.blur();
+          }
+        }}
+        className="w-24 rounded-sm border border-border bg-transparent px-1 text-[10px] text-foreground"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      title="Click to select the lane. Double-click to rename it."
+      onClick={onSelect}
+      onDoubleClick={onRenameStart}
+      className={`rounded-sm px-1 text-[10px] ${
+        selected ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
