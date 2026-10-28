@@ -62,7 +62,7 @@ test.** Two traps it has already caught: a buffer dropped on the audio thread
 breaks every saved patch. Each entry declares its own smoothing time, and the
 taper is both a value mapping and a hint about what control to draw.
 
-Keep the table small. Do not add a parameter the DSP does not read.
+Keep the table small: no parameter the DSP does not read. It is never a reason to limit what a node does (Georg, 2026-09-27, on FM operator count: "wouldn't we make the things that make good things?").
 
 **The session is a rhizome document, and the tree is the source of truth**
 (epic 32). `src-tauri/src/object_model/` declares Shard's node types and
