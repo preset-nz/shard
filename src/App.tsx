@@ -1188,6 +1188,7 @@ export default function App() {
         .then(async () => showTracker(await getTracker()))
         .catch((e) => setError(String(e)));
     },
+    onRemove: (l) => void removeLaneRow(l),
   };
   const laneCommand = async (run: () => Promise<number | null>) => {
     try {
@@ -1277,9 +1278,12 @@ export default function App() {
   const typing = useTextFocus();
   const canRename = !typing && patchSelected !== null;
   const canDuplicate = !typing && (mode === 'tracker' ? tracker !== null : patchSelected !== null);
-  // With a track showing and nothing in it selected, Delete removes the track.
+  // With a track showing, Delete removes its selected lane (Georg,
+  // 2026-10-30), or with nothing in it selected the track.
+  const deletableLane = selection === null ? lane : null;
   const deletableTrack = mode === 'tracker' && selection === null && canRemoveTrack;
-  const canDelete = selectedFx !== null || deletablePatch !== null || deletableTrack;
+  const canDelete =
+    selectedFx !== null || deletablePatch !== null || deletableLane !== null || deletableTrack;
 
   // View > Zoom works on the material waveform, when sound scaping shows one.
   const waveZoomable = mode === 'soundscape' && shownWave !== null && !blank;
@@ -1354,6 +1358,7 @@ export default function App() {
       case 'edit.delete':
         if (node?.fx) removeEffect(node);
         else if (deletablePatch) void deletePatchRow(deletablePatch.id);
+        else if (deletableLane !== null) void removeLaneRow(deletableLane);
         else if (deletableTrack) void removeTrackRow(selectedTrack);
         break;
       case 'track.add:melody':

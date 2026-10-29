@@ -88,6 +88,8 @@ export interface LaneUi {
   onRenameStart: (lane: number) => void;
   /** The new name, or null when Escape cancelled. */
   onRename: (lane: number, name: string | null) => void;
+  /** Backspace on a lane's name: Remove Lane, as Edit › Delete is. */
+  onRemove: (lane: number) => void;
 }
 
 /** The arrangement's tempo and swing, on every track's strip. */
@@ -598,6 +600,7 @@ function KitGrid({
                     onSelect={() => lanes.onSelect(n)}
                     onRenameStart={() => lanes.onRenameStart(n)}
                     onRename={(name) => lanes.onRename(n, name)}
+                    onRemove={() => lanes.onRemove(n)}
                   />
                 )}
                 {bar === 0 && (
@@ -627,6 +630,7 @@ function LaneName({
   onSelect,
   onRenameStart,
   onRename,
+  onRemove,
 }: {
   label: string;
   selected: boolean;
@@ -634,6 +638,7 @@ function LaneName({
   onSelect: () => void;
   onRenameStart: () => void;
   onRename: (name: string | null) => void;
+  onRemove: () => void;
 }) {
   const cancelled = useRef(false);
   if (renaming) {
@@ -663,9 +668,17 @@ function LaneName({
     <button
       type="button"
       aria-pressed={selected}
-      title="Click to select the lane. Double-click to rename it."
+      title="Click to select the lane. Double-click to rename it, Backspace to remove it."
       onClick={onSelect}
       onDoubleClick={onRenameStart}
+      onKeyDown={(e) => {
+        if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+        // Ours, not the selected effect's: the window's handler would take
+        // it out of its chain.
+        e.preventDefault();
+        e.stopPropagation();
+        onRemove();
+      }}
       className={`rounded-sm px-1 text-[10px] ${
         selected ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
       }`}
