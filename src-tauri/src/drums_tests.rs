@@ -767,7 +767,7 @@ fn changing_a_lanes_material_rebuilds_only_its_slot() {
 }
 
 #[test]
-fn a_materials_trim_rebuilds_the_lanes_on_it_and_nothing_else() {
+fn a_materials_trim_and_octave_rebuild_the_lanes_on_it_and_nothing_else() {
     let r = rig();
     let a = add_wav(&r, "trimmed");
     r.session.set_lane_plays(1, 0, "material", Some(a)).unwrap();
@@ -781,9 +781,9 @@ fn a_materials_trim_rebuilds_the_lanes_on_it_and_nothing_else() {
         .set_material(a, m.octave, 0.1, 0.6, m.root)
         .unwrap();
     assert_eq!(rebuilt(&r, 0), [0, 2]);
-    // Its octave is no lane's: nothing is built.
+    // Its octave repitches the lanes on it too (Georg, 2026-10-30).
     r.session.set_material(a, 1.0, 0.1, 0.6, m.root).unwrap();
-    assert_eq!(rebuilt(&r, 0), Vec::<usize>::new());
+    assert_eq!(rebuilt(&r, 0), [0, 2]);
 }
 
 #[test]

@@ -854,6 +854,7 @@ fn adding_and_removing_lanes_while_playing_never_touches_the_allocator() {
                     (0..3_000).map(|i| (i as f32 * 0.03).sin()).collect(),
                     0.1,
                     0.9,
+                    1.0,
                 ),
                 k => Lane::new(KINDS[k], SR),
             });

@@ -32,11 +32,12 @@
 //!   frame, so adding a lane does not change another's hiss.
 //!
 //! - **A lane can play a material** (epic 49, story d). `Lane::material` takes
-//!   the samples (mono, at the engine's rate) and a trim, and keeps the
-//!   trimmed window. A hit plays it once from its start, linearly in
-//!   velocity, to its end, whatever the step's length; the next hit cuts it
-//!   with the same tail as a drum. Kit `tune` repitches it (linear
-//!   interpolation, as a drum's pitch follows it); `decay` does not apply.
+//!   the samples (mono, at the engine's rate), a trim and the material's
+//!   octave, and keeps the trimmed window. A hit plays it once from its
+//!   start, linearly in velocity, to its end, whatever the step's length;
+//!   the next hit cuts it with the same tail as a drum. Its octave and kit
+//!   `tune` repitch it (linear interpolation, as a drum's pitch follows
+//!   tune); `decay` does not apply.
 //!   It joins the sum without the drums' glue. The buffer is freed when the
 //!   lane is handed back, off the audio thread.
 //!
@@ -352,6 +353,9 @@ pub struct Lane {
     /// Its voice reads them: `phase` is the position in samples, `rest` the
     /// step a sample, `amp` the velocity.
     samples: Vec<f32>,
+    /// A material lane's rate from its octave, which tune multiplies; 1 for
+    /// a drum.
+    rate: f32,
 }
 
 impl Lane {
@@ -370,15 +374,22 @@ impl Lane {
             tail_left: 0.0,
             hp,
             samples: Vec::new(),
+            rate: 1.0,
         })
     }
 
     /// A lane playing `samples` (mono, at the engine's rate) from
     /// `trim_start` to `trim_end`, 0 to 1 of them in either order, as a
-    /// `sources::Reading` reads them. Trims in place; the window is all it
-    /// keeps. Empty samples play silence. Allocates: never on the audio
-    /// thread.
-    pub fn material(mut samples: Vec<f32>, trim_start: f32, trim_end: f32) -> Box<Self> {
+    /// `sources::Reading` reads them, `octave` octaves up (or down, below
+    /// zero), as the material's own octave sets it. Trims in place; the
+    /// window is all it keeps. Empty samples play silence. Allocates: never
+    /// on the audio thread.
+    pub fn material(
+        mut samples: Vec<f32>,
+        trim_start: f32,
+        trim_end: f32,
+        octave: f32,
+    ) -> Box<Self> {
         let (lo, hi) = crate::sources::Reading {
             trim_start,
             trim_end,
@@ -389,6 +400,7 @@ impl Lane {
         samples.drain(..lo);
         let mut lane = Self::new(LaneKind::Material, 0.0);
         lane.samples = samples;
+        lane.rate = octave.exp2();
         lane
     }
 
@@ -547,7 +559,7 @@ impl Kit {
                 voice.amp *= 1.1;
             }
             LaneKind::Material => {
-                voice.rest = tune;
+                voice.rest = tune * lane.rate;
                 voice.fall = 1.0;
                 voice.amp = velocity;
             }
@@ -718,7 +730,7 @@ mod tests {
 
     fn material_kit(samples: Vec<f32>) -> Kit {
         let mut kit = Kit::new(SR);
-        kit.swap_lane(0, Some(Lane::material(samples, 0.0, 1.0)));
+        kit.swap_lane(0, Some(Lane::material(samples, 0.0, 1.0, 0.0)));
         kit
     }
 
@@ -740,7 +752,7 @@ mod tests {
     fn a_material_trim_keeps_its_window() {
         let m = sine(1_000);
         let mut kit = Kit::new(SR);
-        kit.swap_lane(0, Some(Lane::material(m.clone(), 0.5, 0.25)));
+        kit.swap_lane(0, Some(Lane::material(m.clone(), 0.5, 0.25, 0.0)));
         kit.hit(0, 1.0, &KitParams::default());
         let out = render(&mut kit, 400);
         assert!((out[0] - m[250]).abs() < 1e-6);
@@ -761,6 +773,26 @@ mod tests {
         // An octave up reads twice as fast: half as long.
         assert!((out[100] - m[200]).abs() < 1e-5);
         assert!(out[1_000..].iter().all(|&s| s == 0.0));
+    }
+
+    #[test]
+    fn a_materials_octave_repitches_it_and_tune_adds_to_it() {
+        let m = sine(2_000);
+        let mut kit = Kit::new(SR);
+        kit.swap_lane(0, Some(Lane::material(m.clone(), 0.0, 1.0, -1.0)));
+        kit.hit(0, 1.0, &KitParams::default());
+        let out = render(&mut kit, 4_200);
+        // An octave down reads half as fast: twice as long.
+        assert!((out[200] - m[100]).abs() < 1e-5);
+        assert!(out[3_000] != 0.0 && out[4_000..].iter().all(|&s| s == 0.0));
+        let p = KitParams {
+            tune: 12.0,
+            ..KitParams::default()
+        };
+        kit.hit(0, 1.0, &p);
+        let out = render(&mut kit, 2_200);
+        // And tune an octave up brings it back to the material's own pitch.
+        assert!((out[500] - m[500]).abs() < 1e-5);
     }
 
     #[test]

@@ -247,12 +247,13 @@ impl KitFeed {
 const NO_KEY: u8 = u8::MAX;
 
 /// What a kit slot's lane was built to play: a synthesised drum, or a
-/// material's id and trim, none when its lane names no material in the pool
-/// whose audio is in hand (silent). A change to either rebuilds that slot alone.
+/// material's id, trim and octave, none when its lane names no material in
+/// the pool whose audio is in hand (silent). A change to any rebuilds that
+/// slot alone.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Built {
     Drum(LaneKind),
-    Material(Option<(u64, f32, f32)>),
+    Material(Option<(u64, f32, f32, f32)>),
 }
 
 /// Every voice's and kit's feed, the transport, and which voice the UI
@@ -660,7 +661,7 @@ impl Session {
                             lane.material
                                 .and_then(|id| plan.pool.get(id))
                                 .filter(|m| lock(&self.decoded).contains_key(&m.path))
-                                .map(|m| (m.id, m.trim_start, m.trim_end)),
+                                .map(|m| (m.id, m.trim_start, m.trim_end, m.octave)),
                         ),
                         drum => Built::Drum(drum),
                     });
@@ -812,8 +813,8 @@ impl Session {
                     .and_then(|m| lock(&self.decoded).get(&m.path).cloned())
                     .map(|l| l.samples.clone())
                     .unwrap_or_default();
-                let (start, end) = m.map_or((0.0, 1.0), |(_, s, e)| (s, e));
-                Lane::material(samples, start, end)
+                let (start, end, octave) = m.map_or((0.0, 1.0, 0.0), |(_, s, e, o)| (s, e, o));
+                Lane::material(samples, start, end, octave)
             }
         }
     }
