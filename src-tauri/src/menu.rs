@@ -208,13 +208,15 @@ pub fn commands() -> Vec<Command> {
         toggle("track.mute", "Mute").domain("Track").section(2),
         toggle("track.solo", "Solo").domain("Track").section(2),
         // The selected drums track's lanes (epic 49, story b2), on the lane
-        // selected in its grid. Rename is Edit > Rename. No chords: the
-        // standard's Move Earlier/Later chord is Opt+Up/Down, which this
+        // selected in its grid, all in one Kit submenu (Georg, 2026-10-30).
+        // Edit > Rename and Delete take a selected lane as well. No chords:
+        // the standard's Move Earlier/Later chord is Opt+Up/Down, which this
         // app has not adopted (Move Effect takes Cmd+Opt+Up/Down).
-        track("lane.add", "Add Lane", 3),
-        track("lane.remove", "Remove Lane", 3),
-        track("lane.move-up", "Move Lane Up", 3),
-        track("lane.move-down", "Move Lane Down", 3),
+        track("lane.add", "Add Lane", 3).submenu("Kit"),
+        track("lane.rename", "Rename Lane", 3).submenu("Kit"),
+        track("lane.remove", "Remove Lane", 3).submenu("Kit"),
+        track("lane.move-up", "Move Lane Up", 3).submenu("Kit"),
+        track("lane.move-down", "Move Lane Down", 3).submenu("Kit"),
         // The tracker's bar commands, on the step last focused.
         pattern("pattern-copy", "Copy Bar", 0),
         pattern("pattern-paste", "Paste Bar", 0),

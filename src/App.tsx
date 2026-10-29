@@ -1373,6 +1373,9 @@ export default function App() {
       case 'lane.add':
         if (canAddLane) void addLaneRow();
         break;
+      case 'lane.rename':
+        if (lane !== null) setLaneSel({ track: selectedTrack, lane, renaming: true });
+        break;
       case 'lane.remove':
         if (lane !== null) void removeLaneRow(lane);
         break;
@@ -1431,6 +1434,7 @@ export default function App() {
       'track.add:drums': canAddDrums,
       'track.remove': mode === 'tracker' && canRemoveTrack,
       'lane.add': canAddLane,
+      'lane.rename': lane !== null,
       'lane.remove': lane !== null,
       'lane.move-up': lane !== null && lane > 0,
       'lane.move-down': lane !== null && lane < (shownLanes ?? 0) - 1,
