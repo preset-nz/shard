@@ -19,7 +19,8 @@
 //!   named by its number and made only once it differs from a blank step. A
 //!   `drums` track (story d) holds its kit's switch, fader, tune, decay and
 //!   length, and its lanes (epic 49), listed in its order `lanes`, the
-//!   grid's: each a `lane` named `lane.label` playing the drum `lane.kind`,
+//!   grid's: each a `lane` named `lane.label` playing the drum `lane.kind`
+//!   or, as `material`, the material its reference `lane.material` names,
 //!   its hits `beat` children made the same way as steps, a velocity each.
 //!   The *k*-th of each kind plays on
 //!   voice or kit *k* (`tracker::Slot`). A track of either kind may be
@@ -142,6 +143,9 @@ pub const PATCH_LABEL: &str = "patch.label";
 /// A lane's name and the drum it plays (`tracker::kind_name`).
 pub const LANE_LABEL: &str = "lane.label";
 pub const LANE_KIND: &str = "lane.kind";
+/// The material a `material` lane plays (story d), a reference to it.
+/// Unset, or naming a material that has gone, the lane is silent.
+pub const LANE_MATERIAL: &str = "lane.material";
 /// A hit's velocity, 1 to `HIT_MAX`: a step a lane does not hit has no beat.
 pub const BEAT_VELOCITY: &str = "beat.velocity";
 /// The patch a track plays, a reference to it. Unset, or naming a patch that
@@ -1229,7 +1233,11 @@ pub fn kinds() -> Vec<KindDecl> {
         .text(LANE_LABEL, "")
         .described("Name", "What the lane is called in the grid.")
         .choice(LANE_KIND, &KIND_NAMES, kind_name(LaneKind::Kick))
-        .described("Plays", "The synthesised drum the lane plays.");
+        .described(
+            "Plays",
+            "The synthesised drum the lane plays, or a material.",
+        )
+        .reference(LANE_MATERIAL);
     let t = words(
         t,
         "Lane",

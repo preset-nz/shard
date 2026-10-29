@@ -629,3 +629,228 @@ fn rename_lane_is_one_undo_step() {
     assert_eq!(r.session.undo().unwrap().as_deref(), Some("Rename Lane"));
     assert_eq!(labels(&r)[2], "Hat closed");
 }
+
+/// A material on a lane (epic 49, story d): a mono 48 kHz WAV of distinct
+/// samples in the pool, by its id.
+fn add_wav(r: &Rig, name: &str) -> u64 {
+    let dir = std::env::temp_dir().join(format!("shard-drums-{}-{name}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("{name}.wav"));
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 48_000,
+        bits_per_sample: 32,
+        sample_format: hound::SampleFormat::Float,
+    };
+    let mut w = hound::WavWriter::create(&path, spec).unwrap();
+    for i in 0..4_800 {
+        w.write_sample(((i as f32) * 0.013).sin() * 0.5 + (i % 7) as f32 * 0.01)
+            .unwrap();
+    }
+    w.finalize().unwrap();
+    r.session.add_material(path.to_str().unwrap()).unwrap();
+    r.session
+        .pool()
+        .materials
+        .iter()
+        .find(|m| m.name == format!("{name}.wav"))
+        .unwrap()
+        .id
+}
+
+/// Kit `k`'s lane changes waiting, taken: each slot's new lane, an emptied
+/// slot (`Some(None)`), or none.
+fn take_lanes(r: &Rig, k: usize) -> Vec<Option<Option<Box<shard_dsp::kit::Lane>>>> {
+    let mut pending = r.voices.kits[k].lane_swap.lock().unwrap();
+    pending.iter_mut().map(Option::take).collect()
+}
+
+/// The slots of kit `k` with a lane built since the last look.
+fn rebuilt(r: &Rig, k: usize) -> Vec<usize> {
+    take_lane_swaps(r, k)
+        .iter()
+        .enumerate()
+        .filter_map(|(v, c)| (*c == Some(true)).then_some(v))
+        .collect()
+}
+
+/// What `lane` plays on a hit at full velocity, alone in a kit, `n` frames.
+fn hit(lane: Box<shard_dsp::kit::Lane>, n: usize) -> Vec<f32> {
+    let mut kit = shard_dsp::kit::Kit::new(48_000.0);
+    kit.swap_lane(0, Some(lane));
+    kit.hit(0, 1.0, &shard_dsp::KitParams::default());
+    (0..n).map(|_| kit.process()).collect()
+}
+
+/// The built-in drone, a material with no file.
+fn drone(r: &Rig) -> u64 {
+    r.session
+        .pool()
+        .materials
+        .iter()
+        .find(|m| m.name == crate::materials::DRONE_NAME)
+        .unwrap()
+        .id
+}
+
+fn first_lane(r: &Rig) -> crate::tracker::KitLane {
+    r.session.tracker().tracks[1].drums.as_ref().unwrap().lanes[0].clone()
+}
+
+#[test]
+fn a_lane_set_to_a_material_plays_it_from_its_trim() {
+    let r = rig();
+    let id = add_wav(&r, "plays");
+    let m = r.session.pool().get(id).cloned().unwrap();
+    r.session
+        .set_material(id, m.octave, 0.25, 0.75, m.root)
+        .unwrap();
+    take_lane_swaps(&r, 0);
+    assert!(r
+        .session
+        .set_lane_plays(1, 0, "material", Some(id))
+        .unwrap());
+    assert_eq!(r.session.history().0.as_deref(), Some("Set Plays"));
+    let lane = first_lane(&r);
+    assert_eq!((lane.kind.as_str(), lane.material), ("material", Some(id)));
+    // The same again is no step.
+    let history = r.session.history_labels();
+    assert!(!r
+        .session
+        .set_lane_plays(1, 0, "material", Some(id))
+        .unwrap());
+    assert_eq!(r.session.history_labels(), history);
+
+    let mut lanes = take_lanes(&r, 0);
+    assert!(lanes.iter().skip(1).all(Option::is_none), "only its slot");
+    let built = lanes[0].take().flatten().expect("a lane built");
+    assert_eq!(built.kind(), shard_dsp::kit::LaneKind::Material);
+    let samples = r.session.loaded(id).unwrap().samples.clone();
+    let (lo, hi) = shard_dsp::Reading {
+        trim_start: 0.25,
+        trim_end: 0.75,
+        ..Default::default()
+    }
+    .window(samples.len());
+    let out = hit(built, hi - lo + 100);
+    for (i, s) in out[..hi - lo].iter().enumerate() {
+        assert!((s - samples[lo + i]).abs() < 1e-6, "sample {i}");
+    }
+    assert!(out[hi - lo..].iter().all(|s| *s == 0.0), "then silence");
+    // Its kick gone, nothing keys what the track ducks.
+    assert_eq!(r.voices.kits[0].key(), None);
+}
+
+#[test]
+fn changing_a_lanes_material_rebuilds_only_its_slot() {
+    let r = rig();
+    let a = add_wav(&r, "first");
+    r.session
+        .set_lane_plays(1, 0, "material", Some(drone(&r)))
+        .unwrap();
+    take_lane_swaps(&r, 0);
+    r.session.set_lane_plays(1, 0, "material", Some(a)).unwrap();
+    assert_eq!(rebuilt(&r, 0), [0]);
+    r.session.set_lane_plays(1, 2, "material", Some(a)).unwrap();
+    assert_eq!(rebuilt(&r, 0), [2]);
+    // Back to a drum: the reference goes with it.
+    r.session.set_lane_plays(1, 2, "snare", None).unwrap();
+    assert_eq!(rebuilt(&r, 0), [2]);
+    let lane = r.session.tracker().tracks[1].drums.clone().unwrap().lanes[2].clone();
+    assert_eq!((lane.kind.as_str(), lane.material), ("snare", None));
+    assert!(r.session.set_lane_plays(1, 2, "snare", Some(a)).is_err());
+    assert!(r.session.set_lane_plays(1, 2, "material", None).is_err());
+    assert!(
+        r.session.set_lane_plays(0, 0, "kick", None).is_err(),
+        "a melody track"
+    );
+}
+
+#[test]
+fn a_materials_trim_rebuilds_the_lanes_on_it_and_nothing_else() {
+    let r = rig();
+    let a = add_wav(&r, "trimmed");
+    r.session.set_lane_plays(1, 0, "material", Some(a)).unwrap();
+    r.session.set_lane_plays(1, 2, "material", Some(a)).unwrap();
+    r.session
+        .set_lane_plays(1, 1, "material", Some(drone(&r)))
+        .unwrap();
+    take_lane_swaps(&r, 0);
+    let m = r.session.pool().get(a).cloned().unwrap();
+    r.session
+        .set_material(a, m.octave, 0.1, 0.6, m.root)
+        .unwrap();
+    assert_eq!(rebuilt(&r, 0), [0, 2]);
+    // Its octave is no lane's: nothing is built.
+    r.session.set_material(a, 1.0, 0.1, 0.6, m.root).unwrap();
+    assert_eq!(rebuilt(&r, 0), Vec::<usize>::new());
+}
+
+#[test]
+fn removing_a_material_silences_its_lanes() {
+    let r = rig();
+    let a = add_wav(&r, "removed");
+    r.session.set_lane_plays(1, 0, "material", Some(a)).unwrap();
+    take_lane_swaps(&r, 0);
+    r.session.remove_material(a).unwrap();
+    assert_eq!(first_lane(&r).material, None);
+    let mut lanes = take_lanes(&r, 0);
+    let silent = lanes[0].take().flatten().expect("rebuilt, not emptied");
+    assert_eq!(silent.kind(), shard_dsp::kit::LaneKind::Material);
+    assert!(hit(silent, 1_000).iter().all(|s| *s == 0.0));
+    assert!(lanes.iter().all(Option::is_none), "nothing else");
+    // Undo brings the material back, and the lane plays it again.
+    r.session.undo().unwrap();
+    // (A node brought back by undo has a new runtime id.)
+    assert!(first_lane(&r).material.is_some());
+    let back = take_lanes(&r, 0)[0].take().flatten().unwrap();
+    assert!(hit(back, 1_000).iter().any(|s| *s != 0.0));
+}
+
+#[test]
+fn undoing_set_plays_brings_the_drum_back() {
+    let r = rig();
+    r.session
+        .set_lane_plays(1, 0, "material", Some(drone(&r)))
+        .unwrap();
+    take_lane_swaps(&r, 0);
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Set Plays"));
+    let lane = first_lane(&r);
+    assert_eq!((lane.kind.as_str(), lane.material), ("kick", None));
+    let kick = take_lanes(&r, 0)[0].take().flatten().unwrap();
+    assert_eq!(kick.kind(), shard_dsp::kit::LaneKind::Kick);
+    assert_eq!(r.voices.kits[0].key(), Some(0), "the kick keys again");
+    // Redo: the drone, which the pool holds as a material with no file.
+    r.session.redo().unwrap();
+    let drone = take_lanes(&r, 0)[0].take().flatten().unwrap();
+    assert!(hit(drone, 1_000).iter().any(|s| *s != 0.0));
+}
+
+#[test]
+fn back_to_kick_through_the_picker_and_a_stale_material_is_still_set_tune() {
+    let r = rig();
+    r.session
+        .set_lane_plays(1, 0, "material", Some(drone(&r)))
+        .unwrap();
+    take_lane_swaps(&r, 0);
+    assert!(r.session.set_lane_plays(1, 0, "kick", None).unwrap());
+    let lane = first_lane(&r);
+    assert_eq!((lane.kind.as_str(), lane.material), ("kick", None));
+    let kick = take_lanes(&r, 0)[0].take().flatten().unwrap();
+    assert_eq!(kick.kind(), shard_dsp::kit::LaneKind::Kick);
+    assert_eq!(r.voices.kits[0].key(), Some(0));
+    let history = r.session.history_labels();
+    assert!(!r.session.set_lane_plays(1, 0, "kick", None).unwrap());
+    assert_eq!(r.session.history_labels(), history);
+
+    // What a lane plays is never `set_tracker`'s, so a tracker read before
+    // a pick still drags Tune as one "Set Tune".
+    let mut t = r.session.tracker();
+    t.tracks[1].drums.as_mut().unwrap().lanes[0].material = Some(u64::MAX);
+    for tune in [1.0, 2.0] {
+        t.tracks[1].drums.as_mut().unwrap().tune = tune;
+        r.session.set_tracker(t.clone()).unwrap();
+    }
+    assert_eq!(r.session.undo().unwrap().as_deref(), Some("Set Tune"));
+    assert_eq!(r.voices.kits[0].bank.load().1.tune, 0.0, "one step");
+}

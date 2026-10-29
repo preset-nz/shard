@@ -160,6 +160,10 @@ pub struct KitLane {
     /// only, as the label is: `set_tracker` writes only the hits.
     pub kind: String,
     pub hits: Vec<u8>,
+    /// The material a `material` lane plays, by its runtime id, or none
+    /// (silent). Read only, as `Track::patch` is: `Session::set_lane_plays`
+    /// sets it.
+    pub material: Option<u64>,
 }
 
 impl Default for KitLane {
@@ -168,6 +172,7 @@ impl Default for KitLane {
             label: String::new(),
             kind: kind_name(LaneKind::Kick).into(),
             hits: vec![0; STEPS],
+            material: None,
         }
     }
 }
@@ -248,6 +253,7 @@ impl Kit {
                 label: (*label).into(),
                 kind: kind_name(*kind).into(),
                 hits: vec![0; STEPS],
+                material: None,
             })
             .collect()
     }

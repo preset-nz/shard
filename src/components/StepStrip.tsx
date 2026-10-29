@@ -2,6 +2,7 @@ import { listen } from '@tauri-apps/api/event';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
   type Kit,
+  type MaterialView,
   type PatchInfo,
   type Step,
   type Track,
@@ -9,6 +10,7 @@ import {
   type TrackerEdit,
   trackName,
 } from '@/audio';
+import { LanePlays } from '@/components/LanePlays';
 import { PlaysPicker } from '@/components/PlaysPicker';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
@@ -67,6 +69,10 @@ interface StripProps {
   patches: PatchInfo[];
   /** The track now plays this patch. */
   onPlays: (id: number) => void;
+  /** The pool, for a drums lane's *Plays* picker. */
+  materials: MaterialView[];
+  /** A drums lane, by place, now plays a drum, or `material` and this material. */
+  onLanePlays: (lane: number, kind: string, material: number | null) => void;
   onChange: (next: Tracker) => void;
   /** A drums track's lane selection and renaming, which the Track menu acts on. */
   lanes: LaneUi;
@@ -184,7 +190,16 @@ const withTrack = (tracker: Tracker, index: number, change: Partial<Track>): Tra
  * A drums track's strip: its name, the tempo and swing, its length and its
  * grid. Its switch, fader, Tune and Decay are its card in the Patches lane.
  */
-function DrumsStrip({ tracker, index, step, onChange, lanes, kit }: StripProps & { kit: Kit }) {
+function DrumsStrip({
+  tracker,
+  index,
+  step,
+  materials,
+  onLanePlays,
+  onChange,
+  lanes,
+  kit,
+}: StripProps & { kit: Kit }) {
   const track = tracker.tracks[index];
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
@@ -202,6 +217,8 @@ function DrumsStrip({ tracker, index, step, onChange, lanes, kit }: StripProps &
         name={trackName(tracker.tracks, index)}
         step={step}
         lanes={lanes}
+        materials={materials}
+        onLanePlays={onLanePlays}
         onChange={(drums) => onChange(withTrack(tracker, index, { drums }))}
       />
     </div>
@@ -508,6 +525,8 @@ function KitGrid({
   name,
   step,
   lanes,
+  materials,
+  onLanePlays,
   onChange,
 }: {
   kit: Kit;
@@ -518,6 +537,8 @@ function KitGrid({
   /** The kit's step playing, from zero, or -1. */
   step: number;
   lanes: LaneUi;
+  materials: MaterialView[];
+  onLanePlays: (lane: number, kind: string, material: number | null) => void;
   onChange: (next: Kit) => void;
 }) {
   const bars = Array.from({ length: Math.ceil(length / BAR) }, (_, b) => b);
@@ -577,6 +598,13 @@ function KitGrid({
                     onSelect={() => lanes.onSelect(n)}
                     onRenameStart={() => lanes.onRenameStart(n)}
                     onRename={(name) => lanes.onRename(n, name)}
+                  />
+                )}
+                {bar === 0 && (
+                  <LanePlays
+                    lane={lane}
+                    materials={materials}
+                    onPick={(kind, material) => onLanePlays(n, kind, material)}
                   />
                 )}
               </fieldset>

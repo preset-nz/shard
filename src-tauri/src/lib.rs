@@ -1117,6 +1117,21 @@ fn set_track_duck(
     Ok(state.session.tracker())
 }
 
+/// Sets what a drums track's lane plays, both by place: a drum by its
+/// `lane.kind`, or `material` and a material's id. One step of Undo, "Set
+/// Plays" (epic 49, story d).
+#[tauri::command]
+fn set_lane_plays(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    lane: usize,
+    kind: String,
+    material: Option<u64>,
+) -> Result<tracker::Tracker, String> {
+    state.session.set_lane_plays(track, lane, &kind, material)?;
+    Ok(state.session.tracker())
+}
+
 /// Start or stop playback. Stopping clears the grain pool, so stop is stop.
 #[tauri::command]
 fn set_playing(state: tauri::State<'_, Audio>, playing: bool) {
@@ -2515,6 +2530,7 @@ pub fn run() {
             recording,
             set_track_patch,
             set_track_duck,
+            set_lane_plays,
             rename_patch,
             delete_patch,
             duplicate_patch,

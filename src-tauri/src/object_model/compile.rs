@@ -376,11 +376,25 @@ pub fn compile(tree: &Tree, plan: &mut Plan) {
     for (t, patch) in plan.tracker.tracks.iter_mut().zip(&plan.track_patches) {
         t.patch = patch.map(|p| ids.of(p));
     }
-    plan.kit_lanes = tracks(tree)
+    let drums: Vec<Node<'_>> = tracks(tree)
         .into_iter()
         .filter(|t| t.type_name() == DRUMS)
-        .map(|t| lanes(t).iter().map(|l| l.id()).collect())
         .collect();
+    plan.kit_lanes = drums
+        .iter()
+        .map(|t| lanes(*t).iter().map(|l| l.id()).collect())
+        .collect();
+    // What each lane plays from the pool, by runtime id, as a track's patch.
+    let kits = plan
+        .tracker
+        .tracks
+        .iter_mut()
+        .filter_map(|t| t.drums.as_mut());
+    for (kit, t) in kits.zip(&drums) {
+        for (lane, l) in kit.lanes.iter_mut().zip(lanes(*t)) {
+            lane.material = l.resolve(LANE_MATERIAL).map(|s| ids.of(s.id()));
+        }
+    }
 
     plan.ids = ids.new;
 }
@@ -528,6 +542,7 @@ fn read_drums(t: Node<'_>) -> Track {
                     label: text(&l, LANE_LABEL),
                     kind: text(&l, LANE_KIND),
                     hits,
+                    material: None,
                 }
             })
             .collect(),

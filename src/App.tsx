@@ -101,6 +101,7 @@ import {
   type SourceInfo,
   selectPatch,
   selectTrack,
+  setLanePlays,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -1105,6 +1106,19 @@ export default function App() {
       setError(String(e));
     }
   };
+  // A drums lane's *Plays* picker: one undo step, "Set Plays".
+  const pickLanePlays = async (
+    track: number,
+    lane: number,
+    kind: string,
+    material: number | null,
+  ) => {
+    try {
+      showTracker(await setLanePlays(track, lane, kind, material));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   // A track's *Ducked by* picker: one undo step, "Set Ducked by".
   const pickDuckedBy = async (track: number, key: number | null) => {
     try {
@@ -2042,6 +2056,10 @@ export default function App() {
                 root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
                 patches={patches}
                 onPlays={(id) => void pickPlays(selectedTrack, id)}
+                materials={pool.materials}
+                onLanePlays={(lane, kind, material) =>
+                  void pickLanePlays(selectedTrack, lane, kind, material)
+                }
                 onEdit={(edit) => void editTrackerView(selectedTrack, edit)}
                 onChange={(next) => void changeTracker(next)}
                 lanes={laneUi}

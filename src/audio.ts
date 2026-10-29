@@ -272,6 +272,13 @@ export const setTrackPatch = (track: number, id: number) =>
  */
 export const setTrackDuck = (track: number, key: number | null) =>
   invoke<Tracker>('set_track_duck', { track, key });
+/**
+ * What lane `lane` of drums track `track` plays, both by place (epic 49,
+ * story d): a drum by its kind, or `material` and a material's id. One step
+ * of Undo, "Set Plays". Answers with the tracker as it now is.
+ */
+export const setLanePlays = (track: number, lane: number, kind: string, material: number | null) =>
+  invoke<Tracker>('set_lane_plays', { track, lane, kind, material });
 
 /**
  * Rename a patch. One step of Undo, "Rename Patch 2"; an empty or unchanged
@@ -760,9 +767,11 @@ export const KIT_DECAY_MAX = 4;
  */
 export interface KitLane {
   label: string;
-  /** `kick`, `snare` or `hat`. */
+  /** `kick`, `snare`, `hat` or `material`. */
   kind: string;
   hits: number[];
+  /** The material a `material` lane plays, by id, or null. Read only. */
+  material: number | null;
 }
 
 /** A drums track's kit: its lanes, in the grid's order. Its length and fader are the track's. */
