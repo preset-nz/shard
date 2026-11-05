@@ -533,7 +533,7 @@ fn the_callbacks_hand_offs_stay_off_the_allocator_with_every_track() {
                 let mut t = r.session.tracker();
                 let last = t.tracks.len() - 1;
                 let kit = t.tracks[last].drums.as_mut().unwrap();
-                kit.kick[block % 16] = 127;
+                kit.lanes[0].hits[block % 16] = 127;
                 kit.tune = (block % 24) as f32 - 12.0;
                 r.session.set_tracker(t).unwrap();
                 r.session.toggle_mute(last).unwrap();

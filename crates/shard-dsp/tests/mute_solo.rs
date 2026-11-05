@@ -71,6 +71,7 @@ fn engine_with(active: &[usize], kit: bool, steps: Option<StepParams>) -> (Engin
         e.set_voice_active(v, active.contains(&v));
     }
     e.set_transport(&transport());
+    e.standard_kit_lanes(0);
     e.set_kit(
         0,
         KitPattern::default(),

@@ -2,6 +2,7 @@
 title: Granular
 node: grain
 group: generator
+category: sample
 summary: Cuts the sample into tiny grains and scatters them into a cloud, anywhere from a shimmer to a stuttering texture.
 ---
 

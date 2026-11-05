@@ -2,6 +2,7 @@
 title: Delay
 node: delay
 group: effect
+category: time
 summary: Clean, faithful repeats of the sound, darkened only by Tone.
 ---
 

@@ -2,6 +2,7 @@
 title: Repeat
 node: repeat
 group: effect
+category: time
 summary: Grabs the last slice of sound and loops it, for stutters and freezes.
 ---
 

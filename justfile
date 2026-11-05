@@ -145,18 +145,19 @@ package: build
     cp -R "target/release/bundle/macos/${product}.app" "$outdir/"
     sed "s/{{"{{"}}PRODUCT_NAME{{"}}"}}/${product}/g" packaging/friends-build-README.txt > "$outdir/README.txt"
     cp LICENSE "$outdir/"
-    # Every shipped package's licence text, from the lock (ux-kit's chat
-    # notices included), and the work adapted into Shard itself. By path
-    # until compliance releases `notices` (pending-releases).
-    cargo run -q --release --manifest-path ../../tools/compliance/Cargo.toml -- \
-        notices --title "${product}: third-party notices" --out "$outdir/THIRD-PARTY-NOTICES.txt"
+    # Every shipped package's licence text, from the licence lock.
+    preset-compliance notices --title "${product}: third-party notices" --out "$outdir/THIRD-PARTY-NOTICES.txt"
+    # The work adapted into Shard itself (free-midi-chords).
     cp THIRD_PARTY_NOTICES.md "$outdir/"
     # ditto, not zip, for the .app: plain zip drops the metadata the
     # signature depends on, which is another way to get "app is damaged".
     (cd "$outdir" && \
         ditto -c -k --keepParent "${product}.app" "${product}-v${version}.zip" && \
         zip -q "${product}-v${version}.zip" README.txt LICENSE THIRD-PARTY-NOTICES.txt THIRD_PARTY_NOTICES.md)
-    echo "Packaged: $outdir/${product}-v${version}.zip"
+    # A SHA-256 beside the zip, so a download can be checked against the
+    # sum published on the app page. Family requirement, 2026-11-03.
+    (cd "$outdir" && shasum -a 256 "${product}-v${version}.zip" > SHA256SUMS)
+    echo "Packaged: $outdir/${product}-v${version}.zip (sum in $outdir/SHA256SUMS)"
 
 # Example: just eval-agent run --model qwen/qwen3.6-35b-a3b --think off on
 # Local models writing tracker patterns, timed and checked (evals/agent)

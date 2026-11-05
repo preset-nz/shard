@@ -2,6 +2,7 @@
 title: Chorus
 node: chorus
 group: effect
+category: modulation
 summary: Mixes in gently detuned, swept copies of the sound to widen and thicken it.
 ---
 

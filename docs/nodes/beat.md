@@ -2,19 +2,17 @@
 title: Beat
 node: beat
 group: arrangement
-summary: "One position in a drums track's grid: how hard each drum hits there."
+summary: One step a lane hits on, and how hard.
 ---
 
 # Beat
 
 <!-- generated:begin — preset-docs rewrites this block; write outside it -->
-One position in a drums track's grid: how hard each drum hits there.
+One step a lane hits on, and how hard.
 
 | Control | Range | Default | What it does |
 |---|---|---|---|
-| Kick | 0 to 127 | 0 | How hard the kick hits on this step; 0 is silent. |
-| Snare | 0 to 127 | 0 | How hard the snare hits on this step; 0 is silent. |
-| Hat | 0 to 127 | 0 | How hard the hat hits on this step; 0 is silent. |
+| Velocity | 1 to 127 | 127 | How hard the lane's drum hits on this step. |
 <!-- generated:end -->
 
 ## Using it

@@ -17,7 +17,10 @@
 //! (`tracker::Slot`). Every voice plays its own track's patch: its values,
 //! modulation and materials, handed to its own feed (`VoiceFeed`). Two
 //! tracks on one patch both follow an edit to it. A kit is handed its
-//! track's grid, sound and fader through its own feed (`KitFeed`). Removing
+//! track's grid, sound, fader and lanes through its own feed (`KitFeed`;
+//! the lanes are built here and swapped in, epic 49). Each lane node keeps
+//! one slot of its kit for as long as it lives (`Sent::kit_slots`), so the
+//! grid's order never reaches the engine. Removing
 //! a track moves the later ones of its kind down a voice or kit each; the
 //! fades and smoothers carry the change.
 //!
@@ -86,7 +89,7 @@ use rhizome_pom::{Document, FileStore, PresetRef, Store};
 use serde::{Deserialize, Serialize};
 use shard_dsp::arrangement::{self, TRACK_GAIN_DEFAULT};
 use shard_dsp::fx::{self, Kind as Fx};
-use shard_dsp::kit::{KitParams, KitPattern};
+use shard_dsp::kit::{KitParams, KitPattern, Lane, LaneKind, KICK, MAX_LANES};
 use shard_dsp::params::{GENERATORS, PARAMS};
 use shard_dsp::steps::StepBank;
 use shard_dsp::{
@@ -181,8 +184,15 @@ impl VoiceFeed {
     }
 }
 
+/// Lane changes waiting for a kit, by slot: a lane built to go in, or none
+/// to empty the slot.
+pub type LaneSwaps = [Option<Option<Box<Lane>>>; MAX_LANES];
+/// Lanes a kit gave back, by slot.
+pub type LaneSlots = [Option<Box<Lane>>; MAX_LANES];
+
 /// One kit's inputs (story d): its drums track's grid, sound, fader and
-/// switches. Atomics only, read once a block.
+/// switches, read once a block, and its lanes (epic 49), whose locks the
+/// audio thread only ever tries.
 pub struct KitFeed {
     /// Its track's grid and sound.
     pub bank: KitBank,
@@ -198,6 +208,12 @@ pub struct KitFeed {
     pub heard_mix: AtomicU8,
     /// Its track's sidechain, as `VoiceFeed::duck`.
     pub duck: DuckBank,
+    /// The slot whose hits key what it ducks: its first kick lane's, or
+    /// `NO_KEY`.
+    pub key: AtomicU8,
+    /// Lanes built for it, waiting, and the ones it gave back.
+    pub lane_swap: Mutex<LaneSwaps>,
+    pub lane_retired: Mutex<LaneSlots>,
 }
 
 impl KitFeed {
@@ -210,12 +226,34 @@ impl KitFeed {
             placed: AtomicU32::new(0),
             heard_mix: AtomicU8::new(0),
             duck: DuckBank::default(),
+            key: AtomicU8::new(KICK as u8),
+            lane_swap: Mutex::new(Default::default()),
+            lane_retired: Mutex::new(Default::default()),
         }
     }
 
     pub fn gain(&self) -> f32 {
         f32::from_bits(self.gain.load(Ordering::Relaxed))
     }
+
+    /// The slot that keys, as `Engine::set_kit_key` takes it.
+    pub fn key(&self) -> Option<usize> {
+        let v = self.key.load(Ordering::Relaxed);
+        (v != NO_KEY).then_some(usize::from(v))
+    }
+}
+
+/// `KitFeed::key` with no kick lane: nothing keys.
+const NO_KEY: u8 = u8::MAX;
+
+/// What a kit slot's lane was built to play: a synthesised drum, or a
+/// material's id, trim and octave, none when its lane names no material in
+/// the pool whose audio is in hand (silent). A change to any rebuilds that
+/// slot alone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Built {
+    Drum(LaneKind),
+    Material(Option<(u64, f32, f32, f32)>),
 }
 
 /// Every voice's and kit's feed, the transport, and which voice the UI
@@ -260,17 +298,24 @@ impl Voices {
             drop(lock(&v.swap));
             drop(lock(&v.retired));
         }
+        for k in &self.kits {
+            drop(lock(&k.lane_swap));
+            drop(lock(&k.lane_retired));
+        }
         drop(lock(&self.globals_swap));
         drop(lock(&self.globals_retired));
     }
 
     /// Frees what the audio thread gave back: every voice's source buffers
-    /// and modulation set, and the global LFOs. Off the audio thread, which
-    /// takes no new set while a retired one waits.
+    /// and modulation set, every kit's lanes, and the global LFOs. Off the
+    /// audio thread, which takes no new set while a retired one waits.
     pub fn collect_retired(&self) {
         for v in &self.voice {
             drop(std::mem::take(&mut *lock(&v.retired)));
             drop(lock(&v.mod_retired).take());
+        }
+        for k in &self.kits {
+            drop(std::mem::take(&mut *lock(&k.lane_retired)));
         }
         drop(lock(&self.globals_retired).take());
     }
@@ -379,8 +424,11 @@ struct Sent {
     voices: [Voiced; VOICES],
     /// The track selected in the scene view, or none with a patch selected.
     selected_track: Option<usize>,
-    /// What each kit was handed.
+    /// What each kit was handed, the lanes it was built, by slot, and the
+    /// lane node each slot is held by.
     kits: [KitVoiced; KITS],
+    kit_lanes: [[Option<Built>; MAX_LANES]; KITS],
+    kit_slots: [[Option<NodeId>; MAX_LANES]; KITS],
     /// Every track's node, in the arrangement's order, and where each plays.
     tracks: Vec<NodeId>,
     slots: Vec<Slot>,
@@ -526,6 +574,8 @@ impl Session {
                 play_mode: PlayMode::Song,
                 voices: std::array::from_fn(|_| Voiced::default()),
                 kits: [None; KITS],
+                kit_lanes: [[None; MAX_LANES]; KITS],
+                kit_slots: [[None; MAX_LANES]; KITS],
                 selected_track: None,
                 tracks: Vec::new(),
                 slots: Vec::new(),
@@ -598,10 +648,45 @@ impl Session {
             sent.voices[i] = want;
         }
         for k in 0..KITS {
+            // Its track's lanes, each in the slot it holds, whatever plays:
+            // the patch on its own keeps them.
+            let nodes = plan.kit_lanes.get(k).map(Vec::as_slice).unwrap_or(&[]);
+            let slots = assign_slots(&mut sent.kit_slots[k], nodes);
+            let mut built = [None; MAX_LANES];
+            let mut key = None;
+            if let Some(kit) = plan.tracker.drums().nth(k).and_then(|t| t.drums.as_ref()) {
+                for (lane, &v) in kit.lanes.iter().zip(&slots) {
+                    built[v] = tracker::lane_kind(&lane.kind).map(|kind| match kind {
+                        LaneKind::Material => Built::Material(
+                            lane.material
+                                .and_then(|id| plan.pool.get(id))
+                                .filter(|m| lock(&self.decoded).contains_key(&m.path))
+                                .map(|m| (m.id, m.trim_start, m.trim_end, m.octave)),
+                        ),
+                        drum => Built::Drum(drum),
+                    });
+                    if key.is_none() && built[v] == Some(Built::Drum(LaneKind::Kick)) {
+                        key = Some(v);
+                    }
+                }
+            }
             // On its own, the patch is all that plays: no kit is handed a
             // track, so each fades out.
-            let want = plan.tracker.kit(k).filter(|_| !sent.play_mode.is_alone());
-            self.hand_kit(k, &want, &sent.kits[k], all);
+            let want = plan
+                .tracker
+                .kit(k, &slots)
+                .filter(|_| !sent.play_mode.is_alone());
+            let mut lanes = sent.kit_lanes[k];
+            self.hand_kit(
+                k,
+                &want,
+                &sent.kits[k],
+                all,
+                &mut lanes,
+                (built, key),
+                &plan.pool,
+            );
+            sent.kit_lanes[k] = lanes;
             sent.kits[k] = want;
         }
         sent.tracks = om::tracks(doc.tree()).iter().map(|t| t.id()).collect();
@@ -653,20 +738,84 @@ impl Session {
     /// Hands kit `k` its drums track's grid, sound and fader where they
     /// differ from what it was last handed (`was`), or everything. Switched
     /// in last; switched out when no drums track is there.
-    fn hand_kit(&self, k: usize, want: &KitVoiced, was: &KitVoiced, all: bool) {
+    ///
+    /// Its lanes (`built`, by slot) are built here, off the audio thread,
+    /// only for a slot whose lane differs from the one it was built
+    /// (`lanes`), so an edit, a file opened or the patch played alone never
+    /// cuts a lane ringing. A slot no lane holds any more is emptied: every
+    /// one, when its track goes. The engine empties it once the kit is quiet
+    /// (`crate::hand_over`), so a removed track rings out. Its first kick
+    /// lane (`key`, its slot) keys what it ducks. A material lane is built
+    /// from `pool`.
+    #[allow(clippy::too_many_arguments)]
+    fn hand_kit(
+        &self,
+        k: usize,
+        want: &KitVoiced,
+        was: &KitVoiced,
+        all: bool,
+        lanes: &mut [Option<Built>; MAX_LANES],
+        (built, key): ([Option<Built>; MAX_LANES], Option<usize>),
+        pool: &Pool,
+    ) {
         let feed = &self.feeds.voices.kits[k];
         let Some((pattern, params, gain)) = want else {
             if all || was.is_some() {
                 feed.active.store(false, Ordering::Release);
             }
+            self.build_lanes(feed, lanes, built, pool);
             return;
         };
+        self.build_lanes(feed, lanes, built, pool);
+        feed.key
+            .store(key.map_or(NO_KEY, |v| v as u8), Ordering::Relaxed);
         if all || want != was {
             feed.bank.store(pattern, params);
             feed.gain.store(gain.to_bits(), Ordering::Relaxed);
         }
         if all || was.is_none() {
             feed.active.store(true, Ordering::Release);
+        }
+    }
+
+    /// A lane built for each slot of kit `feed` whose lane (`built`) differs
+    /// from the one it has (`lanes`), or the slot emptied. A material lane
+    /// takes its material's samples, decoded, from `pool`; one whose
+    /// material has gone or is not read is built silent.
+    fn build_lanes(
+        &self,
+        feed: &KitFeed,
+        lanes: &mut [Option<Built>; MAX_LANES],
+        built: [Option<Built>; MAX_LANES],
+        pool: &Pool,
+    ) {
+        if built != *lanes {
+            // Built before the swap is locked: a material is copied whole.
+            let changed: Vec<_> = (0..MAX_LANES)
+                .filter(|&v| built[v] != lanes[v])
+                .map(|v| (v, built[v].map(|b| self.build_lane(b, pool))))
+                .collect();
+            let mut swap = lock(&feed.lane_swap);
+            for (v, lane) in changed {
+                swap[v] = Some(lane);
+            }
+            *lanes = built;
+        }
+    }
+
+    /// The lane `b` says, built here, off the audio thread.
+    fn build_lane(&self, b: Built, pool: &Pool) -> Box<Lane> {
+        match b {
+            Built::Drum(kind) => Lane::new(kind, self.sample_rate),
+            Built::Material(m) => {
+                let samples = m
+                    .and_then(|(id, ..)| pool.get(id))
+                    .and_then(|m| lock(&self.decoded).get(&m.path).cloned())
+                    .map(|l| l.samples.clone())
+                    .unwrap_or_default();
+                let (start, end, octave) = m.map_or((0.0, 1.0, 0.0), |(_, s, e, o)| (s, e, o));
+                Lane::material(samples, start, end, octave)
+            }
         }
     }
 
@@ -1127,8 +1276,20 @@ impl Session {
     /// Tune" or "Set Decay", its switch "Set Drums"; anything else "Edit the
     /// steps", coalesced per track, so edits to two tracks are two steps.
     pub fn set_tracker(&self, next: Tracker) -> Result<Tracker, String> {
-        let next = next.sanitised();
+        let mut next = next.sanitised();
         let now = self.tracker();
+        // A lane's name and what it plays are read only here: only its hits
+        // are written, so stale ones sent back count for nothing.
+        for (a, b) in now.tracks.iter().zip(&mut next.tracks) {
+            let (Some(x), Some(y)) = (&a.drums, &mut b.drums) else {
+                continue;
+            };
+            for (was, lane) in x.lanes.iter().zip(&mut y.lanes) {
+                lane.label.clone_from(&was.label);
+                lane.kind.clone_from(&was.kind);
+                lane.material = was.material;
+            }
+        }
         // What a track plays is never this call's: a stale `patch` sent back
         // counts for nothing.
         // Nor who ducks it, which is `set_track_duck`'s.
@@ -1252,6 +1413,102 @@ impl Session {
         Ok(())
     }
 
+    /// The drums node of track `track` and its lane nodes, in the grid's
+    /// order, or why there are none.
+    fn lanes_of(&self, track: usize) -> Result<(NodeId, Vec<NodeId>), String> {
+        self.read(|d| {
+            let t = *om::tracks(d.tree())
+                .get(track)
+                .ok_or_else(|| format!("there is no track {}", track + 1))?;
+            if t.type_name() != om::DRUMS {
+                return Err("only a drums track has lanes".to_string());
+            }
+            Ok((t.id(), om::lanes(t).iter().map(|l| l.id()).collect()))
+        })
+    }
+
+    /// A lane's name, for an undo step.
+    fn lane_label(&self, lane: NodeId) -> String {
+        self.read(|d| match d.tree().get(lane)?.value(om::LANE_LABEL) {
+            Some(Value::Text(s)) => Some(s),
+            _ => None,
+        })
+        .unwrap_or_default()
+    }
+
+    /// Add Lane: a lane at the end of drums track `track`'s grid, named from
+    /// `tracker::ADD_LANE_NAMES` (the first not taken, then "Lane 5" and on), playing
+    /// no sound until a material is assigned. One undo step, "Add Lane".
+    /// Refused at `MAX_LANES`. Answers its place.
+    pub fn add_lane(&self, track: usize) -> Result<usize, String> {
+        let (drums, lanes) = self.lanes_of(track)?;
+        if lanes.len() >= MAX_LANES {
+            return Err(format!("a kit holds at most {MAX_LANES} lanes"));
+        }
+        let taken: Vec<String> = lanes.iter().map(|l| self.lane_label(*l)).collect();
+        let label = tracker::ADD_LANE_NAMES
+            .iter()
+            .map(|n| (*n).to_string())
+            .chain((lanes.len() + 1..).map(|n| format!("Lane {n}")))
+            .find(|n| !taken.contains(n))
+            .unwrap_or_default();
+        self.edit("Add Lane", None, |tx| {
+            tx.add_lane(drums, &label, LaneKind::Material).map(|_| ())
+        })?;
+        Ok(lanes.len())
+    }
+
+    /// Remove Lane: lane `lane` of drums track `track` with its hits, one
+    /// undo step named for it, "Remove Kick". Undo brings it back in its
+    /// place and slot. Its slot is emptied once the kit is quiet
+    /// (`crate::hand_over`), so it rings out.
+    pub fn remove_lane(&self, track: usize, lane: usize) -> Result<(), String> {
+        let (_, lanes) = self.lanes_of(track)?;
+        let node = *lanes
+            .get(lane)
+            .ok_or_else(|| format!("there is no lane {}", lane + 1))?;
+        let label = self.lane_label(node);
+        self.edit(&format!("Remove {label}"), None, |tx| tx.remove(node))?;
+        Ok(())
+    }
+
+    /// Rename Lane: lane `lane`'s name, one undo step, "Rename Lane", and
+    /// none when the name is unchanged. Answers whether anything changed.
+    pub fn rename_lane(&self, track: usize, lane: usize, name: &str) -> Result<bool, String> {
+        let (_, lanes) = self.lanes_of(track)?;
+        let node = *lanes
+            .get(lane)
+            .ok_or_else(|| format!("there is no lane {}", lane + 1))?;
+        let name = modulation::valid_name(name, "a lane")?;
+        if name == self.lane_label(node) {
+            return Ok(false);
+        }
+        let (_, changed) = self.edit("Rename Lane", None, |tx| {
+            tx.set_value(node, om::LANE_LABEL, Value::Text(name))
+        })?;
+        Ok(changed)
+    }
+
+    /// Move Lane: lane `lane` one place earlier (`by` below zero) or later,
+    /// one undo step named for it, "Move Kick". Its slot stays, so nothing
+    /// is rebuilt. Answers its new place, or none at an end.
+    pub fn move_lane(&self, track: usize, lane: usize, by: i32) -> Result<Option<usize>, String> {
+        let (drums, mut order) = self.lanes_of(track)?;
+        if lane >= order.len() {
+            return Err(format!("there is no lane {}", lane + 1));
+        }
+        let to = lane as i64 + i64::from(by.signum());
+        if by == 0 || to < 0 || to as usize >= order.len() {
+            return Ok(None);
+        }
+        let label = self.lane_label(order[lane]);
+        order.swap(lane, to as usize);
+        self.edit(&format!("Move {label}"), None, |tx| {
+            tx.set_order(drums, om::LANES, order)
+        })?;
+        Ok(Some(to as usize))
+    }
+
     /// Sets which track ducks track `track` (its *Ducked by* picker, roadmap
     /// row 41): the track at place `key`, or none. One undo step, "Set
     /// Ducked by", and none when nothing changes. Stored as a reference to
@@ -1286,6 +1543,59 @@ impl Session {
         let (_, changed) = self.edit("Set Ducked by", None, |tx| match want {
             Some(k) => tx.set_ref(t, by, Ref::here(k)),
             None => tx.clear_ref(t, by),
+        })?;
+        Ok(changed)
+    }
+
+    /// Sets what lane `lane` of drums track `track` (both by place) plays:
+    /// the drum `kind` names, or with `kind` `material` the material
+    /// `material`, a reference to it. One undo step, "Set Plays", and none
+    /// when nothing changes; a drum clears the reference. A material whose
+    /// file can't be read is refused. Answers whether anything changed.
+    pub fn set_lane_plays(
+        &self,
+        track: usize,
+        lane: usize,
+        kind: &str,
+        material: Option<u64>,
+    ) -> Result<bool, String> {
+        let drum = tracker::lane_kind(kind).ok_or_else(|| format!("no lane plays {kind}"))?;
+        let sample = match (drum, material) {
+            (LaneKind::Material, Some(id)) => {
+                let node = self.sample(id)?;
+                let path = self.pool().get(id).and_then(|m| m.path.clone());
+                self.decode(&path)?;
+                Some(node)
+            }
+            (LaneKind::Material, None) => return Err("a material lane needs a material".into()),
+            (_, None) => None,
+            (_, Some(_)) => return Err(format!("a {kind} lane plays no material")),
+        };
+        let (node, now) = self.read(|d| {
+            let tracks = om::tracks(d.tree());
+            let t = tracks
+                .get(track)
+                .filter(|t| t.type_name() == om::DRUMS)
+                .ok_or_else(|| format!("track {} is no drums track", track + 1))?;
+            let l = *om::lanes(*t)
+                .get(lane)
+                .ok_or_else(|| format!("there is no lane {}", lane + 1))?;
+            let now = (
+                l.value(om::LANE_KIND),
+                l.resolve(om::LANE_MATERIAL).map(|n| n.id()),
+            );
+            Ok::<_, String>((l.id(), now))
+        })?;
+        let want = Value::Choice(kind.into());
+        if now == (Some(want.clone()), sample) {
+            return Ok(false);
+        }
+        let (_, changed) = self.edit("Set Plays", None, |tx| {
+            tx.put(node, om::LANE_KIND, want)?;
+            match sample {
+                Some(s) => tx.set_ref(node, om::LANE_MATERIAL, Ref::here(s)),
+                None => tx.clear_ref(node, om::LANE_MATERIAL),
+            }
         })?;
         Ok(changed)
     }
@@ -2665,6 +2975,34 @@ fn voicing(plan: &Plan, selected_track: Option<usize>, mode: PlayMode) -> [Voice
     out
 }
 
+/// The slot of kit `held` each of `lanes` plays in, in their order. A lane
+/// keeps the slot it holds; a slot whose lane has gone is let go first, and
+/// each lane new to the kit takes the lowest free one. So reordering moves
+/// no lane, and only an added or removed lane changes a slot. Lanes past
+/// `MAX_LANES` get none.
+fn assign_slots(held: &mut [Option<NodeId>; MAX_LANES], lanes: &[NodeId]) -> Vec<usize> {
+    let lanes = &lanes[..lanes.len().min(MAX_LANES)];
+    for slot in held.iter_mut() {
+        if slot.is_some_and(|n| !lanes.contains(&n)) {
+            *slot = None;
+        }
+    }
+    lanes
+        .iter()
+        .map(|n| match held.iter().position(|s| *s == Some(*n)) {
+            Some(v) => v,
+            None => {
+                let v = held
+                    .iter()
+                    .position(Option::is_none)
+                    .expect("a slot for every lane");
+                held[v] = Some(*n);
+                v
+            }
+        })
+        .collect()
+}
+
 /// A track's name by its slot, as the scene view and Undo show it: "Track 2"
 /// by its place among the melody tracks, "Drums 1" among the drums.
 pub fn track_name(slot: Slot) -> String {
@@ -2701,10 +3039,7 @@ fn one_setting(a: &Track, b: &Track) -> Option<(&'static str, &'static str)> {
     let (Some(x), Some(y)) = (&a.drums, &b.drums) else {
         return None;
     };
-    if a.gain != b.gain
-        || a.length != b.length
-        || (&x.kick, &x.snare, &x.hat) != (&y.kick, &y.snare, &y.hat)
-    {
+    if a.gain != b.gain || a.length != b.length || x.lanes != y.lanes {
         return None;
     }
     match (x.on != y.on, x.tune != y.tune, x.decay != y.decay) {

@@ -7,7 +7,7 @@
 //! {
 //!   "tracker": { "tempo": 87, "swing": 0, "tracks": [
 //!     { "length": 16, "steps": [ ... ] },
-//!     { "length": 32, "gain": 0.7, "drums": { "on": true, "kick": [ 110, 0, ... ] } }
+//!     { "length": 32, "gain": 0.7, "drums": { "on": true, "lanes": [ { "hits": [ 110, 0, ... ] } ] } }
 //!   ] },
 //!   "patch": { "fm.on": 1, "patch.length": 2 },
 //!   "effects": [ { "kind": "drive", "amount": 14, "mix": 0.4 } ],
@@ -16,7 +16,9 @@
 //! ```
 //!
 //! `tracker` is `Tracker`'s own shape: a track with `drums` is a drums track
-//! (epic 28, story d), the rest melody tracks, in order. The session gets
+//! (epic 28, story d), the rest melody tracks, in order. A drums track's
+//! `lanes` are hits by place on the four it is made with: Kick, Snare, Hat
+//! closed and Hat open (`tracker::STANDARD_LANES`). The session gets
 //! those tracks; a sketch that lists no drums track keeps a new session's,
 //! switched off, as the Drums lane was before drums were tracks. `patch` and `arrangement` are rows by
 //! id; an id left out keeps its default. `effects` is the patch's chain in
@@ -30,6 +32,8 @@ use serde::Deserialize;
 use shard_dsp::fx;
 
 use crate::session::Session;
+#[cfg(test)]
+use crate::tracker::IN_ORDER;
 use crate::tracker::{Track, Tracker};
 
 #[derive(Debug, Default, Deserialize)]
@@ -125,7 +129,7 @@ fn a_sketch_writes_its_tracker_values_and_chain() {
         r#"{
             "tracker": { "tempo": 87, "tracks": [
                 { "length": 16, "gain": 0.8 },
-                { "length": 32, "gain": 0.7, "drums": { "on": true, "tune": -2, "kick": [110] } }
+                { "length": 32, "gain": 0.7, "drums": { "on": true, "tune": -2, "lanes": [ { "hits": [110] } ] } }
             ] },
             "patch": { "fm.on": 1, "filter.cutoff": 420 },
             "effects": [ { "kind": "drive", "amount": 14 }, { "kind": "drive", "mix": 0.5 } ],
@@ -140,7 +144,7 @@ fn a_sketch_writes_its_tracker_values_and_chain() {
     assert_eq!(r.arrangement.get_by_id("arrangement.amp.gain"), Some(0.7));
     let t = r.session.tracker();
     assert_eq!(t.tracks[0].gain, 0.8);
-    let (grid, sound, gain) = t.kit(0).expect("the drums track");
+    let (grid, sound, gain) = t.kit(0, &IN_ORDER).expect("the drums track");
     assert_eq!(
         (grid.length, grid.hits[0][0], grid.hits[0][1]),
         (32, 110, 0)
@@ -191,7 +195,7 @@ fn a_sketch_gets_the_tracks_it_lists() {
             crate::tracker::Slot::Drums(0)
         ]
     );
-    assert!(!t.kit(0).unwrap().1.on);
+    assert!(!t.kit(0, &IN_ORDER).unwrap().1.on);
 
     let r = crate::session_tests::rig();
     let mixed: Sketch = serde_json::from_str(
@@ -209,5 +213,5 @@ fn a_sketch_gets_the_tracks_it_lists() {
         ]
     );
     assert_eq!((t.tracks[0].length, t.tracks[1].length), (8, 4));
-    assert!(t.kit(0).unwrap().1.on);
+    assert!(t.kit(0, &IN_ORDER).unwrap().1.on);
 }

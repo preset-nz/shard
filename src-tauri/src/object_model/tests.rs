@@ -92,7 +92,9 @@ fn a_new_session_holds_what_a_new_session_holds_today() {
     assert_eq!(kinds, [TRACK, DRUMS]);
     let drums = a.order(TRACKS)[1];
     assert_eq!(drums.value("drums.on"), Some(Value::Bool(false)));
-    assert!(drums.children().any(|b| b.type_name() == BEAT));
+    let lanes = drums.order(LANES);
+    assert_eq!(lanes.len(), 4, "Kick, Snare, Hat closed and Hat open");
+    assert!(lanes[0].children().any(|b| b.type_name() == BEAT));
     assert!(a.child("kit").is_none(), "no kit beside the tracks");
     assert_eq!(a.child("amp").unwrap().type_name(), MASTER);
     assert!(a.order(CHAIN).is_empty());
@@ -465,6 +467,34 @@ fn a_session_saves_and_opens_as_rhizome_text() {
     let (back, report) = rhizome_core::Tree::load(&text, doc.tree().registry().clone()).unwrap();
     assert!(report.issues.is_empty(), "{:?}", report.issues);
     assert_eq!(back.serialise(), text);
+}
+
+/// Every generator and effect is in exactly one category, and the table names
+/// only kinds that exist, so the docs index never lists a kind twice or
+/// under a stale name.
+#[test]
+fn every_generator_and_effect_has_one_category() {
+    let kinds = kinds();
+    for d in &kinds {
+        let t = &d.node_type;
+        let homes = CATEGORIES
+            .iter()
+            .filter(|(_, ks)| ks.contains(&t.name()))
+            .count();
+        // By group, not role: the drums track is a generator to the engine
+        // but an arrangement node on the page.
+        let browsable = matches!(t.group_tag(), Some("generator" | "effect"));
+        assert_eq!(homes, usize::from(browsable), "{}", t.name());
+        assert_eq!(t.category_tag().is_some(), browsable, "{}", t.name());
+    }
+    for (c, ks) in CATEGORIES {
+        for k in *ks {
+            assert!(
+                kinds.iter().any(|d| d.node_type.name() == *k),
+                "{c} names {k}, which is no kind"
+            );
+        }
+    }
 }
 
 /// Every node the work area lists is named by its kind: the webview holds no

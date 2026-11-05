@@ -1279,6 +1279,43 @@ fn remove_track(state: tauri::State<'_, Audio>, track: usize) -> Result<(), Stri
     state.session.remove_track(track)
 }
 
+/// Add Lane: a lane at the end of a drums track's grid, one step of Undo,
+/// "Add Lane". Refused at eight. Answers its place.
+#[tauri::command]
+fn add_lane(state: tauri::State<'_, Audio>, track: usize) -> Result<usize, String> {
+    state.session.add_lane(track)
+}
+
+/// Remove Lane: the lane and its hits, one step of Undo, "Remove Kick".
+#[tauri::command]
+fn remove_lane(state: tauri::State<'_, Audio>, track: usize, lane: usize) -> Result<(), String> {
+    state.session.remove_lane(track, lane)
+}
+
+/// Rename Lane: one step of Undo, "Rename Lane"; an unchanged name makes
+/// none. Answers whether it changed.
+#[tauri::command]
+fn rename_lane(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    lane: usize,
+    name: String,
+) -> Result<bool, String> {
+    state.session.rename_lane(track, lane, &name)
+}
+
+/// Move Lane one place earlier (`by` below zero) or later, one step of Undo,
+/// "Move Kick". Answers its new place, or none at an end.
+#[tauri::command]
+fn move_lane(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    lane: usize,
+    by: i32,
+) -> Result<Option<usize>, String> {
+    state.session.move_lane(track, lane, by)
+}
+
 /// Renames a patch. One step of Undo, "Rename Patch 2"; an empty or
 /// unchanged name makes none. Answers whether it changed.
 #[tauri::command]
@@ -1354,6 +1391,21 @@ fn set_track_duck(
     key: Option<usize>,
 ) -> Result<tracker::Tracker, String> {
     state.session.set_track_duck(track, key)?;
+    Ok(state.session.tracker())
+}
+
+/// Sets what a drums track's lane plays, both by place: a drum by its
+/// `lane.kind`, or `material` and a material's id. One step of Undo, "Set
+/// Plays" (epic 49, story d).
+#[tauri::command]
+fn set_lane_plays(
+    state: tauri::State<'_, Audio>,
+    track: usize,
+    lane: usize,
+    kind: String,
+    material: Option<u64>,
+) -> Result<tracker::Tracker, String> {
+    state.session.set_lane_plays(track, lane, &kind, material)?;
     Ok(state.session.tracker())
 }
 
@@ -2173,6 +2225,8 @@ pub(crate) struct Held {
     /// Each voice's `VoiceFeed::placed` as last seen, and each kit's.
     placed: [u32; VOICES],
     kit_placed: [u32; KITS],
+    /// The lanes each kit gave back.
+    lanes: [session::LaneSlots; KITS],
 }
 
 impl Held {
@@ -2183,6 +2237,7 @@ impl Held {
             globals: None,
             placed: [0; VOICES],
             kit_placed: [0; KITS],
+            lanes: Default::default(),
         }
     }
 }
@@ -2282,12 +2337,38 @@ pub(crate) fn hand_over(
             engine.set_voice_active(i, active);
         }
     }
-    // The drums tracks' kits: grid and sound, fader, mix, then the switch.
+    // The drums tracks' kits: lanes, grid and sound, fader, mix, then the
+    // switch. A lane given back waits, as a retired source does, and no new
+    // one is taken while it does, so a lane is never freed on this thread.
+    // A slot emptied waits until its kit is quiet, so a removed track rings
+    // out.
     for (k, feed) in voices.kits.iter().enumerate() {
+        let retiring = &mut held.lanes[k];
+        if retiring.iter().any(Option::is_some) {
+            if let Ok(mut slot) = feed.lane_retired.try_lock() {
+                if slot.iter().all(Option::is_none) {
+                    *slot = std::mem::take(retiring);
+                }
+            }
+        }
+        if retiring.iter().all(Option::is_none) {
+            if let Ok(mut pending) = feed.lane_swap.try_lock() {
+                let quiet = !engine.kit_sounding(k);
+                for (v, change) in pending.iter_mut().enumerate() {
+                    if matches!(change, Some(None)) && !quiet {
+                        continue;
+                    }
+                    if let Some(lane) = change.take() {
+                        retiring[v] = engine.swap_kit_lane(k, v, lane);
+                    }
+                }
+            }
+        }
         let (pattern, params) = feed.bank.load();
         engine.set_kit(k, pattern, params);
         engine.set_kit_gain(k, feed.gain());
         engine.set_kit_duck(k, feed.duck.load());
+        engine.set_kit_key(k, feed.key());
         let placed = feed.placed.load(Ordering::Acquire);
         let mix = Mix::from_bits(feed.mix.load(Ordering::Acquire));
         if placed != held.kit_placed[k] {
@@ -2712,6 +2793,10 @@ pub fn run() {
             select_track,
             add_track,
             remove_track,
+            add_lane,
+            remove_lane,
+            rename_lane,
+            move_lane,
             toggle_track_mute,
             toggle_track_solo,
             record_start,
@@ -2720,6 +2805,7 @@ pub fn run() {
             recording,
             set_track_patch,
             set_track_duck,
+            set_lane_plays,
             rename_patch,
             rename_track,
             delete_patch,
@@ -2894,10 +2980,16 @@ mod tests {
                 "Track lost `{key}`"
             );
         }
-        for key in ["on", "tune", "decay", "kick", "snare", "hat"] {
+        for key in ["on", "tune", "decay", "lanes"] {
             assert!(
                 tracker["tracks"][1]["drums"].get(key).is_some(),
                 "Kit lost `{key}`"
+            );
+        }
+        for key in ["label", "kind", "hits"] {
+            assert!(
+                tracker["tracks"][1]["drums"]["lanes"][0].get(key).is_some(),
+                "KitLane lost `{key}`"
             );
         }
 

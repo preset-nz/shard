@@ -2,6 +2,7 @@
 title: Echo
 node: echo
 group: effect
+category: time
 summary: "The worn counterpart of the delay: each repeat comes back darker, dirtier and slightly wandering, like a loop of tape."
 ---
 

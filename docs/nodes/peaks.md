@@ -2,6 +2,7 @@
 title: Peaks
 node: peaks
 group: effect
+category: filter
 summary: Two narrow boosted bands that ring like resonators on noise and whistle when swept.
 ---
 

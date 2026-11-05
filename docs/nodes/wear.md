@@ -2,6 +2,7 @@
 title: Wear
 node: wear
 group: effect
+category: distortion
 summary: "Tape that has been looked after badly: pitch wobble, lurching, level dropouts and a dulled top end."
 ---
 

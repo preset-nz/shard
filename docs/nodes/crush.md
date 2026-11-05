@@ -2,6 +2,7 @@
 title: Crush
 node: crush
 group: effect
+category: distortion
 summary: Degrades the sound by throwing away resolution and sample rate, for gritty lo-fi digital crunch.
 ---
 

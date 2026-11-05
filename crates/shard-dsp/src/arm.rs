@@ -66,8 +66,10 @@ impl Arm {
     /// passes blocks straight through and stops feeding.
     pub fn feed(&mut self, block: &[f32], mut emit: impl FnMut(&[f32])) -> bool {
         let hit = block
-            .chunks_exact(2)
-            .position(|f| f[0].abs() >= self.threshold || f[1].abs() >= self.threshold);
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .position(|&[l, r]| l.abs() >= self.threshold || r.abs() >= self.threshold);
         let Some(k) = hit else {
             self.remember(block);
             return false;
@@ -96,9 +98,9 @@ impl Arm {
     fn remember(&mut self, block: &[f32]) {
         // Only the last `preroll` frames of a long block can matter.
         let keep = block.len().min(self.preroll * 2) & !1;
-        for f in block[block.len() - keep..].chunks_exact(2) {
-            self.ring[self.write * 2] = f[0];
-            self.ring[self.write * 2 + 1] = f[1];
+        for &[l, r] in block[block.len() - keep..].as_chunks::<2>().0 {
+            self.ring[self.write * 2] = l;
+            self.ring[self.write * 2 + 1] = r;
             self.write = (self.write + 1) % self.preroll;
         }
         self.filled = (self.filled + keep / 2).min(self.preroll);

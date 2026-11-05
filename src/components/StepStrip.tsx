@@ -1,9 +1,8 @@
 import { listen } from '@tauri-apps/api/event';
 import { type KeyboardEvent, useEffect, useRef, useState } from 'react';
 import {
-  KIT_VOICES,
   type Kit,
-  type KitVoice,
+  type MaterialView,
   type PatchInfo,
   type Step,
   type Track,
@@ -11,6 +10,7 @@ import {
   type TrackerEdit,
   trackName,
 } from '@/audio';
+import { LanePlays } from '@/components/LanePlays';
 import { PlaysPicker } from '@/components/PlaysPicker';
 import { Slider } from '@/components/ui/slider';
 import { noteName } from '@/lib/notes';
@@ -48,7 +48,7 @@ const fromPercent = (percent: number) => (percent - 50) / 50;
  * Every change hands the whole tracker up; App shows it at once and Rust
  * answers with it brought into range.
  *
- * A drums track (epic 28, story d) shows its kick, snare and hat grid
+ * A drums track (epic 28, story d) shows its grid, a row per lane,
  * instead of steps (`DrumsStrip`), and a melody track no longer shows the
  * drums under it.
  */
@@ -69,9 +69,27 @@ interface StripProps {
   patches: PatchInfo[];
   /** The track now plays this patch. */
   onPlays: (id: number) => void;
+  /** The pool, for a drums lane's *Plays* picker. */
+  materials: MaterialView[];
+  /** A drums lane, by place, now plays a drum, or `material` and this material. */
+  onLanePlays: (lane: number, kind: string, material: number | null) => void;
   onChange: (next: Tracker) => void;
+  /** A drums track's lane selection and renaming, which the Track menu acts on. */
+  lanes: LaneUi;
   /** A whole-pattern edit on this track: clear, paste or repeat a bar, rotate, transpose. */
   onEdit: (edit: TrackerEdit) => void;
+}
+
+/** Which lane of the shown drums track is selected, and whether its name is being edited. */
+export interface LaneUi {
+  selected: number | null;
+  renaming: boolean;
+  onSelect: (lane: number) => void;
+  onRenameStart: (lane: number) => void;
+  /** The new name, or null when Escape cancelled. */
+  onRename: (lane: number, name: string | null) => void;
+  /** Backspace on a lane's name: Remove Lane, as Edit › Delete is. */
+  onRemove: (lane: number) => void;
 }
 
 /** The arrangement's tempo and swing, on every track's strip. */
@@ -174,7 +192,16 @@ const withTrack = (tracker: Tracker, index: number, change: Partial<Track>): Tra
  * A drums track's strip: its name, the tempo and swing, its length and its
  * grid. Its switch, fader, Tune and Decay are its card in the Patches lane.
  */
-function DrumsStrip({ tracker, index, step, onChange, kit }: StripProps & { kit: Kit }) {
+function DrumsStrip({
+  tracker,
+  index,
+  step,
+  materials,
+  onLanePlays,
+  onChange,
+  lanes,
+  kit,
+}: StripProps & { kit: Kit }) {
   const track = tracker.tracks[index];
   return (
     <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
@@ -191,6 +218,9 @@ function DrumsStrip({ tracker, index, step, onChange, kit }: StripProps & { kit:
         length={track.length}
         name={trackName(tracker.tracks, index)}
         step={step}
+        lanes={lanes}
+        materials={materials}
+        onLanePlays={onLanePlays}
         onChange={(drums) => onChange(withTrack(tracker, index, { drums }))}
       />
     </div>
@@ -477,7 +507,6 @@ function MelodyStrip({
   );
 }
 
-const KIT_LABELS: Record<KitVoice, string> = { kick: 'Kick', snare: 'Snare', hat: 'Hat' };
 /** A hit at full velocity, and the ghost note a second click leaves. `HIT_MAX` and `HIT_GHOST` in Rust. */
 const HIT_MAX = 127;
 const HIT_GHOST = 48;
@@ -485,8 +514,9 @@ const HIT_GHOST = 48;
 const nextHit = (v: number) => (v === 0 ? HIT_MAX : v === HIT_MAX ? HIT_GHOST : 0);
 
 /**
- * A drums track's grid (Georg, 2026-10-03, a stop-gap until roadmap row 25):
- * a row per drum, a column a sixteenth, and any number of drums on one step.
+ * A drums track's grid (Georg, 2026-10-03): a row per lane, in the kit's
+ * order and named for it (epic 49), a column a sixteenth, and any number of
+ * lanes on one step.
  * It runs on the tracks' clock with the track's own length, so a bar of
  * drums loops under a longer line. Its switch, level, tune and decay are the
  * track's card.
@@ -496,6 +526,9 @@ function KitGrid({
   length,
   name,
   step,
+  lanes,
+  materials,
+  onLanePlays,
   onChange,
 }: {
   kit: Kit;
@@ -505,13 +538,16 @@ function KitGrid({
   name: string;
   /** The kit's step playing, from zero, or -1. */
   step: number;
+  lanes: LaneUi;
+  materials: MaterialView[];
+  onLanePlays: (lane: number, kind: string, material: number | null) => void;
   onChange: (next: Kit) => void;
 }) {
   const bars = Array.from({ length: Math.ceil(length / BAR) }, (_, b) => b);
-  const setHit = (voice: KitVoice, i: number, v: number) => {
-    const row = Array.from({ length: STEPS }, (_, j) => kit[voice][j] ?? 0);
-    row[i] = v;
-    onChange({ ...kit, [voice]: row });
+  const setHit = (lane: number, i: number, v: number) => {
+    const hits = Array.from({ length: STEPS }, (_, j) => kit.lanes[lane]?.hits[j] ?? 0);
+    hits[i] = v;
+    onChange({ ...kit, lanes: kit.lanes.map((l, n) => (n === lane ? { ...l, hits } : l)) });
   };
   return (
     <div className="flex basis-full flex-col gap-2">
@@ -520,16 +556,17 @@ function KitGrid({
         const cells = Array.from({ length: Math.min(BAR, length - first) }, (_, k) => first + k);
         return (
           <div key={bar} className="flex min-w-0 flex-col gap-1">
-            {KIT_VOICES.map((voice) => (
+            {kit.lanes.map((lane, n) => (
               <fieldset
-                key={voice}
+                // biome-ignore lint/suspicious/noArrayIndexKey: the webview has no lane id, only its place
+                key={n}
                 className="flex min-w-0 items-center gap-1"
-                aria-label={`${name}, ${KIT_LABELS[voice]}, bar ${bar + 1}`}
+                aria-label={`${name}, ${lane.label}, bar ${bar + 1}`}
               >
                 {cells.map((i) => {
-                  const v = kit[voice][i] ?? 0;
+                  const v = lane.hits[i] ?? 0;
                   const playing = step === i;
-                  const label = `${KIT_LABELS[voice]}, step ${i + 1}`;
+                  const label = `${lane.label}, step ${i + 1}`;
                   return (
                     <button
                       key={i}
@@ -542,7 +579,7 @@ function KitGrid({
                           : `${label}: velocity ${v}. Click to ${v === HIT_MAX ? 'make it a ghost note' : 'clear it'}.`
                       }
                       onMouseDown={(e) => e.preventDefault()}
-                      onClick={() => setHit(voice, i, nextHit(v))}
+                      onClick={() => setHit(n, i, nextHit(v))}
                       className={`h-4 w-6 shrink-0 rounded-sm border transition-colors ${
                         i % BAR > 0 && i % 4 === 0 ? 'ml-2' : ''
                       } ${
@@ -555,13 +592,99 @@ function KitGrid({
                     />
                   );
                 })}
-                {bar === 0 && <span className="pl-1 text-[10px]">{KIT_LABELS[voice]}</span>}
+                {bar === 0 && (
+                  <LaneName
+                    label={lane.label}
+                    selected={lanes.selected === n}
+                    renaming={lanes.selected === n && lanes.renaming}
+                    onSelect={() => lanes.onSelect(n)}
+                    onRenameStart={() => lanes.onRenameStart(n)}
+                    onRename={(name) => lanes.onRename(n, name)}
+                    onRemove={() => lanes.onRemove(n)}
+                  />
+                )}
+                {bar === 0 && (
+                  <LanePlays
+                    lane={lane}
+                    materials={materials}
+                    onPick={(kind, material) => onLanePlays(n, kind, material)}
+                  />
+                )}
               </fieldset>
             ))}
           </div>
         );
       })}
     </div>
+  );
+}
+
+/**
+ * A lane's name beside its row: click to select the lane, double-click to
+ * rename it in place. Enter or leaving the field commits, Escape cancels.
+ */
+function LaneName({
+  label,
+  selected,
+  renaming,
+  onSelect,
+  onRenameStart,
+  onRename,
+  onRemove,
+}: {
+  label: string;
+  selected: boolean;
+  renaming: boolean;
+  onSelect: () => void;
+  onRenameStart: () => void;
+  onRename: (name: string | null) => void;
+  onRemove: () => void;
+}) {
+  const cancelled = useRef(false);
+  if (renaming) {
+    return (
+      <input
+        // biome-ignore lint/a11y/noAutofocus: the field exists because the person asked to rename
+        autoFocus
+        defaultValue={label}
+        aria-label="Lane name"
+        onFocus={(e) => {
+          cancelled.current = false;
+          e.currentTarget.select();
+        }}
+        onBlur={(e) => onRename(cancelled.current ? null : e.currentTarget.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') e.currentTarget.blur();
+          if (e.key === 'Escape') {
+            cancelled.current = true;
+            e.currentTarget.blur();
+          }
+        }}
+        className="w-24 rounded-sm border border-border bg-transparent px-1 text-[10px] text-foreground"
+      />
+    );
+  }
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      title="Click to select the lane. Double-click to rename it, Backspace to remove it."
+      onClick={onSelect}
+      onDoubleClick={onRenameStart}
+      onKeyDown={(e) => {
+        if (e.key !== 'Backspace' && e.key !== 'Delete') return;
+        // Ours, not the selected effect's: the window's handler would take
+        // it out of its chain.
+        e.preventDefault();
+        e.stopPropagation();
+        onRemove();
+      }}
+      className={`rounded-sm px-1 text-[10px] ${
+        selected ? 'bg-primary/15 text-primary' : 'hover:text-foreground'
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 

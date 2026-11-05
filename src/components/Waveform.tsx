@@ -286,8 +286,8 @@ export function Waveform({
 
     // Every file fraction below goes to a pixel through the view, and every
     // span (a grain's length, a jitter band) is scaled by it.
-    const X = (t: number) => ((t - view.start) / vs) * w;
-    const D = (dt: number) => (dt / vs) * w;
+    const toPx = (t: number) => ((t - view.start) / vs) * w;
+    const spanPx = (dt: number) => (dt / vs) * w;
 
     // The finest peaks in hand for this view: the fetched ones while they
     // belong to this material, else the coarse set over the whole file. Each
@@ -300,8 +300,8 @@ export function Waveform({
       const n = src.peaks.length;
       const per = src.end - src.start;
       src.peaks.forEach((p, i) => {
-        const x0 = X(src.start + (i / n) * per);
-        const x1 = X(src.start + ((i + 1) / n) * per);
+        const x0 = toPx(src.start + (i / n) * per);
+        const x1 = toPx(src.start + ((i + 1) / n) * per);
         if (x1 < 0 || x0 > w) return;
         const half = Math.max(0.5, p * mid * 0.95);
         ctx.fillRect(x0, mid - half, Math.max(1, (x1 - x0) * 0.9), half * 2);
@@ -311,14 +311,14 @@ export function Waveform({
     if (lo > 0.001 || hi < 0.999) {
       ctx.fillStyle = '#000';
       ctx.globalAlpha = 0.55;
-      const xl = Math.min(w, Math.max(0, X(lo)));
-      const xh = Math.min(w, Math.max(0, X(hi)));
+      const xl = Math.min(w, Math.max(0, toPx(lo)));
+      const xh = Math.min(w, Math.max(0, toPx(hi)));
       ctx.fillRect(0, 0, xl, h);
       ctx.fillRect(xh, 0, w - xh, h);
       ctx.globalAlpha = 1;
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1;
-      for (const x of [X(lo), X(hi)]) {
+      for (const x of [toPx(lo), toPx(hi)]) {
         ctx.beginPath();
         ctx.moveTo(x, 0);
         ctx.lineTo(x, h);
@@ -328,8 +328,8 @@ export function Waveform({
 
     // Regions: a shaded span each, a numbered tab in the strip along the top.
     const drawRegion = (r: Region, label: string, on: boolean, dashed: boolean) => {
-      const x0 = X(r.start);
-      const x1 = X(r.end);
+      const x0 = toPx(r.start);
+      const x1 = toPx(r.end);
       ctx.fillStyle = accent;
       ctx.globalAlpha = on ? 0.3 : 0.14;
       ctx.fillRect(x0, 0, x1 - x0, h);
@@ -373,8 +373,8 @@ export function Waveform({
     if (showGrain && jitterSpan > 0.001) {
       ctx.fillStyle = accent;
       ctx.globalAlpha = 0.15;
-      const a = X(Math.max(lo, grainX - jitterSpan));
-      const b = X(Math.min(hi, grainX + jitterSpan));
+      const a = toPx(Math.max(lo, grainX - jitterSpan));
+      const b = toPx(Math.min(hi, grainX + jitterSpan));
       ctx.fillRect(a, 0, b - a, h);
       ctx.globalAlpha = 1;
     }
@@ -383,11 +383,11 @@ export function Waveform({
     // line so those stay readable through a dense cloud.
     if (grains.length > 0 && totalSamples > 0) {
       for (const g of grains) {
-        const x = X(g.position);
+        const x = toPx(g.position);
         // Reverse grains read backwards from their spawn point, so the span
         // they actually touch lies to the *left* of it. Drawing them
         // rightwards would put the bar over audio the grain never reached.
-        const width = Math.max(1.5, D(Math.abs(g.len * g.rate) / totalSamples));
+        const width = Math.max(1.5, spanPx(Math.abs(g.len * g.rate) / totalSamples));
         const left = g.rate < 0 ? x - width : x;
         // Pan across the vertical, so a wide stereo spread reads as a
         // scattered field rather than as a thicker line.
@@ -412,8 +412,8 @@ export function Waveform({
       ctx.strokeStyle = wave;
       ctx.lineWidth = 1;
       ctx.beginPath();
-      ctx.moveTo(X(playhead), 0);
-      ctx.lineTo(X(playhead), h);
+      ctx.moveTo(toPx(playhead), 0);
+      ctx.lineTo(toPx(playhead), h);
       ctx.stroke();
     }
 
@@ -427,7 +427,7 @@ export function Waveform({
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
       envelope.forEach((v, i) => {
-        const x = X(lo + (i / (envelope.length - 1)) * span);
+        const x = toPx(lo + (i / (envelope.length - 1)) * span);
         const y = h - v * h * 0.94 - h * 0.03;
         if (i === 0) ctx.moveTo(x, y);
         else ctx.lineTo(x, y);
@@ -443,8 +443,8 @@ export function Waveform({
       ctx.strokeStyle = accent;
       ctx.lineWidth = 2;
       ctx.beginPath();
-      ctx.moveTo(X(scrubAt), 0);
-      ctx.lineTo(X(scrubAt), h);
+      ctx.moveTo(toPx(scrubAt), 0);
+      ctx.lineTo(toPx(scrubAt), h);
       ctx.stroke();
     }
 
@@ -453,8 +453,8 @@ export function Waveform({
       ctx.strokeStyle = accent;
       ctx.lineWidth = 1.5;
       ctx.beginPath();
-      ctx.moveTo(X(grainX), 0);
-      ctx.lineTo(X(grainX), h);
+      ctx.moveTo(toPx(grainX), 0);
+      ctx.lineTo(toPx(grainX), h);
       ctx.stroke();
     }
   }, [

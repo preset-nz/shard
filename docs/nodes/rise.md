@@ -2,6 +2,7 @@
 title: Rise
 node: rise
 group: effect
+category: time
 summary: Repeats that each climb in pitch from the last, so the trail rises like a siren.
 ---
 

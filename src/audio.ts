@@ -234,6 +234,17 @@ export const addTrack = (drums: boolean) => invoke<number>('add_track', { drums 
  * Refused for the last melody track.
  */
 export const removeTrack = (track: number) => invoke<void>('remove_track', { track });
+/** Add Lane: a lane at the end of a drums track's grid, "Add Lane". Answers its place. */
+export const addLane = (track: number) => invoke<number>('add_lane', { track });
+/** Remove Lane: the lane and its hits, "Remove Kick". */
+export const removeLane = (track: number, lane: number) =>
+  invoke<void>('remove_lane', { track, lane });
+/** Rename Lane: "Rename Lane". Answers whether the name changed. */
+export const renameLane = (track: number, lane: number, name: string) =>
+  invoke<boolean>('rename_lane', { track, lane, name });
+/** Move Lane a place earlier (`by` below zero) or later: "Move Kick". Answers its new place, or null at an end. */
+export const moveLane = (track: number, lane: number, by: number) =>
+  invoke<number | null>('move_lane', { track, lane, by });
 /**
  * Mutes a track, or unmutes it: on the next bar while playing and at once
  * while stopped. Flipped in Rust, so a second press before the bar always
@@ -261,6 +272,13 @@ export const setTrackPatch = (track: number, id: number) =>
  */
 export const setTrackDuck = (track: number, key: number | null) =>
   invoke<Tracker>('set_track_duck', { track, key });
+/**
+ * What lane `lane` of drums track `track` plays, both by place (epic 49,
+ * story d): a drum by its kind, or `material` and a material's id. One step
+ * of Undo, "Set Plays". Answers with the tracker as it now is.
+ */
+export const setLanePlays = (track: number, lane: number, kind: string, material: number | null) =>
+  invoke<Tracker>('set_lane_plays', { track, lane, kind, material });
 
 /**
  * Rename a track. One step of Undo, "Rename Track". An empty name, or the
@@ -714,7 +732,7 @@ export const DUCK_RELEASE_MAX = 1000;
 /**
  * A track's sidechain (roadmap row 41). Each step of the key track dips this
  * track's volume, the step's velocity scaling the depth; a drums track keys
- * by its kick. A muted key does not pump, nor one silenced by a solo, unless
+ * by its first kick lane. A muted key does not pump, nor one silenced by a solo, unless
  * it is Key only.
  */
 export interface Duck {
@@ -754,22 +772,28 @@ export function trackPlace(tracks: Track[], i: number): string {
   return `${drums ? 'Drums' : 'Track'} ${Math.max(1, nth)}`;
 }
 
-/** The kit's voices, in the order its rows are drawn. */
-export const KIT_VOICES = ['kick', 'snare', 'hat'] as const;
-export type KitVoice = (typeof KIT_VOICES)[number];
-
 /** Tune's reach in semitones either way, and Decay's range. `kit.rs` in Rust. */
 export const KIT_TUNE_RANGE = 12;
 export const KIT_DECAY_MIN = 0.25;
 export const KIT_DECAY_MAX = 4;
 
 /**
- * A drums track's kit: kick, snare and hat, synthesised. Each row is a
- * velocity a step, 0 to 127, zero for no hit, so several drums land on one
- * step. Its length and fader are the track's. A stop-gap until a kit sliced
- * from a material (roadmap row 25).
+ * One lane of a drums track's kit (epic 49): its name, the synthesised drum
+ * it plays, and its hits, a velocity a step, 0 to 127, zero for no hit, so
+ * several lanes land on one step. Only the hits are written back.
  */
-export interface Kit extends Record<KitVoice, number[]> {
+export interface KitLane {
+  label: string;
+  /** `kick`, `snare`, `hat` or `material`. */
+  kind: string;
+  hits: number[];
+  /** The material a `material` lane plays, by id, or null. Read only. */
+  material: number | null;
+}
+
+/** A drums track's kit: its lanes, in the grid's order. Its length and fader are the track's. */
+export interface Kit {
+  lanes: KitLane[];
   /** Whether it plays. */
   on: boolean;
   /** Semitones, every drum together. */
@@ -805,6 +829,8 @@ export const editTracker = (track: number, edit: TrackerEdit) =>
 export const MAX_MELODY_TRACKS = 8;
 /** The most drums tracks: the engine's kits. */
 export const MAX_DRUMS_TRACKS = 4;
+/** Lanes in a kit. `MAX_LANES` in Rust. */
+export const MAX_LANES = 8;
 
 /** A MIDI device as Settings → Controllers lists it. */
 export interface DeviceView {

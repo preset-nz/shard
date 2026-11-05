@@ -2,6 +2,7 @@
 title: Noise
 node: noise
 group: generator
+category: synthesis
 summary: A continuous noise generator, from low rumble to bright hiss, with an optional pitched band for wind and whistles.
 ---
 

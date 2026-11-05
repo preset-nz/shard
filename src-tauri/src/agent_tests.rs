@@ -13,7 +13,19 @@ use crate::agent::shard::{respond, Draft};
 use crate::agent::tools::{Tool, Toolbox};
 use crate::object_model::commands::{self, midi_hz, DRONE_ROOT};
 use crate::session_tests::rig;
-use crate::tracker::Slot;
+use crate::tracker::{Kit, KitLane, Slot};
+
+/// The lane of `kit` labelled `label`.
+fn lane<'a>(kit: &'a Kit, label: &str) -> &'a KitLane {
+    kit.lanes
+        .iter()
+        .find(|l| l.label == label)
+        .unwrap_or_else(|| panic!("no lane {label}"))
+}
+
+fn hits_of(kit: &Kit, label: &str) -> Vec<u8> {
+    lane(kit, label).hits.clone()
+}
 
 fn tool(d: &Draft, name: &str) -> Tool {
     d.tools().get(name).expect("the tool").clone()
@@ -151,15 +163,122 @@ fn drums_take_general_midi_notes_and_lane_names_and_say_what_they_ignored() {
     let t = r.session.tracker();
     let kit = t.tracks[1].drums.as_ref().unwrap();
     assert!(kit.on, "a drums track written is switched on");
-    assert_eq!((kit.kick[0], kit.kick[10], kit.kick[2]), (120, 100, 0));
+    assert_eq!(
+        (
+            lane(kit, "Kick").hits[0],
+            lane(kit, "Kick").hits[10],
+            lane(kit, "Kick").hits[2]
+        ),
+        (120, 100, 0)
+    );
     // Two snares on one step: the harder one.
-    assert_eq!(kit.snare[4], 110);
-    assert_eq!((kit.hat[2], kit.hat[6], kit.hat[8]), (70, 80, 60));
+    assert_eq!(lane(kit, "Snare").hits[4], 110);
+    assert_eq!(
+        (
+            lane(kit, "Hat closed").hits[2],
+            lane(kit, "Hat closed").hits[6],
+            lane(kit, "Hat closed").hits[8]
+        ),
+        (70, 80, 60)
+    );
     // The old beat is gone: the grid is replaced whole.
-    assert_eq!(kit.kick.iter().filter(|h| **h > 0).count(), 2);
-    let (grid, sound, _) = t.kit(0).unwrap();
+    assert_eq!(lane(kit, "Kick").hits.iter().filter(|h| **h > 0).count(), 2);
+    let (grid, sound, _) = t.kit(0, &[0, 1, 2, 3]).unwrap();
     assert!(sound.on);
     assert_eq!(grid.hits[0][0], 120);
+}
+
+fn drums_of(r: &crate::session_tests::Rig) -> Kit {
+    r.session.tracker().tracks[1].drums.clone().unwrap()
+}
+
+fn beat() -> Json {
+    json!({ "track": "Drums 1", "hits": [
+        { "step": 1, "midi_note": 36, "velocity": 120 },
+        { "step": 5, "midi_note": 38, "velocity": 110 },
+        { "step": 3, "midi_note": 42, "velocity": 70 },
+    ] })
+}
+
+/// Sets lane `at` of Drums 1 to `hits` by step (from 0), through the tracker.
+fn put_hits(r: &crate::session_tests::Rig, at: usize, hits: &[(usize, u8)]) {
+    let mut t = r.session.tracker();
+    for (step, v) in hits {
+        t.tracks[1].drums.as_mut().unwrap().lanes[at].hits[*step] = *v;
+    }
+    r.session.set_tracker(t).unwrap();
+}
+
+#[test]
+fn a_beat_leaves_a_material_lane_alone() {
+    let r = rig();
+    let id = r
+        .session
+        .pool()
+        .materials
+        .iter()
+        .find(|m| m.name == crate::materials::DRONE_NAME)
+        .unwrap()
+        .id;
+    let at = r.session.add_lane(1).unwrap();
+    r.session
+        .set_lane_plays(1, at, "material", Some(id))
+        .unwrap();
+    put_hits(&r, at, &[(2, 99), (9, 88)]);
+    let before = lane(&drums_of(&r), "Clap").clone();
+    let mut d = Draft::of(&r.session).unwrap();
+    call(&mut d, "set_drums", beat()).unwrap();
+    assert!(d.apply(&r.session, "Agent: a beat").unwrap());
+    let kit = drums_of(&r);
+    assert_eq!(lane(&kit, "Clap"), &before);
+    assert_eq!(before.material, Some(id));
+    assert_eq!(lane(&kit, "Kick").hits[0], 120);
+}
+
+#[test]
+fn a_beat_silences_the_open_hat() {
+    let r = rig();
+    put_hits(&r, 3, &[(7, 90), (15, 90)]);
+    let mut d = Draft::of(&r.session).unwrap();
+    call(&mut d, "set_drums", beat()).unwrap();
+    d.apply(&r.session, "Agent: a beat").unwrap();
+    let kit = drums_of(&r);
+    assert!(lane(&kit, "Hat open").hits.iter().all(|h| *h == 0));
+    assert_eq!(lane(&kit, "Hat closed").hits[2], 70);
+}
+
+#[test]
+fn a_beat_adds_the_lane_a_kind_lacks_and_one_undo_restores_it() {
+    let r = rig();
+    // Drums 1 is track 1; its snare lane is the second.
+    r.session.remove_lane(1, 1).unwrap();
+    let before = drums_of(&r);
+    assert!(before.lanes.iter().all(|l| l.kind != "snare"));
+    let mut d = Draft::of(&r.session).unwrap();
+    call(&mut d, "set_drums", beat()).unwrap();
+    d.apply(&r.session, "Agent: a beat").unwrap();
+    let kit = drums_of(&r);
+    assert_eq!(kit.lanes.len(), before.lanes.len() + 1);
+    assert_eq!(lane(&kit, "Snare").kind, "snare");
+    assert_eq!(lane(&kit, "Snare").hits[4], 110);
+    assert_eq!(lane(&kit, "Kick").hits[0], 120);
+    r.session.undo().unwrap();
+    assert_eq!(drums_of(&r), before);
+}
+
+#[test]
+fn a_full_track_without_a_snare_refuses_a_snare() {
+    let r = rig();
+    r.session.remove_lane(1, 1).unwrap();
+    while drums_of(&r).lanes.len() < shard_dsp::kit::MAX_LANES {
+        r.session.add_lane(1).unwrap();
+    }
+    let before = drums_of(&r);
+    let mut d = Draft::of(&r.session).unwrap();
+    let e = call(&mut d, "set_drums", beat()).unwrap_err();
+    assert!(e.contains("full") && e.contains("snare"), "{e}");
+    d.apply(&r.session, "Agent: a beat").ok();
+    assert_eq!(drums_of(&r), before);
 }
 
 #[test]
@@ -483,7 +602,7 @@ fn a_stop_keeps_what_was_written() {
     );
     let t = r.session.tracker();
     assert_eq!(t.tracks.len(), 3);
-    assert_eq!(t.tracks[2].drums.as_ref().unwrap().kick[0], 110);
+    assert_eq!(hits_of(t.tracks[2].drums.as_ref().unwrap(), "Kick")[0], 110);
     let (undo, _) = r.session.history_labels();
     assert_eq!(
         undo,
@@ -552,7 +671,10 @@ fn a_reply_out_of_time_says_so_and_keeps_what_it_wrote() {
     );
     assert!(matches!(events[n - 1], Event::Done { applied: true, .. }));
     assert_eq!(
-        r.session.tracker().tracks[1].drums.as_ref().unwrap().kick[0],
+        hits_of(
+            r.session.tracker().tracks[1].drums.as_ref().unwrap(),
+            "Kick"
+        )[0],
         110
     );
 }
@@ -1004,9 +1126,10 @@ fn live_lm_studio_writes_a_four_on_the_floor_beat() {
     let count = |row: &Vec<u8>| row.iter().filter(|h| **h > 0).count();
     let hits: usize = on
         .iter()
-        .map(|k| count(&k.kick) + count(&k.snare) + count(&k.hat))
+        .flat_map(|k| &k.lanes)
+        .map(|l| count(&l.hits))
         .sum();
-    let kicks: usize = on.iter().map(|k| count(&k.kick)).sum();
+    let kicks: usize = on.iter().map(|k| count(&lane(k, "Kick").hits)).sum();
     println!("song: {}", r.session.read(commands::song));
     println!("{hits} hits, {kicks} of them kicks");
     assert!(hits > 0, "a drums track got hits");

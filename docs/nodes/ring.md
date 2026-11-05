@@ -2,6 +2,7 @@
 title: Ring modulation
 node: ring
 group: effect
+category: modulation
 summary: Multiplies the sound by a tone, adding metallic, bell-like frequencies that do not follow the original harmonics.
 ---
 

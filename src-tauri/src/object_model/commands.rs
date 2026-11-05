@@ -36,13 +36,19 @@ use rhizome_pom::{Commands, Document, Error as PomError, Outcome};
 use serde::Deserialize;
 use serde_json::{json, Value as Json};
 use shard_dsp::fx::Kind as Fx;
+use shard_dsp::kit::{LaneKind, MAX_LANES};
 use shard_dsp::modulation::{MAX_RATE_HZ, MIN_RATE_HZ};
 use shard_dsp::params::PARAMS;
 use shard_dsp::steps::{HOLD_MAX, PITCH_RANGE, STEPS, VELOCITY_MAX};
 use shard_dsp::{KITS, VOICES};
 
-use super::{arrangement_node, spec, to_value, Shard, ShardEdit, PATCH_LABEL, TRACKS, TRACK_PATCH};
-use crate::tracker::{Kit, Slot, Step, Track, Tracker, LENGTHS, SWING_MAX};
+use super::{
+    arrangement_node, spec, to_value, Shard, ShardEdit, LANES as OM_LANES, PATCH_LABEL, TRACKS,
+    TRACK_PATCH,
+};
+use crate::tracker::{
+    lane_kind, Kit, KitLane, Slot, Step, Track, Tracker, LENGTHS, STANDARD_LANES, SWING_MAX,
+};
 
 pub const READ_SONG: &str = "shard.read_song";
 pub const SET_DRUMS: &str = "shard.set_drums";
@@ -388,6 +394,51 @@ fn lane_of_name(name: &str) -> Option<usize> {
 
 const LANES: [&str; 3] = ["kick", "snare", "hat"];
 
+/// Writes a beat into a kit by kind (Georg, 2026-11-06): each drum's hits go
+/// to the first lane of its kind, every kick, snare and hat lane is cleared
+/// first, and a material lane is left as it was. A kind the kit has no lane
+/// for gets one, labelled as `STANDARD_LANES` names it; a full kit is an error.
+fn fill_by_kind(kit: &mut Kit, grid: &[[u8; STEPS]; 3]) -> Result<(), String> {
+    for lane in &mut kit.lanes {
+        if LANES.contains(&lane.kind.as_str()) {
+            lane.hits = vec![0; STEPS];
+        }
+    }
+    for (k, name) in LANES.iter().enumerate() {
+        let at = match kit.lanes.iter().position(|l| l.kind == *name) {
+            Some(at) => at,
+            None => {
+                if kit.lanes.len() >= MAX_LANES {
+                    return Err(format!(
+                        "this drums track's {MAX_LANES} lanes are full and none is a {name} lane, so the {name} hits can't be placed; leave the {name} out, or write a new drums track"
+                    ));
+                }
+                kit.lanes.push(KitLane {
+                    label: STANDARD_LANES[k].0.into(),
+                    kind: (*name).into(),
+                    hits: vec![0; STEPS],
+                    material: None,
+                });
+                kit.lanes.len() - 1
+            }
+        };
+        kit.lanes[at].hits = grid[k].to_vec();
+    }
+    Ok(())
+}
+
+/// Adds, in the open edit, a lane node for each of `kit`'s lanes the drums
+/// track `node` doesn't have yet (they are at the end), so `write_tracker`
+/// can write their hits by place.
+fn add_missing_lanes(tx: &mut Edit<'_>, node: NodeId, kit: &Kit) -> rhizome_core::Result<()> {
+    let have = tx.at(node).map_or(0, |n| n.order(OM_LANES).len());
+    for lane in kit.lanes.iter().skip(have) {
+        let kind = lane_kind(&lane.kind).unwrap_or(LaneKind::Kick);
+        tx.add_lane(node, &lane.label, kind)?;
+    }
+    Ok(())
+}
+
 pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, String> {
     let hits: Vec<Hit> = list(p, "hits")?;
     steps_from_one(hits.iter().map(|h| &h.step))?;
@@ -460,22 +511,25 @@ pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, Str
         }
     }
 
-    let kit_of = |old: Option<&Kit>| Kit {
-        on: true,
-        kick: grid[0].to_vec(),
-        snare: grid[1].to_vec(),
-        hat: grid[2].to_vec(),
-        ..old.cloned().unwrap_or_else(Kit::blank)
+    // Computed before any edit, so a track that can't hold the beat is left alone.
+    let kit_of = |old: Option<&Kit>| -> Result<Kit, String> {
+        let mut kit = old.cloned().unwrap_or_else(Kit::blank);
+        kit.on = true;
+        fill_by_kind(&mut kit, &grid)?;
+        Ok(kit)
     };
     let arr = arr_of(d)?;
     match place {
         Some(i) => {
             let mut next = now.clone();
             let t = &mut next.tracks[i];
-            t.drums = Some(kit_of(t.drums.as_ref()));
+            t.drums = Some(kit_of(t.drums.as_ref())?);
             t.length = length;
             let next = next.sanitised();
             d.edit("Set Drums", |tx| {
+                if let (Some(node), Some(kit)) = (track_node(tx, arr, i), &next.tracks[i].drums) {
+                    add_missing_lanes(tx, node, kit)?;
+                }
                 tx.write_tracker(arr, &next)?;
                 match (&label, track_node(tx, arr, i)) {
                     (Some(l), Some(node)) => tx.set_track_label(node, l),
@@ -488,7 +542,7 @@ pub(super) fn set_drums(d: &mut Document<Shard>, p: &Json) -> Result<String, Str
             let track = Track {
                 length,
                 label: label.clone().unwrap_or_default(),
-                drums: Some(kit_of(None)),
+                drums: Some(kit_of(None)?),
                 ..Track::blank()
             };
             d.edit("Set Drums", |tx| tx.add_track(arr, &track).map(|_| ()))
@@ -966,13 +1020,18 @@ pub fn song(d: &Document<Shard>) -> Json {
             Some(kit) => {
                 let mut hits = Vec::new();
                 for step in 0..track.length as usize {
-                    for (lane, row) in [&kit.kick, &kit.snare, &kit.hat].into_iter().enumerate() {
-                        let v = row.get(step).copied().unwrap_or(0);
-                        if v > 0 {
-                            hits.push(
-                                json!({ "step": step + 1, "drum": LANES[lane], "velocity": v }),
-                            );
+                    for lane in &kit.lanes {
+                        let v = lane.hits.get(step).copied().unwrap_or(0);
+                        if v == 0 {
+                            continue;
                         }
+                        let first = kit.lanes.iter().find(|l| l.kind == lane.kind);
+                        let is_first = first.is_some_and(|f| std::ptr::eq(f, lane));
+                        let mut hit = json!({ "step": step + 1, "drum": lane.kind, "velocity": v });
+                        if lane.kind == "material" || !is_first {
+                            hit["lane"] = json!(lane.label);
+                        }
+                        hits.push(hit);
                     }
                 }
                 json!({

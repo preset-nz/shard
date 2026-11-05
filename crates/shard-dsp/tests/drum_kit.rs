@@ -10,7 +10,7 @@ use shard_dsp::{Engine, Mix, ParamBank, StepParams, KITS};
 fn grid(hits: &[(usize, usize)], length: u32) -> KitPattern {
     let mut kit = KitPattern {
         length,
-        hits: [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::VOICES],
+        hits: [[0; shard_dsp::steps::STEPS]; shard_dsp::kit::MAX_LANES],
     };
     for &(v, k) in hits {
         kit.hits[v][k] = shard_dsp::kit::HIT_MAX;
@@ -39,6 +39,7 @@ fn drums_engine(kit: KitPattern) -> Engine {
     let mut e = Engine::new(48_000.0, 64);
     e.set_arrangement(&ParamBank::for_table(arrangement::params()), false);
     e.set_steps(steps());
+    e.standard_kit_lanes(0);
     e.set_kit(0, kit, ON);
     e
 }
@@ -173,6 +174,7 @@ fn render_kits(kits: &[(usize, KitPattern)], events: &[(usize, usize, Mix)]) -> 
     e.set_steps(steps());
     e.set_kit_active(0, false);
     for &(k, p) in kits {
+        e.standard_kit_lanes(k);
         e.set_kit(k, p, ON);
         e.set_kit_active(k, true);
     }

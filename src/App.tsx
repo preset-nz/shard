@@ -26,6 +26,7 @@ import {
   addEnvelope,
   addGenerator,
   addGlobalLfo,
+  addLane,
   addLfo,
   addMaterial,
   addRegion,
@@ -66,6 +67,7 @@ import {
   listGenerators,
   listPatches,
   MAX_DRUMS_TRACKS,
+  MAX_LANES,
   MAX_MELODY_TRACKS,
   type MappingsView,
   type MaterialsView,
@@ -76,6 +78,7 @@ import {
   materialPeaks,
   materialWave,
   modulatorsOf,
+  moveLane,
   newPatch,
   nodeWords,
   type ParamInfo,
@@ -95,16 +98,19 @@ import {
   recordStop,
   removeEnvelope,
   removeGenerator,
+  removeLane,
   removeLfo,
   removeMaterial,
   removeRegion,
   removeTrack,
+  renameLane,
   renamePatch,
   renameTrack,
   resetSound,
   type SourceInfo,
   selectPatch,
   selectTrack,
+  setLanePlays,
   setLfo,
   setMaterial,
   setEnvelope as setModEnvelope,
@@ -137,7 +143,7 @@ import type { ParamRowContext } from '@/components/ParamRow';
 import { PatchPreview } from '@/components/PatchPreview';
 import { SceneView } from '@/components/SceneView';
 import { SettingsDialog } from '@/components/SettingsDialog';
-import { StepStrip } from '@/components/StepStrip';
+import { type LaneUi, StepStrip } from '@/components/StepStrip';
 import { TrackFader } from '@/components/TrackFader';
 import {
   Select,
@@ -301,6 +307,16 @@ export default function App() {
    * index, brought within the tracks there are, so both clamp alike.
    */
   const [selectedTrack, setSelectedTrack] = useState(0);
+  /**
+   * The lane selected in the shown drums track's grid, and whether its name
+   * is being edited. Session state, not the tree: the Track menu's lane
+   * commands act on it.
+   */
+  const [laneSel, setLaneSel] = useState<{
+    track: number;
+    lane: number;
+    renaming: boolean;
+  } | null>(null);
   /** Each parameter as the engine last heard it, LFOs included. */
   const [heard, setHeard] = useState<ParamValues>({});
   /** The active controller map, as the rows draw it. */
@@ -1120,6 +1136,19 @@ export default function App() {
       setError(String(e));
     }
   };
+  // A drums lane's *Plays* picker: one undo step, "Set Plays".
+  const pickLanePlays = async (
+    track: number,
+    lane: number,
+    kind: string,
+    material: number | null,
+  ) => {
+    try {
+      showTracker(await setLanePlays(track, lane, kind, material));
+    } catch (e) {
+      setError(String(e));
+    }
+  };
   // A track's *Ducked by* picker: one undo step, "Set Ducked by".
   const pickDuckedBy = async (track: number, key: number | null) => {
     try {
@@ -1166,6 +1195,49 @@ export default function App() {
       setError(String(e));
     }
   };
+  // Lane commands (epic 49, story b2), on the selected drums track. Each is
+  // one undo step named for the lane; Rust refuses a ninth lane.
+  const shownLanes = tracker?.tracks[selectedTrack]?.drums?.lanes.length ?? null;
+  const lane =
+    mode === 'tracker' &&
+    shownLanes !== null &&
+    laneSel?.track === selectedTrack &&
+    laneSel.lane < shownLanes
+      ? laneSel.lane
+      : null;
+  const canAddLane = mode === 'tracker' && shownLanes !== null && shownLanes < MAX_LANES;
+  const laneUi: LaneUi = {
+    selected: lane,
+    renaming: lane !== null && laneSel?.renaming === true,
+    onSelect: (l) => setLaneSel({ track: selectedTrack, lane: l, renaming: false }),
+    onRenameStart: (l) => setLaneSel({ track: selectedTrack, lane: l, renaming: true }),
+    onRename: (l, name) => {
+      setLaneSel({ track: selectedTrack, lane: l, renaming: false });
+      if (name === null) return;
+      renameLane(selectedTrack, l, name)
+        .then(async () => showTracker(await getTracker()))
+        .catch((e) => setError(String(e)));
+    },
+    onRemove: (l) => void removeLaneRow(l),
+  };
+  const laneCommand = async (run: () => Promise<number | null>) => {
+    try {
+      const at = await run();
+      showTracker(await getTracker());
+      setLaneSel(at === null ? null : { track: selectedTrack, lane: at, renaming: false });
+    } catch (e) {
+      setError(String(e));
+    }
+  };
+  const addLaneRow = () => laneCommand(() => addLane(selectedTrack));
+  const removeLaneRow = (l: number) =>
+    laneCommand(async () => {
+      await removeLane(selectedTrack, l);
+      // The next lane takes the selection, or the last.
+      return Math.min(l, (shownLanes ?? 1) - 2) < 0 ? null : Math.min(l, (shownLanes ?? 1) - 2);
+    });
+  const moveLaneRow = (l: number, by: number) =>
+    laneCommand(async () => (await moveLane(selectedTrack, l, by)) ?? l);
   // Mute and solo, per track (epic 28, story c). Session state, not edits:
   // no undo step, no unsaved mark. While playing they land on the next bar;
   // the poll shows a press still waiting.
@@ -1245,9 +1317,12 @@ export default function App() {
   const typing = useTextFocus();
   const canRename = !typing && (patchSelected !== null || (mode === 'tracker' && tracker != null));
   const canDuplicate = !typing && (mode === 'tracker' ? tracker !== null : patchSelected !== null);
-  // With a track showing and nothing in it selected, Delete removes the track.
+  // With a track showing, Delete removes its selected lane (Georg,
+  // 2026-10-30), or with nothing in it selected the track.
+  const deletableLane = selection === null ? lane : null;
   const deletableTrack = mode === 'tracker' && selection === null && canRemoveTrack;
-  const canDelete = selectedFx !== null || deletablePatch !== null || deletableTrack;
+  const canDelete =
+    selectedFx !== null || deletablePatch !== null || deletableLane !== null || deletableTrack;
 
   // View > Zoom works on the material waveform, when sound scaping shows one.
   const waveZoomable = mode === 'soundscape' && shownWave !== null && !blank;
@@ -1327,12 +1402,14 @@ export default function App() {
         else if (patchSelected) void duplicatePatchRow(patchSelected.id);
         break;
       case 'edit.rename':
-        if (patchSelected) setRenaming(patchSelected.id);
+        if (lane !== null) setLaneSel({ track: selectedTrack, lane, renaming: true });
+        else if (patchSelected) setRenaming(patchSelected.id);
         else if (mode === 'tracker') setRenamingTrack(selectedTrack);
         break;
       case 'edit.delete':
         if (node?.fx) removeEffect(node);
         else if (deletablePatch) void deletePatchRow(deletablePatch.id);
+        else if (deletableLane !== null) void removeLaneRow(deletableLane);
         else if (deletableTrack) void removeTrackRow(selectedTrack);
         break;
       case 'track.add:melody':
@@ -1343,6 +1420,21 @@ export default function App() {
         break;
       case 'track.remove':
         if (mode === 'tracker' && canRemoveTrack) void removeTrackRow(selectedTrack);
+        break;
+      case 'lane.add':
+        if (canAddLane) void addLaneRow();
+        break;
+      case 'lane.rename':
+        if (lane !== null) setLaneSel({ track: selectedTrack, lane, renaming: true });
+        break;
+      case 'lane.remove':
+        if (lane !== null) void removeLaneRow(lane);
+        break;
+      case 'lane.move-up':
+        if (lane !== null) void moveLaneRow(lane, -1);
+        break;
+      case 'lane.move-down':
+        if (lane !== null) void moveLaneRow(lane, 1);
         break;
       case 'track.mute':
         if (mode === 'tracker') void toggleMute(selectedTrack);
@@ -1386,7 +1478,7 @@ export default function App() {
   const canRepeatBar = mode === 'tracker' && (tracker?.tracks[selectedTrack]?.length ?? 0) > 16;
   const bindings = useMemo(() => {
     const enabled: Record<string, boolean> = {
-      'edit.rename': canRename,
+      'edit.rename': canRename || (!typing && lane !== null),
       'edit.duplicate': canDuplicate,
       'edit.delete': canDelete,
       'view-zoom-in': waveZoomable,
@@ -1395,6 +1487,11 @@ export default function App() {
       'track.add:melody': canAddMelody,
       'track.add:drums': canAddDrums,
       'track.remove': mode === 'tracker' && canRemoveTrack,
+      'lane.add': canAddLane,
+      'lane.rename': lane !== null,
+      'lane.remove': lane !== null,
+      'lane.move-up': lane !== null && lane > 0,
+      'lane.move-down': lane !== null && lane < (shownLanes ?? 0) - 1,
       'track.mute': mode === 'tracker',
       'track.solo': mode === 'tracker',
       'pattern-repeat': canRepeatBar,
@@ -1423,6 +1520,10 @@ export default function App() {
     canAddMelody,
     canAddDrums,
     canRemoveTrack,
+    canAddLane,
+    lane,
+    shownLanes,
+    typing,
     mode,
     selectedMute,
     selectedSolo,
@@ -2020,8 +2121,13 @@ export default function App() {
                 root={pool.materials.find((m) => m.id === pool.wires.material)?.root ?? null}
                 patches={patches}
                 onPlays={(id) => void pickPlays(selectedTrack, id)}
+                materials={pool.materials}
+                onLanePlays={(lane, kind, material) =>
+                  void pickLanePlays(selectedTrack, lane, kind, material)
+                }
                 onEdit={(edit) => void editTrackerView(selectedTrack, edit)}
                 onChange={(next) => void changeTracker(next)}
+                lanes={laneUi}
               />
             )}
 

@@ -82,7 +82,7 @@ pub fn tools() -> Tools {
         Tool {
             name: "make_drums",
             command: generate::MAKE_DRUMS,
-            description: "Write a whole drums track in a style: Shard places the hits. Replaces every hit the track had.",
+            description: "Write a whole drums track in a style: Shard places the hits. Replaces every kick, snare and hat hit the track had; a material lane is left alone.",
             parameters: json!({
                 "type": "object",
                 "properties": {
@@ -187,7 +187,7 @@ pub fn tools() -> Tools {
         Tool {
             name: "set_drums",
             command: commands::SET_DRUMS,
-            description: "Write one whole drums track: kick, snare and hat hits on a step grid, steps counted from 1. Replaces every hit the track had. Several drums may hit on one step.",
+            description: "Write one whole drums track: kick, snare and hat hits on a step grid, steps counted from 1. Replaces every kick, snare and hat hit the track had; a material lane is left alone. Several drums may hit on one step.",
             parameters: json!({
                 "type": "object",
                 "properties": {
