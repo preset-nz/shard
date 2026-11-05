@@ -4,8 +4,9 @@
    the build. */
 @source "../node_modules/@preset.nz/ux-kit/src";
 /* Chat (ux-kit/chat) renders markdown with streamdown, whose classes live in its
-   built JS. ux-kit is linked by path, so pnpm keeps streamdown under it. */
-@source "../../../packages/ux-kit/node_modules/streamdown/dist/*.js";
+   built JS. ux-kit comes from npm, so streamdown sits in pnpm's store; its
+   hoisted link there carries no version. */
+@source "../node_modules/.pnpm/node_modules/streamdown/dist/*.js";
 @source "../node_modules/@preset.nz/facets/src";
 /* The family's look: tokens, palettes and fonts (Geist, JetBrains Mono). */
 @import "@preset.nz/ux-kit/index.css";
