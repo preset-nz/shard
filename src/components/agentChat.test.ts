@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentEvent } from '@/lib/agent';
-import { emptyConversation, isStreaming, reduceChat, type Turn, transcript } from './agentChat';
+import {
+  emptyConversation,
+  isStreaming,
+  phaseText,
+  reduceChat,
+  type Turn,
+  transcript,
+} from './agentChat';
 
 const run = (events: AgentEvent[]) => events.reduce(reduceChat, emptyConversation);
 const start: AgentEvent = { kind: 'start', prompt: 'a beat', model: 'qwen', considered: false };
@@ -136,5 +143,23 @@ describe('transcript', () => {
     expect(md).toContain('**set_melody** (done)');
     expect(md).toContain('"note": 29');
     expect(md).toContain('wrote track 1');
+  });
+});
+
+describe('phase status', () => {
+  it('follows the reply and is gone when it is done', () => {
+    let c = run([start, { kind: 'phase', phase: 'loading', model: 'qwen', seconds: 11.6 }]);
+    expect(c.phase && phaseText(c.phase)).toBe('Loading qwen, about 12 s…');
+    c = reduceChat(c, { kind: 'phase', phase: 'thinking' });
+    expect(c.phase && phaseText(c.phase)).toBe('Thinking…');
+    c = reduceChat(c, { kind: 'done', applied: false, label: '' });
+    expect(c.phase).toBeNull();
+    expect(transcript(c)).not.toContain('Thinking');
+  });
+
+  it('words each phase', () => {
+    expect(phaseText({ phase: 'loading', model: 'qwen' })).toBe('Loading qwen…');
+    expect(phaseText({ phase: 'waiting' })).toBe('Waiting for the server…');
+    expect(phaseText({ phase: 'answering' })).toBe('Answering…');
   });
 });

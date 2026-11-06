@@ -12,6 +12,9 @@ import { invoke } from '@tauri-apps/api/core';
 import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 
 /** Which limit stopped a reply. */
+/** What a running reply is doing: the server loading the model, a request sent with nothing back, reasoning, or text and tool calls arriving. */
+export type AgentPhase = 'loading' | 'waiting' | 'thinking' | 'answering';
+
 export type AgentStopReason = 'cancelled' | 'time' | 'tokens' | 'turns' | 'looping';
 
 /**
@@ -46,16 +49,20 @@ export type AgentEvent =
   /** A muted line about what the loop did on its own (a retry without thinking). */
   | { kind: 'note'; text: string }
   | { kind: 'error'; message: string }
+  /** The reply changed phase. `model` and `seconds` come only with `loading`: which model, and about how long the server says it takes. */
+  | { kind: 'phase'; phase: AgentPhase; model?: string; seconds?: number }
   | { kind: 'done'; applied: boolean; label: string };
 
 /**
  * Where the model is: an OpenAI-compatible server and a model it serves.
- * `model` empty (or `auto`) asks whatever LM Studio has loaded; a model
- * named but not loaded is refused, never loaded behind your back.
+ * `model` empty (or `auto`) asks whatever is loaded. LM Studio refuses a model
+ * named but not loaded; oMLX loads it and the reply says so.
  */
 export interface AgentSettings {
   baseUrl: string;
   model: string;
+  /** Only for a server that asks for one (oMLX). Kept in agent.json; never logged or saved with a session. */
+  apiKey: string;
 }
 
 export const AGENT_EVENT = 'agent://event';
@@ -98,11 +105,11 @@ export interface ModelEntry {
 }
 
 /**
- * The chat models the server at `baseUrl` offers, for the Settings dropdown.
+ * The chat models the server at `baseUrl` offers (sending `apiKey` when it isn't empty), for the Settings dropdown.
  * Rejects when nothing answers there; empty when the server doesn't list them.
  */
-export function agentModels(baseUrl: string): Promise<ModelEntry[]> {
-  return invoke('agent_models', { baseUrl });
+export function agentModels(baseUrl: string, apiKey: string): Promise<ModelEntry[]> {
+  return invoke('agent_models', { baseUrl, apiKey });
 }
 
 /** Saves where the model is; an empty address goes back to LM Studio's. */

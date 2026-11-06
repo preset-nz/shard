@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde_json::{json, Value as Json};
 
-use crate::agent::client::{Call, Delta, Failure, Model, Settings, Turn};
+use crate::agent::client::{Call, Chosen, Delta, Failure, Model, Settings, Turn};
 use crate::agent::run::{Event, Reason};
 use crate::agent::shard::{respond, Draft};
 use crate::agent::tools::{Tool, Toolbox};
@@ -804,7 +804,7 @@ fn track_1_in_set_melody_is_the_first_melody_track() {
 fn a_model_that_cant_be_chosen_stops_the_reply_before_it_starts() {
     struct Unloaded;
     impl Model for Unloaded {
-        fn resolve(&mut self, _: &str) -> Result<String, String> {
+        fn resolve(&mut self, _: &str) -> Result<Chosen, String> {
             Err("No model loaded in LM Studio. Load one there, then ask again.".into())
         }
         fn turn(
@@ -1044,7 +1044,7 @@ fn reply_with(
 struct Logged<M>(M, Instant);
 
 impl<M: Model> Model for Logged<M> {
-    fn resolve(&mut self, configured: &str) -> Result<String, String> {
+    fn resolve(&mut self, configured: &str) -> Result<Chosen, String> {
         self.0.resolve(configured)
     }
 
@@ -1060,6 +1060,7 @@ impl<M: Model> Model for Logged<M> {
             match &d {
                 Delta::Text(t) => text += t.len(),
                 Delta::Reasoning(r) => reasoning += r.len(),
+                Delta::Calling => {}
             }
             on(d)
         });
@@ -1237,7 +1238,7 @@ fn live_lm_studio_writes_a_bassline_on_track_1_and_stops() {
 struct NoSampling<M>(M);
 
 impl<M: Model> Model for NoSampling<M> {
-    fn resolve(&mut self, configured: &str) -> Result<String, String> {
+    fn resolve(&mut self, configured: &str) -> Result<Chosen, String> {
         self.0.resolve(configured)
     }
 
@@ -1559,4 +1560,34 @@ fn a_track_the_model_leaves_nameless_gets_a_name_of_shards_and_the_answer_says_s
         ["Track 1", "EBM beat", "Bass", "Arp"]
     );
     assert_eq!(r.session.patches().last().unwrap().name, "Arp");
+}
+
+#[test]
+fn the_api_key_never_reaches_a_saved_agent_session() {
+    let settings = Settings {
+        api_key: "sk-secret-123".into(),
+        ..Settings::default()
+    };
+    let (text, json) = crate::dump_headers(&settings, "0.0.0");
+    assert!(!text.contains("sk-secret-123"), "agent.log header");
+    assert!(
+        !json.to_string().contains("sk-secret-123"),
+        "agent.jsonl header"
+    );
+    assert!(
+        text.contains(&settings.base_url),
+        "the header still names the server"
+    );
+}
+
+#[test]
+fn the_api_key_is_kept_in_agent_json_but_not_in_events() {
+    let settings = Settings {
+        api_key: "sk-secret-123".into(),
+        ..Settings::default()
+    };
+    let saved = serde_json::to_string(&settings).unwrap();
+    assert!(saved.contains("\"apiKey\":\"sk-secret-123\""));
+    let back: Settings = serde_json::from_str(&saved).unwrap();
+    assert_eq!(back.api_key, "sk-secret-123");
 }

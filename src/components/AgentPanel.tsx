@@ -26,7 +26,14 @@ import {
 } from '@preset.nz/ux-kit/chat';
 import { type KeyboardEvent, useEffect, useReducer, useRef, useState } from 'react';
 import { agentCancel, agentSend, copyText, onAgentEvent } from '@/lib/agent';
-import { emptyConversation, isStreaming, type Part, reduceChat, transcript } from './agentChat';
+import {
+  emptyConversation,
+  isStreaming,
+  type Part,
+  phaseText,
+  reduceChat,
+  transcript,
+} from './agentChat';
 
 type Mode = 'quick' | 'considered';
 const MODE_KEY = 'shard.agent.mode';
@@ -233,6 +240,11 @@ export function AgentPanel({
               </ChatScrollerItem>
             ))}
           </ChatScroller>
+        )}
+        {streaming && chat.phase && (
+          <p role="status" className="shrink-0 px-3 py-1 text-[11px] text-muted-foreground">
+            {phaseText(chat.phase)}
+          </p>
         )}
         <div className="flex shrink-0 flex-col gap-2 border-t border-border p-2">
           <PromptInput

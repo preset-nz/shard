@@ -5,7 +5,7 @@
  * A reply is one assistant turn: parts in the order they arrived (text,
  * reasoning, tool calls, status lines). Nothing here is saved anywhere.
  */
-import type { AgentEvent, AgentStopReason } from '@/lib/agent';
+import type { AgentEvent, AgentPhase, AgentStopReason } from '@/lib/agent';
 
 export type ToolRow = {
   name: string;
@@ -30,9 +30,29 @@ export interface Conversation {
   /** The model the last reply asked, for the header. Empty when unknown. */
   model: string;
   nextId: number;
+  /** What the running reply is doing now. Shown as a status line, never kept in a turn or the copy. */
+  phase: PhaseStatus | null;
 }
 
-export const emptyConversation: Conversation = { turns: [], model: '', nextId: 1 };
+export type PhaseStatus = { phase: AgentPhase; model?: string; seconds?: number };
+
+export const emptyConversation: Conversation = { turns: [], model: '', nextId: 1, phase: null };
+
+/** The status line for a phase. */
+export function phaseText(p: PhaseStatus): string {
+  switch (p.phase) {
+    case 'loading': {
+      const what = p.model ? `Loading ${p.model}` : 'Loading the model';
+      return p.seconds === undefined ? `${what}…` : `${what}, about ${Math.round(p.seconds)} s…`;
+    }
+    case 'waiting':
+      return 'Waiting for the server…';
+    case 'thinking':
+      return 'Thinking…';
+    case 'answering':
+      return 'Answering…';
+  }
+}
 
 /** An event, or the panel's own: a send the backend refused to start. */
 export type ChatAction = AgentEvent | { kind: 'rejected'; prompt: string; message: string };
@@ -92,7 +112,9 @@ function append(parts: Part[], type: 'text' | 'reasoning', delta: string): Part[
 export function reduceChat(c: Conversation, action: ChatAction): Conversation {
   switch (action.kind) {
     case 'start':
-      return { ...withUser(c, action.prompt, true), model: action.model || c.model };
+      return { ...withUser(c, action.prompt, true), model: action.model || c.model, phase: null };
+    case 'phase':
+      return { ...c, phase: { phase: action.phase, model: action.model, seconds: action.seconds } };
     case 'text':
       return editOpen(c, (p) => append(p, 'text', action.delta));
     case 'reasoning':
@@ -129,10 +151,14 @@ export function reduceChat(c: Conversation, action: ChatAction): Conversation {
       ]);
       const last = closed.turns[closed.turns.length - 1];
       if (last?.from !== 'assistant') return closed;
-      return { ...closed, turns: [...closed.turns.slice(0, -1), { ...last, open: false }] };
+      return {
+        ...closed,
+        phase: null,
+        turns: [...closed.turns.slice(0, -1), { ...last, open: false }],
+      };
     }
     case 'rejected': {
-      const next = withUser(c, action.prompt, false);
+      const next = { ...withUser(c, action.prompt, false), phase: null };
       const last = next.turns[next.turns.length - 1];
       if (last?.from !== 'assistant') return next;
       const turn = {

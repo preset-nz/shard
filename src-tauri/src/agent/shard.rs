@@ -596,11 +596,11 @@ pub fn respond_with(
     let chosen = model.resolve(&settings.model);
     emit(Event::Start {
         prompt: prompt.to_string(),
-        model: chosen.clone().unwrap_or_default(),
+        model: chosen.as_ref().map(|c| c.id.clone()).unwrap_or_default(),
         considered,
     });
     let name = match chosen {
-        Ok(name) => name,
+        Ok(c) => c,
         Err(message) => {
             emit(Event::Error { message });
             emit(Event::Done {
@@ -622,7 +622,8 @@ pub fn respond_with(
         }
     };
     let ask = Ask {
-        model: &name,
+        model: &name.id,
+        load: name.load,
         system,
         user: user_message(prompt, &draft.song()),
         quick: !considered,

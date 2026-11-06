@@ -41,10 +41,12 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
   const [saved, setSaved] = useState<AgentSettings | null>(null);
   const [baseUrl, setBaseUrl] = useState('');
   const [model, setModel] = useState('');
+  const [apiKey, setApiKey] = useState('');
   // Null until listed, or when nothing answers at the address.
   const [models, setModels] = useState<ModelEntry[] | null>(null);
   const urlId = useId();
   const modelId = useId();
+  const keyId = useId();
 
   useEffect(() => {
     if (!open) return;
@@ -53,35 +55,42 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
         setSaved(s);
         setBaseUrl(s.baseUrl);
         setModel(s.model);
+        setApiKey(s.apiKey);
       })
       .catch((e) => onError(String(e)));
   }, [open, onError]);
 
   const listedAt = saved?.baseUrl;
+  const listedWith = saved?.apiKey;
   useEffect(() => {
     if (!open || listedAt === undefined) return;
     let current = true;
     setModels(null);
-    agentModels(listedAt).then(
+    agentModels(listedAt, listedWith ?? '').then(
       (m) => current && setModels(m),
       () => current && setModels(null),
     );
     return () => {
       current = false;
     };
-  }, [open, listedAt]);
+  }, [open, listedAt, listedWith]);
 
   const save = (next: AgentSettings) => {
-    if (!saved || (next.baseUrl === saved.baseUrl && next.model === saved.model)) return;
+    if (
+      !saved ||
+      (next.baseUrl === saved.baseUrl && next.model === saved.model && next.apiKey === saved.apiKey)
+    )
+      return;
     setAgentSettings(next)
       .then((s) => {
         setSaved(s);
         setBaseUrl(s.baseUrl);
         setModel(s.model);
+        setApiKey(s.apiKey);
       })
       .catch((e) => onError(String(e)));
   };
-  const commit = () => save({ baseUrl, model });
+  const commit = () => save({ baseUrl, model, apiKey });
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') commit();
   };
@@ -104,6 +113,23 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
         />
       </div>
       <div className="text-xs">
+        <label htmlFor={keyId} className="text-muted-foreground">
+          API key
+        </label>
+        <Input
+          id={keyId}
+          type="password"
+          value={apiKey}
+          placeholder="Only if the server asks for one"
+          onChange={(e) => setApiKey(e.target.value)}
+          onBlur={commit}
+          onKeyDown={onEnter}
+          disabled={!saved}
+          autoComplete="off"
+          spellCheck={false}
+        />
+      </div>
+      <div className="text-xs">
         <label htmlFor={modelId} className="text-muted-foreground">
           Model
         </label>
@@ -114,14 +140,18 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
             value={model}
             onPick={(m) => {
               setModel(m);
-              save({ baseUrl: saved?.baseUrl ?? baseUrl, model: m });
+              save({
+                baseUrl: saved?.baseUrl ?? baseUrl,
+                model: m,
+                apiKey: saved?.apiKey ?? apiKey,
+              });
             }}
           />
         ) : (
           <Input
             id={modelId}
             value={model}
-            placeholder="Whatever is loaded in LM Studio"
+            placeholder="Whatever is loaded"
             onChange={(e) => setModel(e.target.value)}
             onBlur={commit}
             onKeyDown={onEnter}

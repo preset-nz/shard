@@ -1037,24 +1037,32 @@ fn agent_dump(
         std::fs::write(dir.join(name), text).map_err(|e| format!("couldn't write {name}: {e}"))
     };
     write("session.shard", audio.session.snapshot()?)?;
-    let header = format!(
+    let (header, head) = dump_headers(&settings, env!("CARGO_PKG_VERSION"));
+    write("agent.log", header + &log.render())?;
+    // The same, for `evals/agent/agent_logs.py`. `model` here is the
+    // setting ("" is auto); each `start` names the model asked.
+    write("agent.jsonl", format!("{head}\n{}", log.jsonl()))?;
+    Ok(dir.display().to_string())
+}
+
+/// The two headers of a saved agent session: the text one for `agent.log` and
+/// the JSON one for `agent.jsonl`. Each names fields one by one, so the API
+/// key can't reach either.
+fn dump_headers(settings: &agent::client::Settings, version: &str) -> (String, serde_json::Value) {
+    let text = format!(
         "base url: {}\nmodel: {}\nsampling: {}\n\n",
         settings.base_url,
         settings.model,
         serde_json::to_string(&settings.sampling).unwrap_or_default()
     );
-    write("agent.log", header + &log.render())?;
-    // The same, for `evals/agent/agent_logs.py`. `model` here is the
-    // setting ("" is auto); each `start` names the model asked.
-    let head = serde_json::json!({
+    let json = serde_json::json!({
         "kind": "header",
-        "version": env!("CARGO_PKG_VERSION"),
+        "version": version,
         "base_url": settings.base_url,
         "model": settings.model,
         "sampling": settings.sampling,
     });
-    write("agent.jsonl", format!("{head}\n{}", log.jsonl()))?;
-    Ok(dir.display().to_string())
+    (text, json)
 }
 
 /// `YYYYMMDD-HHMMSS` in UTC, for a folder name.
@@ -1125,13 +1133,17 @@ fn agent_settings(agent: tauri::State<'_, AgentState>) -> agent::client::Setting
         .clone()
 }
 
-/// The models the server at `base_url` offers, for the Settings dropdown.
+/// The models the server at `base_url` offers (with `api_key`, when it wants one), for the Settings dropdown.
 /// Fails when nothing answers there; empty when it doesn't list them.
 #[tauri::command]
-async fn agent_models(base_url: String) -> Result<Vec<agent::client::ModelEntry>, String> {
+async fn agent_models(
+    base_url: String,
+    api_key: String,
+) -> Result<Vec<agent::client::ModelEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let settings = agent::client::Settings {
             base_url,
+            api_key,
             ..agent::client::Settings::default()
         };
         agent::client::Http::new(&settings).models()
@@ -1153,6 +1165,8 @@ fn set_agent_settings(
             .map_or(defaults.base_url, str::to_string),
         // Empty is "whatever is loaded" (`agent::client::pick_model`).
         model: settings.model.trim().to_string(),
+        // Optional; kept in agent.json beside the URL, never logged.
+        api_key: settings.api_key.trim().to_string(),
         // Sampling is edited in agent.json, not by the dialog: keep it.
         sampling: agent
             .settings
