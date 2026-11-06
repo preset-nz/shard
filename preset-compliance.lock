@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "8b5c7cf7833347f2928903bd5eebc50dd1ab1130a68b905b973b4e66c3e6085d"
+sha256 = "8c7315ee3b9ca518cf36e29e9356f05116798253722ec1ea2f2f99231706a854"
 
 [[inputs]]
 path = "Cargo.toml"
@@ -27,11 +27,11 @@ sha256 = "f3a33563a6f00ac348fee5597eb34274d3b9f469dfa19d3184da0913ad78a9d1"
 [[inputs]]
 path = "pnpm-lock.yaml"
 ecosystem = "pnpm"
-sha256 = "7af104359ed868c855a5b0c59a149aeba48a80c42920fd0e8925330d32db2f6d"
+sha256 = "97c786c8d4c85db490d1af0acd9a6dce2c55c8c1aac72575ef391217a77204d5"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "bbb7cb33a6c3988b0c310e0458d377cb051008fa8b3ee9443beb849da7aec4dd"
+sha256 = "abc079d2ac28e71c58505be8068c83858079658e93ba19da48a3dc7de5b55667"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2324,7 +2324,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "preset-app-kit"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
@@ -2540,7 +2540,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "rhizome-core"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
@@ -2548,7 +2548,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "rhizome-pom"
-version = "0.1.7"
+version = "0.1.8"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
@@ -4820,7 +4820,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "@preset.nz/app-kit"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
@@ -4828,7 +4828,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "@preset.nz/facets"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
@@ -4844,7 +4844,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "pnpm"
 name = "@preset.nz/ux-kit"
-version = "0.1.2"
+version = "0.1.3"
 source = "registry"
 declared = "MIT"
 scope = "shipped"

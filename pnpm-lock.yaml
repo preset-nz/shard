@@ -9,17 +9,17 @@ importers:
   .:
     dependencies:
       '@preset.nz/app-kit':
-        specifier: ^0.1.3
-        version: 0.1.4(@preset.nz/ux-kit@0.1.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@tauri-apps/api@2.12.4)(react@19.3.1)
+        specifier: ^0.1.5
+        version: 0.1.5(@preset.nz/ux-kit@0.1.3(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@tauri-apps/api@2.12.4)(react@19.3.1)
       '@preset.nz/facets':
-        specifier: ^0.2.0
-        version: 0.2.0(react@19.3.1)
+        specifier: ^0.3.0
+        version: 0.3.0(react@19.3.1)
       '@preset.nz/math':
         specifier: ^0.1.0
         version: 0.1.0
       '@preset.nz/ux-kit':
-        specifier: ^0.1.1
-        version: 0.1.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+        specifier: ^0.1.3
+        version: 0.1.3(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@tauri-apps/api':
         specifier: ^2
         version: 2.12.4
@@ -476,26 +476,26 @@ packages:
       react: '>= 16.8'
       react-dom: '>= 16.8'
 
-  '@preset.nz/app-kit@0.1.4':
-    resolution: {integrity: sha512-9h+S+uTMfv082MLgTDO9Af8mNoS9NkjHLZSMgRF+kQ3bTDrRjrFedV0bKajOSSPvSQ/1q9FWVtGJ01lIxsO7DQ==}
+  '@preset.nz/app-kit@0.1.5':
+    resolution: {integrity: sha512-wvIwz61Lc0qy8BUKZqSSwGIFECGxkEPKnim5mNK5AOGjvcQZNQNMtc6voefPZrWPFRCYOCOmkqBfGlcma7TZmw==}
     peerDependencies:
-      '@preset.nz/ux-kit': ^0.1.2
+      '@preset.nz/ux-kit': ^0.1.3
       '@tauri-apps/api': ^2
       react: ^19
     peerDependenciesMeta:
       '@preset.nz/ux-kit':
         optional: true
 
-  '@preset.nz/facets@0.2.0':
-    resolution: {integrity: sha512-6ajdjiU4W40G8QVe++M5GGS0M3zwaxkV6CnpaD6t8IuZoVqjwJrRjkv4KOPkv57tyKUKfyD2DyABFwXgJn58/g==}
+  '@preset.nz/facets@0.3.0':
+    resolution: {integrity: sha512-+8WH6Ly3qfQlqrSM3/02jKZ3A0RVDa5GqbfN+xIuYUIH3TEoedI2z1ebmFwUPF+nbxYx8rlAHP/U/8SAjacC5g==}
     peerDependencies:
       react: ^19
 
   '@preset.nz/math@0.1.0':
     resolution: {integrity: sha512-eGOJZVvox4NPtoWrolIk06GjsfDNy8OCwes3pYw6o3CDRKolGWrrwf78U733OkKexUjHVeQfi39xrbEIhsQodQ==}
 
-  '@preset.nz/ux-kit@0.1.2':
-    resolution: {integrity: sha512-i1to4ONAIrr5zdfqAPP4lT9DlrrU8V++A/x33zeIPkL9xSuwrnSdigsKUqrwD3JVksZx9RRjFavzNPd/6wv8Cg==}
+  '@preset.nz/ux-kit@0.1.3':
+    resolution: {integrity: sha512-jgq42wBRM0QR06sXmPtsbZX3O2+dq0IryCBB7qs9URzWcFctdAEp4ID/c8LSSQ+sjTdYEBK/48zhdhhQK1FhgA==}
     peerDependencies:
       react: ^19
       react-dom: ^19
@@ -2099,20 +2099,20 @@ snapshots:
       react: 19.3.1
       react-dom: 19.3.1(react@19.3.1)
 
-  '@preset.nz/app-kit@0.1.4(@preset.nz/ux-kit@0.1.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@tauri-apps/api@2.12.4)(react@19.3.1)':
+  '@preset.nz/app-kit@0.1.5(@preset.nz/ux-kit@0.1.3(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1))(@tauri-apps/api@2.12.4)(react@19.3.1)':
     dependencies:
       '@tauri-apps/api': 2.12.4
       react: 19.3.1
     optionalDependencies:
-      '@preset.nz/ux-kit': 0.1.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
+      '@preset.nz/ux-kit': 0.1.3(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
 
-  '@preset.nz/facets@0.2.0(react@19.3.1)':
+  '@preset.nz/facets@0.3.0(react@19.3.1)':
     dependencies:
       react: 19.3.1
 
   '@preset.nz/math@0.1.0': {}
 
-  '@preset.nz/ux-kit@0.1.2(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
+  '@preset.nz/ux-kit@0.1.3(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)':
     dependencies:
       '@base-ui/react': 1.9.0(@types/react@19.3.0)(react-dom@19.3.1(react@19.3.1))(react@19.3.1)
       '@fontsource-variable/geist': 5.3.0
