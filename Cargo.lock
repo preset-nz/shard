@@ -2921,6 +2921,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
+name = "preset-agent-kit"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
 name = "preset-app-kit"
 version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3547,6 +3556,7 @@ dependencies = [
  "cpal",
  "hound",
  "midir",
+ "preset-agent-kit",
  "preset-app-kit",
  "preset-docs",
  "preset-math",
@@ -3560,7 +3570,6 @@ dependencies = [
  "tauri-plugin-dialog",
  "tauri-plugin-fs",
  "tauri-plugin-opener",
- "ureq",
 ]
 
 [[package]]

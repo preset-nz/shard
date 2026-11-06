@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "e13f6ffec87cc737bcbd6f6139832b645149e2b2e329fec6526a35a1484be60b"
+sha256 = "8b5c7cf7833347f2928903bd5eebc50dd1ab1130a68b905b973b4e66c3e6085d"
 
 [[inputs]]
 path = "Cargo.toml"
@@ -31,7 +31,7 @@ sha256 = "7af104359ed868c855a5b0c59a149aeba48a80c42920fd0e8925330d32db2f6d"
 
 [[inputs]]
 path = "src-tauri/Cargo.toml"
-sha256 = "024329ddf92ac9e7c71e888d3edc392fffb9ad6f6bf0f1f0de024c5997b36c4f"
+sha256 = "bbb7cb33a6c3988b0c310e0458d377cb051008fa8b3ee9443beb849da7aec4dd"
 
 [[packages]]
 ecosystem = "cargo"
@@ -2310,6 +2310,14 @@ ecosystem = "cargo"
 name = "precomputed-hash"
 version = "0.1.1"
 source = "registry"
+declared = "MIT"
+scope = "shipped"
+
+[[packages]]
+ecosystem = "cargo"
+name = "preset-agent-kit"
+version = "0.1.0"
+source = "path"
 declared = "MIT"
 scope = "shipped"
 

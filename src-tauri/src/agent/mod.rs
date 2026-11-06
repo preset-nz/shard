@@ -2,13 +2,12 @@
 //! a local model, asked in a panel, writes tracks into the open session
 //! through tools, and one undo takes back the whole reply.
 //!
-//! `tools`, `client` and `run` know nothing of Shard, so they can lift into
-//! a family crate (`agent-kit`, `design/agent-tools.md`) once a second app
-//! wants them. `shard` is this app's tools, prompt and draft; the commands
-//! the tools run are the object model's (`object_model::commands`).
+//! `client`, `log`, `run` and `tools` know nothing of Shard and live in the
+//! family crate `preset-agent-kit` (`packages/agent-kit`, guidance
+//! `projects/agent-kit`); they are re-exported here so paths stay
+//! `agent::run::...`. `shard` is this app's tools, prompt and draft; the
+//! commands the tools run are the object model's (`object_model::commands`).
 
-pub mod client;
-pub mod log;
-pub mod run;
+pub use preset_agent_kit::{client, log, run, tools};
+
 pub mod shard;
-pub mod tools;

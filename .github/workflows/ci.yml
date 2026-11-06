@@ -17,3 +17,5 @@ jobs:
     uses: preset-nz/workflows/.github/workflows/check.yml@v1
     with:
       tauri: true
+      # preset-agent-kit by path, until it is on crates.io.
+      packages: true
