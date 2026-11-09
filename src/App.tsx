@@ -80,6 +80,7 @@ import {
   modulatorsOf,
   moveLane,
   newPatch,
+  nodeCategories,
   nodeWords,
   type ParamInfo,
   type PatchInfo,
@@ -157,6 +158,7 @@ import { usePersistedState } from '@/lib/persisted';
 import {
   ARRANGEMENT_LANES,
   ARRANGEMENT_NODES,
+  categoryOfKind,
   FX_ORDER_LEN,
   fxChain,
   fxKinds,
@@ -166,6 +168,7 @@ import {
   nodeById,
   type ParamValues,
   registerParamScope,
+  setNodeCategories,
   setNodeWords,
 } from '@/scope';
 import { useSelection } from '@/stores/selection';
@@ -385,8 +388,14 @@ export default function App() {
         // One list of rows for the panels, patch and arrangement together.
         // Their ids never collide, since the arrangement's all start with
         // `arrangement.`, and `setParam` sends each to its own table.
-        const [pd, ad, words] = await Promise.all([paramDefs(), arrangementDefs(), nodeWords()]);
+        const [pd, ad, words, cats] = await Promise.all([
+          paramDefs(),
+          arrangementDefs(),
+          nodeWords(),
+          nodeCategories(),
+        ]);
         if (cancelled) return;
+        setNodeCategories(cats);
         const d = [...pd, ...ad];
         setNodeWords(words);
         registerParamScope(d);
@@ -1550,6 +1559,7 @@ export default function App() {
   const addChoices = (defs ? fxKinds(defs) : []).map((k) => ({
     kind: k.kind,
     label: k.label,
+    category: categoryOfKind(k.kind),
     disabled:
       chain.length >= FX_ORDER_LEN
         ? 'chain full'

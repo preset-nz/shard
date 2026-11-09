@@ -2,6 +2,7 @@
 title: Mod envelope
 node: mod-env
 group: modulator
+category: modulator
 summary: A curve drawn over each note that a control can follow, so it swells, dips or snaps back as the note plays.
 ---
 

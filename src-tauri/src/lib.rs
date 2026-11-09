@@ -271,6 +271,12 @@ fn node_words() -> Vec<object_model::NodeWords> {
     object_model::node_words()
 }
 
+/// The categories the Add menus group kinds under, in menu order.
+#[tauri::command]
+fn node_categories() -> Vec<object_model::CategoryInfo> {
+    object_model::node_categories()
+}
+
 /// The arrangement's table, as `param_defs` gives the patch's.
 #[tauri::command]
 fn arrangement_defs() -> Vec<ParamInfo> {
@@ -2789,6 +2795,7 @@ pub fn run() {
             preset_app_kit::app_kit_document_note,
             param_defs,
             node_words,
+            node_categories,
             get_params,
             set_param,
             arrangement_defs,

@@ -469,7 +469,7 @@ fn a_session_saves_and_opens_as_rhizome_text() {
     assert_eq!(back.serialise(), text);
 }
 
-/// Every generator and effect is in exactly one category, and the table names
+/// Every generator, effect and modulator is in exactly one category, and the table names
 /// only kinds that exist, so the docs index never lists a kind twice or
 /// under a stale name.
 #[test]
@@ -479,15 +479,19 @@ fn every_generator_and_effect_has_one_category() {
         let t = &d.node_type;
         let homes = CATEGORIES
             .iter()
-            .filter(|(_, ks)| ks.contains(&t.name()))
+            .filter(|(_, _, ks)| ks.contains(&t.name()))
             .count();
         // By group, not role: the drums track is a generator to the engine
         // but an arrangement node on the page.
-        let browsable = matches!(t.group_tag(), Some("generator" | "effect"));
+        let browsable = matches!(t.group_tag(), Some("generator" | "effect" | "modulator"));
         assert_eq!(homes, usize::from(browsable), "{}", t.name());
         assert_eq!(t.category_tag().is_some(), browsable, "{}", t.name());
+        // And it is one the list names, so a menu has a heading for it.
+        if let Some(c) = t.category_tag() {
+            assert!(CATEGORIES.iter().any(|(id, _, _)| *id == c), "{}", t.name());
+        }
     }
-    for (c, ks) in CATEGORIES {
+    for (c, _, ks) in CATEGORIES {
         for k in *ks {
             assert!(
                 kinds.iter().any(|d| d.node_type.name() == *k),

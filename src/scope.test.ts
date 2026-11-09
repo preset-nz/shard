@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { ARRANGEMENT_NODES, kindOfNode, NODES, nodeById, setNodeWords } from '@/scope';
+import {
+  ARRANGEMENT_NODES,
+  categoryOfKind,
+  kindOfNode,
+  NODES,
+  nodeById,
+  setNodeWords,
+} from '@/scope';
 
 describe('node words', () => {
   it('names the arrangement nodes by their kinds', () => {
@@ -10,12 +17,14 @@ describe('node words', () => {
 
   it('reads a label and summary from the words Rust gave', () => {
     setNodeWords([
-      { id: 'grain', label: 'Granular', summary: 'A cloud.' },
-      { id: 'master', label: 'Output', summary: 'The master.' },
+      { id: 'grain', label: 'Granular', summary: 'A cloud.', category: 'sample' },
+      { id: 'master', label: 'Output', summary: 'The master.', category: null },
     ]);
     expect(nodeById('grain')?.label).toBe('Granular');
     expect(nodeById('grain')?.summary).toBe('A cloud.');
     expect(nodeById('arrangement.amp')?.label).toBe('Output');
+    expect(categoryOfKind('grain')).toBe('sample');
+    expect(categoryOfKind('master')).toBeUndefined();
   });
 
   it('holds no label of its own', () => {

@@ -434,35 +434,63 @@ fn words_from_switch(t: NodeType, rows: &[ParamDef], group: &str) -> NodeType {
         Some(sw) => words(t, sw.name, sw.description, group),
         None => t,
     };
+    with_category(t)
+}
+
+/// The kind's category from the list, when it has one.
+fn with_category(t: NodeType) -> NodeType {
     match category_of(t.name()) {
         Some(c) => t.category(c),
         None => t,
     }
 }
 
-/// What each generator and effect is to someone browsing (Georg,
-/// 2026-10-23): the docs index sorts by it. Words on the kind, never in a
+/// What each generator, effect and modulator is to someone browsing (Georg,
+/// 2026-10-23, `family-alignment.md` "Node kinds carry a category"): the
+/// docs index and the Add menus group by it. One list, in the order the menus
+/// show it: id, heading, and the kinds in it. Words on the kind, never in a
 /// saved file. The other kinds have none, and the index falls back to their
 /// group.
-pub const CATEGORIES: &[(&str, &[&str])] = &[
-    ("sample", &["material", "grain"]),
-    ("synthesis", &["fm", "noise", "dust"]),
+pub const CATEGORIES: &[(&str, &str, &[&str])] = &[
+    ("sample", "Sample", &["material", "grain"]),
+    ("synthesis", "Synthesis", &["fm", "noise", "dust"]),
     (
         "time",
+        "Time",
         &["delay", "echo", "rise", "bands", "repeat", "reverb"],
     ),
-    ("modulation", &["chorus", "flanger", "ring", "freqshift"]),
-    ("filter", &["filter", "ladder", "peaks"]),
-    ("distortion", &["drive", "crush", "wear"]),
-    ("dynamics", &["env", "shaper"]),
-    ("pitch", &["overtone"]),
+    (
+        "modulation",
+        "Modulation",
+        &["chorus", "flanger", "ring", "freqshift"],
+    ),
+    ("filter", "Filter", &["filter", "ladder", "peaks"]),
+    ("distortion", "Distortion", &["drive", "crush", "wear"]),
+    ("dynamics", "Dynamics", &["env", "shaper"]),
+    ("pitch", "Pitch", &["overtone"]),
+    ("modulator", "Modulator", &[LFO, MOD_ENV]),
 ];
 
 fn category_of(kind: &str) -> Option<&'static str> {
     CATEGORIES
         .iter()
-        .find(|(_, kinds)| kinds.contains(&kind))
-        .map(|(c, _)| *c)
+        .find(|(_, _, kinds)| kinds.contains(&kind))
+        .map(|(c, _, _)| *c)
+}
+
+/// A category as the webview draws its heading.
+#[derive(serde::Serialize)]
+pub struct CategoryInfo {
+    pub id: &'static str,
+    pub label: &'static str,
+}
+
+/// The categories in menu order.
+pub fn node_categories() -> Vec<CategoryInfo> {
+    CATEGORIES
+        .iter()
+        .map(|(id, label, _)| CategoryInfo { id, label })
+        .collect()
 }
 
 fn with_rows(mut t: NodeType, rows: &[ParamDef]) -> NodeType {
@@ -826,6 +854,8 @@ pub struct NodeWords {
     pub id: String,
     pub label: String,
     pub summary: String,
+    /// What it is to someone browsing; none for a kind nobody picks from a list.
+    pub category: Option<String>,
 }
 
 /// The words of every kind that has a label, in registration order. The
@@ -839,6 +869,7 @@ pub fn node_words() -> Vec<NodeWords> {
                 id: t.name().to_string(),
                 label: t.label_text()?.to_string(),
                 summary: t.summary_text().unwrap_or_default().to_string(),
+                category: t.category_tag().map(str::to_string),
             })
         })
         .collect()
@@ -986,6 +1017,7 @@ pub fn kinds() -> Vec<KindDecl> {
         "A slow wave that a control can follow, so it drifts, wobbles or jumps by itself.",
         "modulator",
     );
+    let lfo = with_category(lfo);
     push(
         checked(lfo, Under::PatchOrGlobals, |n| {
             if is_global(n) {
@@ -1024,6 +1056,7 @@ pub fn kinds() -> Vec<KindDecl> {
         "A curve drawn over each note that a control can follow, so it swells, dips or snaps back as the note plays.",
         "modulator",
     );
+    let env = with_category(env);
     push(
         checked(env, Under::Patch, envelope_holds),
         Role::Modulator,

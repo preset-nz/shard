@@ -132,7 +132,18 @@ export interface NodeWords {
   id: string;
   label: string;
   summary: string;
+  /** What it is to someone browsing (`sample`, `filter`…); null when nobody picks it from a list. */
+  category: string | null;
 }
+
+/** A category an Add menu groups kinds under. */
+export interface NodeCategory {
+  id: string;
+  label: string;
+}
+
+/** The categories in menu order, from Rust's one list. */
+export const nodeCategories = () => invoke<NodeCategory[]>('node_categories');
 
 /** What each node kind is called and does, from Rust's kind declarations. */
 export const nodeWords = () => invoke<NodeWords[]>('node_words');

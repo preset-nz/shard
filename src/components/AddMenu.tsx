@@ -1,4 +1,5 @@
 import { Icons } from '@preset.nz/ux-kit';
+import { type AddChoice, groupChoices } from '@/components/groupChoices';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -7,13 +8,9 @@ import {
   DropdownMenuLabel,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
+import { nodeCategoryList } from '@/scope';
 
-export interface AddChoice<K extends string> {
-  kind: K;
-  label: string;
-  /** Why it cannot be added, shown greyed out. */
-  disabled?: string;
-}
+export type { AddChoice };
 
 /**
  * A tree category's + button: one dropdown of the kinds it can add, rather
@@ -29,6 +26,10 @@ export function AddMenu<K extends string>({
   choices: AddChoice<K>[];
   onAdd: (kind: K) => void;
 }) {
+  // Under category headings in Rust's order, once the choices span more than
+  // one; a menu of a single kind of thing stays a flat list.
+  const groups = groupChoices(choices, nodeCategoryList());
+  const headed = groups.filter((g) => g.id !== null).length > 1;
   return (
     <DropdownMenu modal={false}>
       <DropdownMenuTrigger
@@ -48,16 +49,23 @@ export function AddMenu<K extends string>({
         <DropdownMenuGroup>
           <DropdownMenuLabel>{title} of type</DropdownMenuLabel>
         </DropdownMenuGroup>
-        {choices.map((c) => (
-          <DropdownMenuItem
-            key={c.kind}
-            disabled={c.disabled !== undefined}
-            onClick={() => onAdd(c.kind)}
-            className="text-xs"
-          >
-            <span className="flex-1">{c.label}</span>
-            {c.disabled && <span className="text-[10px] text-muted-foreground">{c.disabled}</span>}
-          </DropdownMenuItem>
+        {groups.map((g) => (
+          <DropdownMenuGroup key={g.id ?? 'other'}>
+            {headed && <DropdownMenuLabel>{g.label}</DropdownMenuLabel>}
+            {g.choices.map((c) => (
+              <DropdownMenuItem
+                key={c.kind}
+                disabled={c.disabled !== undefined}
+                onClick={() => onAdd(c.kind)}
+                className="text-xs"
+              >
+                <span className="flex-1">{c.label}</span>
+                {c.disabled && (
+                  <span className="text-[10px] text-muted-foreground">{c.disabled}</span>
+                )}
+              </DropdownMenuItem>
+            ))}
+          </DropdownMenuGroup>
         ))}
       </DropdownMenuContent>
     </DropdownMenu>

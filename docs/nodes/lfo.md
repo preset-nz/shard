@@ -2,6 +2,7 @@
 title: LFO
 node: lfo
 group: modulator
+category: modulator
 summary: A slow wave that a control can follow, so it drifts, wobbles or jumps by itself.
 ---
 

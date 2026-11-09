@@ -5,7 +5,7 @@ import {
   ContextMenuItem,
   ContextMenuTrigger,
 } from '@/components/ui/context-menu';
-import type { NodeInfo } from '@/scope';
+import { categoryOfKind, kindOfNode, type NodeInfo } from '@/scope';
 
 /**
  * Generators, in the left-hand tree: the ones in the patch, and + to add one
@@ -54,6 +54,7 @@ export function GeneratorTree({
           choices={generators.map((g) => ({
             kind: g.node.id,
             label: g.node.label,
+            category: categoryOfKind(kindOfNode(g.node.id)),
             disabled: g.present ? 'in the patch' : undefined,
           }))}
           onAdd={onAdd}

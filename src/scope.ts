@@ -29,6 +29,7 @@ import {
   ARRANGEMENT_PREFIX,
   denormalise,
   format,
+  type NodeCategory,
   type NodeWords,
   normalise,
   type ParamInfo,
@@ -99,6 +100,20 @@ export interface NodeInfo {
 }
 
 let nodeWords = new Map<string, NodeWords>();
+let categoryList: NodeCategory[] = [];
+
+/** Takes the category list from Rust, in the order the Add menus show it. */
+export function setNodeCategories(list: NodeCategory[]): void {
+  categoryList = list;
+}
+
+/** The categories, in menu order. */
+export const nodeCategoryList = (): NodeCategory[] => categoryList;
+
+/** The category a kind declares, or undefined when it has none. */
+export function categoryOfKind(kind: string): string | undefined {
+  return nodeWords.get(kind)?.category ?? undefined;
+}
 
 /** Takes the words from Rust, once, before any node is drawn. */
 export function setNodeWords(list: NodeWords[]): void {
