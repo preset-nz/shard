@@ -10,7 +10,7 @@
 //! webview,** so a command's shortcut is written here and nowhere else. The
 //! ids and accelerators are the ones Shard had before app-kit.
 
-use preset_app_kit::{Command, MenuName};
+use preset_app_kit::{shortcut, Command, MenuName};
 use shard_dsp::fx::Kind;
 
 /// `fx-add:chorus` adds a chorus; the part after the colon is `Kind::name`.
@@ -125,8 +125,12 @@ pub const SHORTCUTS: &[(&str, &str)] = &[
     ("track.mute", "Ctrl+M"),
     ("track.solo", "Ctrl+S"),
     ("fx-remove", "CmdOrCtrl+Shift+Backspace"),
-    ("fx-earlier", "CmdOrCtrl+Alt+Up"),
-    ("fx-later", "CmdOrCtrl+Alt+Down"),
+    // Reorder is Opt+Up and Opt+Down (menu standard decision 3), app-kit's
+    // `MOVE_EARLIER` and `MOVE_LATER`. Opt+arrows move the caret in a text
+    // field, so the webview disables both while one has focus (`useTextFocus`,
+    // as for Duplicate). There is no first/last move, so no Shift chords.
+    ("fx-earlier", shortcut::MOVE_EARLIER),
+    ("fx-later", shortcut::MOVE_LATER),
     ("pattern-copy", "CmdOrCtrl+Alt+C"),
     ("pattern-paste", "CmdOrCtrl+Alt+V"),
     ("pattern-repeat", "CmdOrCtrl+Alt+D"),
@@ -290,6 +294,13 @@ mod tests {
         "CmdOrCtrl+V",
         "CmdOrCtrl+A",
     ];
+
+    #[test]
+    fn effect_order_is_opt_up_and_down() {
+        let chord = |id: &str| SHORTCUTS.iter().find(|(i, _)| *i == id).map(|(_, a)| *a);
+        assert_eq!(chord("fx-earlier"), Some("Alt+Up"));
+        assert_eq!(chord("fx-later"), Some("Alt+Down"));
+    }
 
     #[test]
     fn no_two_commands_share_an_accelerator_or_an_id() {

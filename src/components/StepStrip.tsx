@@ -343,7 +343,7 @@ function MelodyStrip({
       handled();
       return;
     }
-    // Alt+arrows move the selected effect, not a step.
+    // Alt+arrows are the menu's (Move Earlier, Move Later), not a step's.
     if (e.altKey) return;
 
     if (e.key === 'ArrowLeft') {

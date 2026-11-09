@@ -1037,20 +1037,17 @@ export default function App() {
       const t = e.target as HTMLElement | null;
       if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
 
-      // The selected effect: Alt+Up and Alt+Down move it in its chain, Delete
-      // takes it out. Anything else selected ignores these. Ahead of the
+      // The selected effect: Delete takes it out (moving it is the menu's
+      // Alt+Up and Alt+Down). Anything else selected ignores it. Ahead of the
       // button check, because clicking a card's title focuses its button.
-      // With Cmd the chord is the menu's accelerator, which has run already.
-      const moving = e.altKey && !e.metaKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown');
       // Not while a slider has focus: arrows and keys there belong to the slider.
       const inSlider = t?.closest('[role="slider"], [role="spinbutton"], [contenteditable="true"]');
-      if (!inSlider && (moving || e.key === 'Backspace' || e.key === 'Delete')) {
+      if (!inSlider && (e.key === 'Backspace' || e.key === 'Delete')) {
         const sel = useSelection.getState().selection;
         const node = sel?.kind === 'node' ? nodeById(sel.id) : null;
         if (node?.fx) {
           e.preventDefault();
-          if (moving) moveEffect(node, e.key === 'ArrowUp' ? -1 : 1);
-          else removeEffect(node);
+          removeEffect(node);
           return;
         }
       }
@@ -1112,7 +1109,7 @@ export default function App() {
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('keyup', onKeyUp);
     };
-  }, [togglePlay, setBrake, setReverse, setShowDebugger, moveEffect, removeEffect]);
+  }, [togglePlay, setBrake, setReverse, setShowDebugger, removeEffect]);
 
   // The native menu bar: app-kit's, with Shard's commands (`menu.rs`). Each
   // item arrives as app-kit's `command` event carrying its id and runs the
@@ -1320,6 +1317,7 @@ export default function App() {
   // card selected in the inspector never takes its whole patch with it.
   const currentPatch = patches.find((p) => p.current);
   const selectedFx = selection?.kind === 'node' ? (nodeById(selection.id)?.fx ?? null) : null;
+  const fxSelected = selectedFx !== null;
   const patchSelected = mode === 'soundscape' ? (currentPatch ?? null) : null;
   const deletablePatch = selection === null && patchSelected?.deletable ? patchSelected : null;
   // Cmd+D reaches the menu even while a name is being typed.
@@ -1504,6 +1502,9 @@ export default function App() {
       'track.mute': mode === 'tracker',
       'track.solo': mode === 'tracker',
       'pattern-repeat': canRepeatBar,
+      // Opt+arrows are the caret's in a text field, so they pass through there.
+      'fx-earlier': !typing && fxSelected,
+      'fx-later': !typing && fxSelected,
     };
     // Checked as the selected track is pressed.
     const pressed: Record<string, boolean> = {
@@ -1533,6 +1534,7 @@ export default function App() {
     lane,
     shownLanes,
     typing,
+    fxSelected,
     mode,
     selectedMute,
     selectedSolo,
