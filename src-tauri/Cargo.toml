@@ -34,8 +34,8 @@ preset-math = { version = "0.1", features = ["serde"] }
 cpal.workspace = true
 hound.workspace = true
 midir.workspace = true
-# The agent's client, tool loop and log (packages/agent-kit), by path until a release.
-preset-agent-kit = { version = "0.1", path = "../../../packages/agent-kit" }
+# The agent's client, tool loop and log (preset-agent-kit on crates.io).
+preset-agent-kit = "0.2"
 
 [dev-dependencies]
 # `just docs`: node pages from the schema (examples/shard-docs.rs).
