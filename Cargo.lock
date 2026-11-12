@@ -3660,7 +3660,7 @@ dependencies = [
 
 [[package]]
 name = "shard"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cpal",
  "hound",
@@ -3683,14 +3683,14 @@ dependencies = [
 
 [[package]]
 name = "shard-dsp"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "preset-math",
 ]
 
 [[package]]
 name = "shard-play"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "cpal",
  "hound",
@@ -3699,7 +3699,7 @@ dependencies = [
 
 [[package]]
 name = "shard-probe"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "midir",
 ]

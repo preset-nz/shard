@@ -1,3 +1,79 @@
+## 0.2.2 (2026-11-12)
+
+### Features
+
+- add noise, a fourth generator with a Colour slider
+- add Random and Noise shapes
+- a write makes the section it needs; no predefined ones
+- a pitched band, played by the steps
+- add Repeat, a buffer repeat for stutters and loops
+- Run, Notes or Free, for a noise bed that keeps going
+- add Dust, a generator of random clicks
+- add Shifter, a frequency shifter for clangs and spirals
+- add Peaks, two narrow bands to sweep for squeals
+- add Transient, a shaper for attacks and tails
+- add Band Delay, an echo per band at harmonic times
+- a one-sentence description on every row, as its tooltip
+- zoom the sample view to harvest a long take
+- arm a take so it starts at the first sound
+- a local model writes drums and melody tracks
+- the agent panel under the properties
+- EBM and glitch from a brief, through seeded generators
+- a new bass patch that moves
+- bass figures with space, and rolling and acid
+- pick the chords by feel, the seed choosing
+- a drum style brings its tempo
+- a track's length in steps, not only bars
+- save the agent session and log from the File menu
+- index saved agent sessions for reading and search
+- copy or reveal the folder Save Agent Session wrote
+- a patch's effects follow its filter and ladder
+- tracks have names, and the agent names what it makes
+- name a track the model leaves nameless
+- a scripted, recorded demo, found by name not by pixel
+- no starter prompts in the agent panel
+- the empty session first, a fuzz, and a brake into stop
+- full screen, Song mode, and a check for lost sound
+- just window prints or sets Shard's window frame
+- record the window at 1920x1200 as H.264, labelled 6x
+- key captions, a bigger 6x plate, the panel hidden first
+- every run launches a fresh Shard
+- title, credits and chapters in the edit
+- a preset.nz mark in the edit's lower left
+- the preset.nz mark at 3.5 times the size
+- pick the model from the server's list in Settings
+- give generators and effects a browsing category (#8)
+- make a drums track's lanes nodes that own their hits
+- add a lane kind that plays a material once
+- add, remove, rename and move a drums track's lanes
+- let a drums lane play a material from the pool
+- make Delete remove the selected lane, not its track
+- gather the lane commands in a Track › Kit submenu
+- merge main, and write a beat into the kit's lanes by kind
+- an API key, oMLX models, and what the reply is doing
+- group the Add menus by category
+- move an effect in its chain with Opt+Up and Opt+Down
+- Enable Shard agent, a switch under Settings ▸ Labs
+- pick the model server from a list
+
+### Fixes
+
+- take source-map-js 1.2.2 for its advisory
+- apply the rest when a link follows another patch's LFO
+- grey out Repeat Bar on a pattern of one bar
+- move Grain Inspector to Opt+Cmd+I, off Get Info's chord
+- copy the conversation, and serve the linked ux-kit's fonts
+- speak Shard's names, and keep what a stop wrote
+- Qwen's sampling, and a guard against thinking in circles
+- fire the loop guard on real loops, and keep the plan
+- a line aimed at the drone goes to a new track
+- shard-check renders what the first melody track plays
+- say so when more bars are asked than a track holds
+- say so when no server answers, not that no model is set
+- play a material lane at the material's octave
+- scan streamdown from the store, not the packages checkout
+- a null pick in the model menu no longer saves "null"
+
 ## 0.2.1 (2026-10-13)
 
 ### Features
