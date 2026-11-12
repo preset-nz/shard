@@ -62,10 +62,6 @@ The agent runs on a model server on your Mac. Shard talks to oMLX or LM Studio, 
 
 **A reply that stops at a limit** (time, tokens, turns, or going in circles). What it wrote is kept. Ask again, or choose **Quick**.
 
-## Reporting a problem
-
-**File ▸ Save Agent Session** writes a folder with the session and the agent's log, without the API key, and shows its path. Attach the folder to the report.
-
 ## See also
 
 - [Write tracks with the agent](agent.md)
