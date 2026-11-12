@@ -13,3 +13,27 @@ export function modelFromPick(picked: unknown, current: string): string | null {
   const next = picked === AUTO ? '' : String(picked);
   return next === current ? null : next;
 }
+
+/** The server dropdown's value for "a server not in the list" (Other…). */
+export const OTHER = 'other';
+
+/**
+ * What a pick in the server dropdown means, or null to ignore it (null from
+ * Base UI, or the pick already showing). A known server's URL is saved at once
+ * (`save`); Other… saves nothing, it only shows the URL input (`other`).
+ */
+export function serverFromPick(
+  picked: unknown,
+  shown: string,
+): { save: string } | { other: true } | null {
+  if (picked == null) return null;
+  const next = String(picked);
+  if (next === shown) return null;
+  return next === OTHER ? { other: true } : { save: next };
+}
+
+/** Which dropdown item a saved URL selects: its own, or Other… when no known server has it. */
+export function serverShown(baseUrl: string, known: readonly string[]): string {
+  const url = baseUrl.trim();
+  return known.includes(url) ? url : OTHER;
+}

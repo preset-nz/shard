@@ -751,7 +751,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d045de693cb712d0b22c6a64be5b953f67b3ce00ab5ad3dd5d8b441886ab8e1a"
 dependencies = [
  "quote",
- "syn 3.0.9",
+ "syn 2.0.119",
 ]
 
 [[package]]
@@ -2922,9 +2922,9 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "preset-agent-kit"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5adc26eb3999bb1372616e65b7ee71052c4c280a3b430fb0067929a735832aaa"
+checksum = "8dd7af96e1f91c6321ad62b07716c90a8df03ea55b0a8b3e9e0c62f9cef5e8ae"
 dependencies = [
  "serde",
  "serde_json",

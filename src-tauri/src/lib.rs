@@ -1178,6 +1178,33 @@ fn agent_settings(agent: tauri::State<'_, AgentState>) -> agent::client::Setting
         .clone()
 }
 
+/// A model server the kit knows, for the Settings dropdown.
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KnownServer {
+    name: String,
+    base_url: String,
+    /// Host and port, for a second line of text.
+    address: String,
+}
+
+/// The kit's `KNOWN_SERVERS`, the one list: the webview never hardcodes an address.
+#[tauri::command]
+fn agent_servers() -> Vec<KnownServer> {
+    known_servers()
+}
+
+fn known_servers() -> Vec<KnownServer> {
+    agent::client::KNOWN_SERVERS
+        .iter()
+        .map(|(name, url)| KnownServer {
+            name: (*name).to_string(),
+            base_url: (*url).to_string(),
+            address: agent::client::address(url),
+        })
+        .collect()
+}
+
 /// The models the server at `base_url` offers (with `api_key`, when it wants one), for the Settings dropdown.
 /// Fails when nothing answers there; empty when it doesn't list them.
 #[tauri::command]
@@ -2960,6 +2987,7 @@ pub fn run() {
             copy_text,
             agent_settings,
             agent_models,
+            agent_servers,
             set_agent_settings,
             agent_enabled,
             set_agent_enabled,

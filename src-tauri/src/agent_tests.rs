@@ -1642,3 +1642,14 @@ fn every_agent_command_asks_the_switch() {
         .store(true, std::sync::atomic::Ordering::Release);
     assert!(state.require_enabled().is_ok());
 }
+
+#[test]
+fn the_server_list_is_the_kits() {
+    let got = crate::known_servers();
+    assert_eq!(got.len(), crate::agent::client::KNOWN_SERVERS.len());
+    for (g, (name, url)) in got.iter().zip(crate::agent::client::KNOWN_SERVERS) {
+        assert_eq!((g.name.as_str(), g.base_url.as_str()), (*name, *url));
+        assert_eq!(g.address, crate::agent::client::address(url));
+    }
+    assert_eq!(got[0].base_url, Settings::default().base_url);
+}

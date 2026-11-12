@@ -22,12 +22,14 @@ import {
 import {
   type AgentSettings,
   agentModels,
+  agentServers,
   agentSettings,
+  type KnownServer,
   type ModelEntry,
   setAgentEnabled,
   setAgentSettings,
 } from '@/lib/agent';
-import { AUTO, modelFromPick } from '@/lib/modelPick';
+import { AUTO, modelFromPick, OTHER, serverFromPick, serverShown } from '@/lib/modelPick';
 
 import { type ParamValues, scopeKeyFor } from '@/scope';
 
@@ -44,12 +46,17 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
   const [apiKey, setApiKey] = useState('');
   // Null until listed, or when nothing answers at the address.
   const [models, setModels] = useState<ModelEntry[] | null>(null);
+  const [servers, setServers] = useState<KnownServer[]>([]);
+  // Other… picked: the URL input shows even while the saved URL is a known one.
+  const [otherPicked, setOtherPicked] = useState(false);
   const urlId = useId();
   const modelId = useId();
   const keyId = useId();
 
   useEffect(() => {
     if (!open) return;
+    setOtherPicked(false);
+    agentServers().then(setServers, (e) => onError(String(e)));
     agentSettings()
       .then((s) => {
         setSaved(s);
@@ -90,6 +97,13 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
       })
       .catch((e) => onError(String(e)));
   };
+  const showUrl =
+    saved !== null &&
+    (otherPicked ||
+      serverShown(
+        saved.baseUrl,
+        servers.map((k) => k.baseUrl),
+      ) === OTHER);
   const commit = () => save({ baseUrl, model, apiKey });
   const onEnter = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') commit();
@@ -99,18 +113,36 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
     <div className="mt-1 space-y-2 px-3">
       <div className="text-xs">
         <label htmlFor={urlId} className="text-muted-foreground">
-          Base URL
+          Server
         </label>
-        <Input
+        <ServerSelect
           id={urlId}
-          value={baseUrl}
-          placeholder="http://localhost:1234/v1"
-          onChange={(e) => setBaseUrl(e.target.value)}
-          onBlur={commit}
-          onKeyDown={onEnter}
+          servers={servers}
+          baseUrl={saved?.baseUrl ?? baseUrl}
+          other={otherPicked}
           disabled={!saved}
-          spellCheck={false}
+          onPick={(pick) => {
+            if ('other' in pick) {
+              setOtherPicked(true);
+              return;
+            }
+            setOtherPicked(false);
+            setBaseUrl(pick.save);
+            save({ baseUrl: pick.save, model, apiKey });
+          }}
         />
+        {showUrl && (
+          <Input
+            aria-label="Server address"
+            className="mt-1"
+            value={baseUrl}
+            onChange={(e) => setBaseUrl(e.target.value)}
+            onBlur={commit}
+            onKeyDown={onEnter}
+            disabled={!saved}
+            spellCheck={false}
+          />
+        )}
       </div>
       <div className="text-xs">
         <label htmlFor={keyId} className="text-muted-foreground">
@@ -164,6 +196,59 @@ function AgentFields({ open, onError }: { open: boolean; onError: (message: stri
         Sampling: Qwen&apos;s recommended values (edit agent.json to change them)
       </p>
     </div>
+  );
+}
+
+/**
+ * The server: one item per server the kit knows, plus Other…. A saved URL no
+ * known server has selects Other…. The list comes from Rust.
+ */
+function ServerSelect({
+  id,
+  servers,
+  baseUrl,
+  other,
+  disabled,
+  onPick,
+}: {
+  id: string;
+  servers: KnownServer[];
+  baseUrl: string;
+  other: boolean;
+  disabled: boolean;
+  onPick: (pick: { save: string } | { other: true }) => void;
+}) {
+  const items: Record<string, string> = {
+    ...Object.fromEntries(servers.map((k) => [k.baseUrl, `${k.name} (${k.address})`])),
+    [OTHER]: 'Other…',
+  };
+  const shown = other
+    ? OTHER
+    : serverShown(
+        baseUrl,
+        servers.map((k) => k.baseUrl),
+      );
+  return (
+    <Select
+      items={items}
+      value={shown}
+      disabled={disabled || servers.length === 0}
+      onValueChange={(v) => {
+        const pick = serverFromPick(v, shown);
+        if (pick) onPick(pick);
+      }}
+    >
+      <SelectTrigger id={id} size="sm" className="w-full text-xs">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
+        {Object.entries(items).map(([v, l]) => (
+          <SelectItem key={v} value={v} className="text-xs">
+            {l}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
   );
 }
 

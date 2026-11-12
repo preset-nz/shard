@@ -125,7 +125,19 @@ export function agentModels(baseUrl: string, apiKey: string): Promise<ModelEntry
   return invoke('agent_models', { baseUrl, apiKey });
 }
 
-/** Saves where the model is; an empty address goes back to LM Studio's. */
+/** A model server the kit knows. `address` is host and port, for display. */
+export interface KnownServer {
+  name: string;
+  baseUrl: string;
+  address: string;
+}
+
+/** The servers the Settings dropdown offers, from the kit's list in Rust. */
+export function agentServers(): Promise<KnownServer[]> {
+  return invoke('agent_servers');
+}
+
+/** Saves where the model is; an empty address goes back to the kit's default (oMLX). */
 export function setAgentSettings(settings: AgentSettings): Promise<AgentSettings> {
   return invoke('set_agent_settings', { settings });
 }

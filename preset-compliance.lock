@@ -6,7 +6,7 @@ version = 1
 [[inputs]]
 path = "Cargo.lock"
 ecosystem = "cargo"
-sha256 = "4d8c4d2873d888fed7aa86c4929187709ee9c2f692545d97e70b2d808eedbd59"
+sha256 = "aa9f98b3d3852d6a2f1faf885b5f22e135b7f630c65e75af4216eaf051854a86"
 
 [[inputs]]
 path = "Cargo.toml"
@@ -2316,7 +2316,7 @@ scope = "shipped"
 [[packages]]
 ecosystem = "cargo"
 name = "preset-agent-kit"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry"
 declared = "MIT"
 scope = "shipped"
