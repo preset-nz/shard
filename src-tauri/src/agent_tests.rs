@@ -1591,3 +1591,54 @@ fn the_api_key_is_kept_in_agent_json_but_not_in_events() {
     let back: Settings = serde_json::from_str(&saved).unwrap();
     assert_eq!(back.api_key, "sk-secret-123");
 }
+
+fn state_at(name: &str) -> (crate::AgentState, std::path::PathBuf) {
+    let dir =
+        std::env::temp_dir().join(format!("shard-agent-switch-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let path = dir.join("agent.json");
+    (crate::AgentState::load(path.clone()), path)
+}
+
+#[test]
+fn the_agent_is_off_when_agent_json_has_no_enabled_key() {
+    let (missing_file, path) = state_at("missing");
+    assert!(!missing_file
+        .enabled
+        .load(std::sync::atomic::Ordering::Acquire));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, r#"{"baseUrl":"http://x/v1","model":"m"}"#).unwrap();
+    let old = crate::AgentState::load(path);
+    assert!(!old.enabled.load(std::sync::atomic::Ordering::Acquire));
+    assert_eq!(old.settings.lock().unwrap().base_url, "http://x/v1");
+    assert!(old.require_enabled().is_err());
+}
+
+#[test]
+fn the_switch_round_trips_through_agent_json_beside_the_settings() {
+    use std::sync::atomic::Ordering;
+    let (state, path) = state_at("round");
+    let settings = Settings {
+        base_url: "http://localhost:8000/v1".into(),
+        model: "qwen".into(),
+        ..Settings::default()
+    };
+    state.save(&settings, true).unwrap();
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\"enabled\": true"), "{text}");
+    let back = crate::AgentState::load(path);
+    assert!(back.enabled.load(Ordering::Acquire));
+    assert!(back.require_enabled().is_ok());
+    assert_eq!(*back.settings.lock().unwrap(), settings);
+}
+
+#[test]
+fn every_agent_command_asks_the_switch() {
+    let (state, _) = state_at("refuse");
+    let err = state.require_enabled().unwrap_err();
+    assert!(err.contains("Enable Shard agent"), "{err}");
+    state
+        .enabled
+        .store(true, std::sync::atomic::Ordering::Release);
+    assert!(state.require_enabled().is_ok());
+}

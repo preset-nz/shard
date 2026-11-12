@@ -173,7 +173,7 @@ import {
 } from '@/scope';
 import { useSelection } from '@/stores/selection';
 import { FIT, minSpanFor, stepZoom, type View } from '@/waveView';
-import { agentDump, copyText } from './lib/agent';
+import { agentDump, agentEnabled, copyText } from './lib/agent';
 
 /**
  * How many spawns the inspector keeps.
@@ -275,7 +275,13 @@ export default function App() {
   // are hidden unless asked for, and the choice is remembered.
   const [showDebugger, setShowDebugger] = usePersistedState('shard.debugger', false);
   // View > Agent: the chat under the properties. Off until asked for.
-  const [showAgent, setShowAgent] = usePersistedState('shard.agent.show', false);
+  const [agentOn, setAgentOn] = useState(false);
+  useEffect(() => {
+    agentEnabled().then(setAgentOn, () => setAgentOn(false));
+  }, []);
+  const [agentShown, setShowAgent] = usePersistedState('shard.agent.show', false);
+  // A remembered open panel stays closed while the agent is off.
+  const showAgent = agentOn && agentShown;
   const [agentFolded, setAgentFolded] = usePersistedState('shard.agent.folded', false);
   // The chat's height in the right-hand column; the properties take the rest.
   const [agentHeight, setAgentHeight] = usePersistedState('shard.agent.height', 320);
@@ -1505,6 +1511,9 @@ export default function App() {
       // Opt+arrows are the caret's in a text field, so they pass through there.
       'fx-earlier': !typing && fxSelected,
       'fx-later': !typing && fxSelected,
+      // Rust holds the switch (Settings > Labs); this only mirrors it.
+      'view-agent': agentOn,
+      'file-save-agent-session': agentOn,
     };
     // Checked as the selected track is pressed.
     const pressed: Record<string, boolean> = {
@@ -1539,6 +1548,7 @@ export default function App() {
     selectedMute,
     selectedSolo,
     showAgent,
+    agentOn,
     waveZoomable,
     canRepeatBar,
   ]);
@@ -2361,6 +2371,12 @@ export default function App() {
           ctx={panelCtx}
           midi={midi}
           onError={setError}
+          agentOn={agentOn}
+          onAgentOn={(on) => {
+            setAgentOn(on);
+            // Off closes the panel; on leaves it closed.
+            if (!on) setShowAgent(false);
+          }}
         />
       </div>
       <SnackbarViewport className="fixed right-3 bottom-3 left-auto" />

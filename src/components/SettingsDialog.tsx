@@ -3,6 +3,7 @@ import { useEffect, useId, useState } from 'react';
 import type { MappingsView } from '@/audio';
 import { ControllersPanel } from '@/components/ControllersPanel';
 import type { ParamRowContext } from '@/components/ParamRow';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Dialog,
   DialogContent,
@@ -23,6 +24,7 @@ import {
   agentModels,
   agentSettings,
   type ModelEntry,
+  setAgentEnabled,
   setAgentSettings,
 } from '@/lib/agent';
 
@@ -232,6 +234,8 @@ export function SettingsDialog({
   ctx,
   midi,
   onError,
+  agentOn,
+  onAgentOn,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -239,7 +243,14 @@ export function SettingsDialog({
   ctx: ParamRowContext;
   midi: MappingsView;
   onError: (message: string) => void;
+  /** Labs: the agent switch, as Rust holds it. */
+  agentOn: boolean;
+  onAgentOn: (on: boolean) => void;
 }) {
+  const agentSwitchId = useId();
+  const switchAgent = (next: boolean) => {
+    setAgentEnabled(next).then(onAgentOn, (e) => onError(String(e)));
+  };
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
@@ -262,9 +273,24 @@ export function SettingsDialog({
             <ControllersPanel open={open} midi={midi} onError={onError} />
           </div>
           <div className="mt-4 px-3 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-            Agent
+            Labs
           </div>
-          <AgentFields open={open} onError={onError} />
+          <div className="mt-1 flex items-start gap-2 px-3 text-xs">
+            <Checkbox
+              id={agentSwitchId}
+              className="mt-0.5"
+              checked={agentOn}
+              onCheckedChange={(v) => switchAgent(v === true)}
+            />
+            <div>
+              <label htmlFor={agentSwitchId}>Enable Shard agent</label>
+              <p className="text-muted-foreground">
+                A local model writes patterns into the session. Needs a model server such as oMLX or
+                LM Studio.
+              </p>
+            </div>
+          </div>
+          {agentOn && <AgentFields open={open} onError={onError} />}
         </div>
       </DialogContent>
     </Dialog>

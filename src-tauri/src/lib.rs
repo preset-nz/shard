@@ -926,6 +926,9 @@ struct AgentState {
     running: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     settings: Mutex<agent::client::Settings>,
+    /// Labs: "Enable Shard agent". The one switch: every agent command asks
+    /// it, and the webview only reads it. Off until ticked in Settings.
+    enabled: AtomicBool,
     /// Every event of every reply this run, for File > Save Agent Session.
     log: Arc<Mutex<agent::log::Log>>,
     /// `agent.json` in the app config directory: the model's address
@@ -933,19 +936,53 @@ struct AgentState {
     path: std::path::PathBuf,
 }
 
+/// `agent.json`: the kit's `Settings` plus Shard's own `enabled`, beside
+/// `baseUrl`, `model` and `apiKey`. A missing key is off.
+#[derive(serde::Serialize, serde::Deserialize, Default)]
+struct AgentFile {
+    #[serde(flatten)]
+    settings: agent::client::Settings,
+    #[serde(default)]
+    enabled: bool,
+}
+
 impl AgentState {
     fn load(path: std::path::PathBuf) -> Self {
-        let settings = std::fs::read_to_string(&path)
+        let file: AgentFile = std::fs::read_to_string(&path)
             .ok()
             .and_then(|t| serde_json::from_str(&t).ok())
             .unwrap_or_default();
         Self {
             running: Arc::new(AtomicBool::new(false)),
             cancel: Arc::new(AtomicBool::new(false)),
-            settings: Mutex::new(settings),
+            settings: Mutex::new(file.settings),
+            enabled: AtomicBool::new(file.enabled),
             log: Arc::new(Mutex::new(agent::log::Log::default())),
             path,
         }
+    }
+
+    /// Refuses with a plain error while the agent is off: the first line of
+    /// every command that would talk to a model server.
+    fn require_enabled(&self) -> Result<(), String> {
+        if self.enabled.load(Ordering::Acquire) {
+            Ok(())
+        } else {
+            Err("the agent is off; tick Enable Shard agent in Settings".into())
+        }
+    }
+
+    /// Writes `settings` and `enabled` to `agent.json`.
+    fn save(&self, settings: &agent::client::Settings, enabled: bool) -> Result<(), String> {
+        if let Some(dir) = self.path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+        }
+        let file = AgentFile {
+            settings: settings.clone(),
+            enabled,
+        };
+        let text = serde_json::to_string_pretty(&file).map_err(|e| e.to_string())?;
+        std::fs::write(&self.path, text).map_err(|e| format!("couldn't keep the settings: {e}"))
     }
 }
 
@@ -973,6 +1010,7 @@ fn agent_send(
     considered: bool,
 ) -> Result<(), String> {
     use tauri::Emitter;
+    agent.require_enabled()?;
     let prompt = prompt.trim().to_string();
     if prompt.is_empty() {
         return Err("ask for something first".into());
@@ -1023,6 +1061,7 @@ fn agent_dump(
     agent: tauri::State<'_, AgentState>,
 ) -> Result<String, String> {
     use tauri::Manager;
+    agent.require_enabled()?;
     let log = agent.log.lock().unwrap_or_else(|e| e.into_inner());
     if log.is_empty() {
         return Err("the agent hasn't been asked anything yet".into());
@@ -1143,9 +1182,11 @@ fn agent_settings(agent: tauri::State<'_, AgentState>) -> agent::client::Setting
 /// Fails when nothing answers there; empty when it doesn't list them.
 #[tauri::command]
 async fn agent_models(
+    agent: tauri::State<'_, AgentState>,
     base_url: String,
     api_key: String,
 ) -> Result<Vec<agent::client::ModelEntry>, String> {
+    agent.require_enabled()?;
     tauri::async_runtime::spawn_blocking(move || {
         let settings = agent::client::Settings {
             base_url,
@@ -1180,13 +1221,33 @@ fn set_agent_settings(
             .unwrap_or_else(|e| e.into_inner())
             .sampling,
     };
-    if let Some(dir) = agent.path.parent() {
-        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-    }
-    let text = serde_json::to_string_pretty(&clean).map_err(|e| e.to_string())?;
-    std::fs::write(&agent.path, text).map_err(|e| format!("couldn't keep the settings: {e}"))?;
+    agent.save(&clean, agent.enabled.load(Ordering::Acquire))?;
     *agent.settings.lock().unwrap_or_else(|e| e.into_inner()) = clean.clone();
     Ok(clean)
+}
+
+/// Whether the agent is switched on (Labs, Settings). The webview reads it
+/// for the menu and the panel; it never decides it.
+#[tauri::command]
+fn agent_enabled(agent: tauri::State<'_, AgentState>) -> bool {
+    agent.enabled.load(Ordering::Acquire)
+}
+
+/// Switches the agent on or off, and keeps it for the next launch. Off stops
+/// a running reply first, the way `agent_cancel` does. Answers the new state.
+#[tauri::command]
+fn set_agent_enabled(agent: tauri::State<'_, AgentState>, enabled: bool) -> Result<bool, String> {
+    if !enabled {
+        agent.cancel.store(true, Ordering::Release);
+    }
+    let settings = agent
+        .settings
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    agent.save(&settings, enabled)?;
+    agent.enabled.store(enabled, Ordering::Release);
+    Ok(enabled)
 }
 
 /// Mutes or unmutes a track, on the next bar while playing. Not an edit.
@@ -2900,6 +2961,8 @@ pub fn run() {
             agent_settings,
             agent_models,
             set_agent_settings,
+            agent_enabled,
+            set_agent_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

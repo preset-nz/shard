@@ -98,6 +98,19 @@ export function agentSettings(): Promise<AgentSettings> {
   return invoke('agent_settings');
 }
 
+/**
+ * Labs: is the agent switched on? Rust holds the switch and every agent
+ * command refuses while it is off; the webview only reads it. Off by default.
+ */
+export function agentEnabled(): Promise<boolean> {
+  return invoke('agent_enabled');
+}
+
+/** Switches the agent on or off, and keeps it. Off stops a running reply first. Answers the new state. */
+export function setAgentEnabled(enabled: boolean): Promise<boolean> {
+  return invoke('set_agent_enabled', { enabled });
+}
+
 /** A model the server offers. `loaded` is known only from LM Studio. */
 export interface ModelEntry {
   id: string;
