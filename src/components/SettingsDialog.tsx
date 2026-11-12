@@ -27,9 +27,7 @@ import {
   setAgentEnabled,
   setAgentSettings,
 } from '@/lib/agent';
-
-/** The dropdown's value for "whatever is loaded", which saves as empty. */
-const AUTO = 'auto';
+import { AUTO, modelFromPick } from '@/lib/modelPick';
 
 import { type ParamValues, scopeKeyFor } from '@/scope';
 
@@ -198,8 +196,8 @@ function ModelSelect({
       items={items}
       value={current}
       onValueChange={(v) => {
-        const next = v === AUTO ? '' : String(v);
-        if (next !== value) onPick(next);
+        const next = modelFromPick(v, value);
+        if (next !== null) onPick(next);
       }}
     >
       <SelectTrigger id={id} size="sm" className="w-full text-xs">
